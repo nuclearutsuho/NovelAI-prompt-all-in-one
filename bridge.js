@@ -1,6 +1,6 @@
 // bridge.js
 (async () => {
-  // 1) get settings from storage  ← preservePrompt 포함
+  // 1) get settings from storage  ← preservePrompt 포함 (包含 preservePrompt)
   let {
     wildcards = {},
     v3mode = false,
@@ -29,7 +29,7 @@
 
   // 3) propagate later changes
   chrome.storage.onChanged.addListener(changes => {
-    // wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 중 하나라도 바뀌면 반영
+    // wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 중 하나라도 바뀌면 반영 (wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 中任何一个改变都反映)
     if (changes.wildcards ||
       changes.v3mode ||
       changes.preservePrompt ||
@@ -79,25 +79,26 @@
       const row = [];
       let match;
 
-      // 정규표현식을 순회하며 매치된 그룹을 배열에 저장
+      // 정규표현식을 순회하며 매치된 그룹을 배열에 저장 (遍历正则表达式并将匹配的组保存到数组)
       while ((match = regex.exec(line))) {
         if (match[1] !== undefined) {
-          // 큰따옴표 내부 내용: 내부의 이스케이프된 큰따옴표 처리 (예: "" -> ")
+          // 큰따옴표 내부 내용: 내부의 이스케이프된 큰따옴표 처리 (예: "" -> ") (双引号内部内容：处理内部转义的双引号 (例如: "" -> "))
           row.push(match[1].replace(/""/g, '"'));
         } else if (match[2] !== undefined) {
-          // 큰따옴표에 묶이지 않은 필드
+          // 큰따옴표에 묶이지 않은 필드 (未被双引号包裹的字段)
           row.push(match[2]);
         }
       }
 
-      let [word, colorCode, popCount, aliases] = row;
+      let [word, colorCode, popCount, aliases, zhCN] = row;
       if (aliases) aliases = `"${aliases}"`;
       else aliases = '""';
       return {
         word,
         colorCode: colorCode.trim(),
         popCount: parseInt(popCount),
-        aliases: aliases.replace(/"/g, '').split(',').map(a => a.trim())
+        aliases: aliases.replace(/"/g, '').split(',').map(a => a.trim()),
+        zhCN: zhCN ? zhCN.trim() : ''  // 中文翻译 (Chinese translation)
       };
     });
 

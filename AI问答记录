@@ -1,0 +1,67 @@
+# AI 问答记录
+
+## 2026-01-21 - 插件代码分析
+
+### 1. 核心概述
+这是一个用于 NovelAI 官网的 Chrome 扩展 (Manifest V3)，主要功能是提供 Prompt 通配符替换 (`__wildcard__`) 和 Danbooru 标签自动补全。
+
+### 2. 技术栈
+*   **语言**: 原生 JavaScript (ES6+), HTML, CSS。无构建工具 (Webpack/React 等)。
+*   **存储**: `chrome.storage.local` (保存通配符数据和设置)。
+*   **通信**: `window.postMessage` (在注入脚本和插件之间通讯)。
+
+### 3. 架构与实现原理
+
+插件由三个主要部分组成：
+
+#### A. Popup (UI 层)
+*   **文件**: `popup.html`, `popup.js`
+*   **功能**: 
+    *   管理通配符文件（增删改查）。
+    *   设置开关（如 Danbooru 补全、保留 Prompt 等）。
+    *   数据直接存入 `chrome.storage.local`。
+
+#### B. Bridge (桥接层 - Content Script)
+*   **文件**: `bridge.js`
+*   **运行环境**: 独立世界 (Isolated World)，拥有 Chrome API 权限。
+*   **功能**:
+    *   读取 Storage 中的配置和通配符数据。
+    *   加载 `dictionary.csv` (补全词库)。
+    *   **核心操作**: 创建 `<script>` 标签将 `injector.js` 注入到当前网页及其运行环境中。
+    *   使用 `window.postMessage` 将配置和词库传递给 `injector.js`。
+
+#### C. Injector (注入层 - Main World)
+*   **文件**: `injector.js`
+*   **运行环境**: 页面主环境 (Main World)，可以访问页面的全局变量 (`window`)。
+*   **核心实现手法**:
+    1.  **网络请求拦截 (Monkey Patching)**:
+        *   劫持了 `window.fetch` 和 `XMLHttpRequest`。
+        *   **目的**: 这种方式不需要修改 NovelAI 复杂的 React UI 逻辑，而是在数据发送给服务器的前一刻（网络层）拦截 JSON 包。
+        *   **逻辑**: 检测到发往 `generate-image` 的 POST 请求时，解析 JSON Body，递归查找名为 `__wildcard__` 的 Token 并进行替换。
+        *   **随机一致性**: 利用请求中的 `seed` 初始化伪随机数生成器 (Mulberry32)，确保同一个 Seed 生成的 Wildcard 结果一致。
+    2.  **UI 挂钩 (Autocomplete)**:
+        *   使用 `MutationObserver` 监听 DOM，找到 `div.ProseMirror` (编辑框)。
+        *   监听 `input/keydown` 事件，手动计算光标位置并渲染一个悬浮的 `ul.wildcard-suggest` 列表用于补全。
+    3.  **Img2Img 元数据读取**:
+        *   读取上传图片的 PNG Metadata，将信息填回请求参数中。
+
+### 4. 对修改有用的信息
+*   **通配符逻辑位置**: 如果要修改替换逻辑（例如增加新的语法），主要看 `injector.js` 中的 `makeDeepSwap` 函数。
+*   **补全 UI**: 如果要调整补全框样式或行为，看 `injector.js` 中的 `initWildcardAutocomplete_PM` 函数。
+*   **数据结构**: 通配符数据是扁平化存储在 Storage 的 `wildcards` 对象中，Key 为文件名（或路径），Value 为文件内容字符串。
+
+---
+
+## 2026-01-21 - 代码注释翻译
+
+### 任务
+将项目中所有的韩语注释翻译并添加中文注释。
+
+### 执行内容
+已遍历 `injector.js`, `bridge.js`, `popup.js` 文件，识别出所有的韩语注释，并在其后追加了对应的中文翻译。
+
+*   **injector.js**: 处理了 PNG 元数据、Fetch/XHR 补丁、自动补全逻辑等相关的注释。
+*   **bridge.js**: 处理了配置加载、消息传递等相关的注释。
+*   **popup.js**: 处理了 UI 交互、文件管理、拖拽逻辑等大量的注释。
+
+现在代码中的注释采用了 `// Korean (Chinese)` 的形式，便于理解。

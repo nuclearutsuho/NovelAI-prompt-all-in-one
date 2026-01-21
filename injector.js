@@ -35,7 +35,7 @@
   }
 
   /* -------------------------------------------------
-   * 0. PNG 메타데이터 유틸 ────────────────────── */   // <<< NEW
+   * 0. PNG 메타데이터 유틸 ────────────────────── */   // <<< NEW (PNG 元数据工具)
   function extractPngMetadata(arrayBuffer) {
     const dv = new DataView(arrayBuffer);
     const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -99,10 +99,10 @@
 
       const pngMeta = JSON.parse(commentChunk);
 
-      /* 1) prompt / uc 반영 */
+      /* 1) prompt / uc 반영 (应用 Prompt / UC) */
       if (pngMeta.prompt) json.input = pngMeta.prompt;
 
-      /* 2) charPrompt 빌드 */
+      /* 2) charPrompt 빌드 (构建 charPrompt) */
       const characterPrompts = [];
       const v4Prompt = pngMeta.v4_prompt;
       const v4NegativePrompt = pngMeta.v4_negative_prompt;
@@ -121,7 +121,7 @@
         }
       }
 
-      /* 3) v4‑prompt 계열 세팅 */
+      /* 3) v4‑prompt 계열 세팅 (v4‑prompt 系列设置) */
       if (json.model.startsWith('nai-diffusion-4')) {
         json.parameters.v4_prompt = {
           caption: v4Prompt?.caption
@@ -138,7 +138,7 @@
       }
 
     } catch (err) {
-      console.error('[Wildcard] img2img metadata 처리 오류:', err);
+      console.error('[Wildcard] img2img metadata 처리 오류 (处理错误):', err);
     }
   }
 
@@ -252,7 +252,7 @@
     return deepSwap;
   }
 
-  /* 2‑A. fetch 패치 */
+  /* 2‑A. fetch 패치 (fetch 补丁) */
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     try {
@@ -269,10 +269,10 @@
           const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
           const deepSwap = makeDeepSwap(rng);
 
-          /* ① wildcard 치환 */
+          /* ① wildcard 치환 (Wildcard 替换) */
           json = deepSwap(json);
 
-          /* ② img2img 메타데이터 반영 */      // <<< NEW
+          /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */      // <<< NEW
           if (preservePrompt) await applyImg2ImgMetadata(json);            // <<< NEW
 
           /* ③ cosmetic: base_caption = input */
@@ -294,7 +294,7 @@
     return $fetch(input, init);
   };
 
-  /* 2‑B. XHR 패치 */
+  /* 2‑B. XHR 패치 (XHR 补丁) */
   const $open = XMLHttpRequest.prototype.open;
   const $send = XMLHttpRequest.prototype.send;
 
@@ -311,10 +311,10 @@
 
         let json = JSON.parse(body);
 
-        /* ① wildcard 치환 */
+        /* ① wildcard 치환 (Wildcard 替换) */
         json = deepSwap(json);
 
-        /* ② img2img 메타데이터 반영 */        // <<< NEW
+        /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */        // <<< NEW
         if (preservePrompt) json = applyImg2ImgMetadata(json);              // <<< NEW
 
         /* ③ cosmetic: base_caption = input */
@@ -336,7 +336,7 @@
     if (e.source !== window) return;
     const { type, map, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
 
-    // 옵션 초기화 및 업데이트 처리
+    // 옵션 초기화 및 업데이트 처리 (选项初始化及更新处理)
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
       v3 = !!newV3;
@@ -344,19 +344,19 @@
       triggerTab = !!newTab;
       triggerSpace = !!newSpace;
 
-      // alternativeDanbooruAutocomplete 토글 즉시 반영
+      // alternativeDanbooruAutocomplete 토글 즉시 반영 (立即反映 alternativeDanbooruAutocomplete 切换)
       if (typeof newAlt !== 'undefined') {
         alternativeDanbooruAutocomplete = !!newAlt;
         if (alternativeDanbooruAutocomplete) {
-          // 켜졌을 때 사전 재요청
+          // 켜졌을 때 사전 재요청 (开启时重新请求词典)
           window.postMessage({ type: '__REQUEST_AUTOCOMPLETE_DICT__' }, '*');
         } else {
-          // 꺼졌을 때 기존 사전 초기화
+          // 꺼졌을 때 기존 사전 초기화 (关闭时初始化现有词典)
           autocompleteDict = [];
         }
       }
     }
-    // 실제 사전 데이터 수신
+    // 실제 사전 데이터 수신 (接收实际词典数据)
     else if (type === '__AUTOCOMPLETE_DICT__') {
       if (alternativeDanbooruAutocomplete) {
         autocompleteDict = data || [];
@@ -461,7 +461,7 @@
           const prefix = m[1].toLowerCase();
           const allKeys = Object.keys(dict)
 
-          // 1) 폴더명을 단독으로 입력한 경우: 해당 폴더 안의 모든 key 제안
+          // 1) 폴더명을 단독으로 입력한 경우: 해당 폴더 안의 모든 key 제안 (单独输入文件夹名的情况：建议该文件夹内的所有 key)
           const folderKeys = allKeys.filter(k => k.toLowerCase().startsWith(prefix + '/'));
           if (folderKeys.length && !prefix.includes('/')) {
             render(folderKeys.map(k => ({ type: 'token', text: `__${k}__` })));
@@ -476,22 +476,24 @@
           }
         }
 
-        m = txt.match(/([A-Za-z0-9_-]{1,})$/);
+        // 匹配英文、数字、下划线、连字符、以及中文字符
+        m = txt.match(/([A-Za-z0-9_\-\u4e00-\u9fff]{1,})$/);
         if (m && autocompleteDict.length) {
           const prefix = m[1].toLowerCase();
-          // 1) 원본 단어에 매치되는 항목
+          // 1) 원본 단어에 매치되는 항목 (匹配原始单词的项目)
           const origMatches = autocompleteDict
             .filter(d => d.word.toLowerCase().includes(prefix))
             .map(d => ({
               type: 'dict',
               original: d.word,
               text: d.word,
+              zhCN: d.zhCN || '',
               color: colorMap[d.colorCode] || 'red',
               rawCount: d.popCount,
               aliasUsed: false
             }));
 
-          // 2) 원본에 매치 안 되고 alias에만 매치되는 항목
+          // 2) 원본에 매치 안 되고 alias에만 매치되는 항목 (不匹配原始单词但匹配 alias 的项目)
           const aliasMatches = autocompleteDict
             .filter(d =>
               !d.word.toLowerCase().includes(prefix) &&
@@ -501,28 +503,48 @@
               type: 'dict',
               original: d.aliases.find(a => a.toLowerCase().includes(prefix)),
               text: d.word,
+              zhCN: d.zhCN || '',
               color: colorMap[d.colorCode] || 'red',
               rawCount: d.popCount,
               aliasUsed: true
             }));
 
-          // 3) 합치고 rawCount 기준 내림차순 정렬
-          let entries = origMatches.concat(aliasMatches);
+          // 3) 中文匹配：不匹配原始单词和alias，只匹配中文翻译的项目
+          const zhMatches = autocompleteDict
+            .filter(d =>
+              d.zhCN &&
+              d.zhCN.includes(prefix) &&
+              !d.word.toLowerCase().includes(prefix) &&
+              !d.aliases.some(a => a.toLowerCase().includes(prefix))
+            )
+            .map(d => ({
+              type: 'dict',
+              original: d.zhCN,
+              text: d.word,
+              zhCN: d.zhCN,
+              color: colorMap[d.colorCode] || 'red',
+              rawCount: d.popCount,
+              aliasUsed: true  // 显示为 "中文 → 英文" 格式
+            }));
+
+          // 4) 합치고 rawCount 기준 내림차순 정렬 (合并并按 rawCount 降序排列)
+          let entries = origMatches.concat(aliasMatches).concat(zhMatches);
           entries.sort((a, b) => b.rawCount - a.rawCount);
 
-          // 4) 포맷 적용 및 상위 50개 추출
+          // 5) 포맷 적용 및 상위 50개 추출 (应用格式并提取前 50 个)
           entries = entries
             .slice(0, 50)
             .map(e => ({
               type: e.type,
               original: e.original,
               text: e.text,
+              zhCN: e.zhCN,
               color: e.color,
               popCount: formatCount(e.rawCount),
               aliasUsed: e.aliasUsed
             }));
 
-          // 5) 렌더링
+          // 5) 렌더링 (渲染)
           if (entries.length) {
             render(entries);
             return;
@@ -535,17 +557,19 @@
 
       function render(items) {
         list.innerHTML = '';
-        items.forEach(({ type, text, color, popCount, aliasUsed, original }, index) => {
+        items.forEach(({ type, text, color, popCount, aliasUsed, original, zhCN }, index) => {
           const li = document.createElement('li');
           li.dataset.type = type;
           li.dataset.index = index;
 
           if (type === 'dict') {
             li.style.color = color || 'red';
+            // 如果有中文翻译，显示在英文tag后面
+            const displayText = zhCN ? `${text} (${zhCN})` : text;
             if (aliasUsed) {
-              li.innerHTML = `<span style="color:${color};">${original} → ${text}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
+              li.innerHTML = `<span style="color:${color};">${original} → ${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
             } else {
-              li.innerHTML = `<span style="color:${color};">${text}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
+              li.innerHTML = `<span style="color:${color};">${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
             }
           } else {
             li.textContent = text;
@@ -616,15 +640,23 @@
           const m = full.match(/__([A-Za-z0-9_\/\.\-]+)__(?:[A-Za-z0-9 \-_]*)$/);
           len = m ? m[0].length : 0;
         } else if (type === 'dict') {
-          const m = full.match(/[A-Za-z0-9_-]{1,}$/);
+          // 匹配英文、数字、下划线、连字符和中文字符 (Match English, numbers, underscores, hyphens and Chinese characters)
+          const m = full.match(/[A-Za-z0-9_\-\u4e00-\u9fff]{1,}$/);
           len = m ? m[0].length : 0;
 
-          text = text.replace(/\s\([0-9.]+[MK]?\)$/, '').replace(/_/g, ' ');
+          // 先去掉popCount后缀 (First remove popCount suffix)
+          text = text.replace(/\s\([0-9.]+[MK]?\)$/, '');
 
-          // alias 표시가 있는 경우 "→" 앞부분을 제거하여 원본 단어만 남김
+          // 如果有 alias/中文 标记 "→"，取箭头后面的部分 (If there's alias/Chinese marker "→", take the part after arrow)
           if (text.includes('→')) {
             text = text.split('→')[1].trim();
           }
+
+          // 去掉中文翻译部分 "(中文)" - 只保留第一个英文tag (Remove Chinese translation "(中文)" - only keep the first English tag)
+          text = text.replace(/\s*\([^\)]*[\u4e00-\u9fff][^\)]*\)$/, '');
+
+          // 将下划线替换为空格 (Replace underscores with spaces)
+          text = text.replace(/_/g, ' ');
         }
 
         if (len) {
@@ -634,11 +666,11 @@
           }
         }
 
-        const needsComma = !text.startsWith('__');      // 와일드카드 토큰이면 쉼표 생략
+        const needsComma = !text.startsWith('__');      // 와일드카드 토큰이면 쉼표 생략 (如果是通配符 Token 则省略逗号)
         document.execCommand(
           'insertText',
           false,
-          needsComma ? `${text}, ` : text               // 공백도 불필요하면 그냥 text 만
+          needsComma ? `${text}, ` : text               // 공백도 불필요하면 그냥 text 만 (如果连空格也不需要，就只保留 text)
         );
         hide();
 
@@ -650,12 +682,12 @@
 
 
       function highlight() {
-        // 1) active 클래스 토글
+        // 1) active 클래스 토글 (切换 active 类)
         list.querySelectorAll('li').forEach((li, i) =>
           li.classList.toggle('active', i === selIdx)
         );
 
-        // 2) 활성화된 항목이 보이도록 스크롤
+        // 2) 활성화된 항목이 보이도록 스크롤 (滚动以显示激活的项目)
         const activeLi = list.querySelector('li.active');
         if (activeLi) {
           activeLi.scrollIntoView({ block: 'nearest' });
