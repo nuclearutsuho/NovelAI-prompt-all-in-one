@@ -4,7 +4,7 @@
 
   const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
   const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-  const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-]+)__/;
+  const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
 
   function containsWildcardSyntax(text) {
     return simpleWildcardPattern.test(text) ||
@@ -173,7 +173,7 @@
   function makeDeepSwap(rng) {
     const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
     const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-    const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-]+)__/;
+    const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
 
     function containsWildcardSyntax(text) {
       return simpleWildcardPattern.test(text) ||
@@ -183,7 +183,7 @@
 
     function swap(txt) {
       // 1) __token__ lines → pick one line deterministically using rng()
-      let result = txt.replace(/__([A-Za-z0-9_\/\.\-]+)__/g, (match, name) => {
+      let result = txt.replace(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/g, (match, name) => {
         let raw = dict[name];
         if (!raw && !name.includes('/')) {
           const fallbackKey = Object.keys(dict).find(k => k.split('/').pop() === name);
@@ -438,7 +438,7 @@
       function update() {
         const txt = textBeforeCaret();
 
-        let m = txt.match(/__([A-Za-z0-9_\/\.\-]+)__(?:([A-Za-z0-9 \-_]*))$/);
+        let m = txt.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:([A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*))$/);
         if (m && dict[m[1]]) {
           const fileKey = m[1];
           const part = (m[2] || '').toLowerCase();
@@ -456,7 +456,7 @@
           }
         }
 
-        m = txt.match(/__([A-Za-z0-9_\/\.\-]*)$/);
+        m = txt.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
         if (m) {
           const prefix = m[1].toLowerCase();
           const allKeys = Object.keys(dict)
@@ -634,10 +634,10 @@
 
         let len = 0;
         if (type === 'token') {
-          const m = full.match(/__([A-Za-z0-9_\/\.\-]*)$/);
+          const m = full.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
         } else if (type === 'value') {
-          const m = full.match(/__([A-Za-z0-9_\/\.\-]+)__(?:[A-Za-z0-9 \-_]*)$/);
+          const m = full.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:[A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
         } else if (type === 'dict') {
           // 匹配英文、数字、下划线、连字符和中文字符 (Match English, numbers, underscores, hyphens and Chinese characters)
