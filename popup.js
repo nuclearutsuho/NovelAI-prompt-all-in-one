@@ -76,6 +76,19 @@ const translations = {
     tab: "Tab",
     tabDesc: "「入力候補予測をやめる」ON推奨",
     wildcards: "ワイルドカード"
+  },
+  zh: {
+    settings: "设置",
+    preserveLabel: "增强时保留原图提示词",
+    preserveDesc: "・取消勾选以随机化增强提示词",
+    alternativeLabel: "启用 Danbooru 自动补全",
+    alternativeDesc: "・类似 A1111 WebUI 风格的标签补全",
+    triggerTitle: "补全触发键",
+    space: "空格",
+    spaceDesc: "与 NAI 默认设置兼容",
+    tab: "Tab",
+    tabDesc: "需开启「禁用标签建议」选项",
+    wildcards: "通配符"
   }
 };
 
@@ -91,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setLang('en'); // 초기 언어 설정 (初始语言设置)
   document.getElementById('btn-en').addEventListener('click', () => setLang('en'));
   document.getElementById('btn-jp').addEventListener('click', () => setLang('jp'));
+  document.getElementById('btn-zh').addEventListener('click', () => setLang('zh'));
 });
 
 // Create new folder
@@ -304,11 +318,7 @@ function refresh() {
     }
     viewTitle.classList.toggle('collapsed', isSettingsVisible);
 
-    // Delete all button
-    // Delete all 버튼 (root vs folder 구분) (Delete all 按钮 (区分 root vs folder))
-    const delAll = document.createElement('button');
-    delAll.textContent = 'delete all';
-    delAll.style.cssText = 'float:right; margin-top:-25px; position:relative; z-index:10;';
+
 
     if (currentFolder) {
       const renameBtn = document.getElementById('renameFolderBtn');
@@ -350,33 +360,6 @@ function refresh() {
         });
       };
     }
-
-    if (!currentFolder) {
-      // 1) 루트 뷰: 전체 삭제 (1) Root 视图：全部删除)
-      delAll.onclick = async () => {
-        if (!await customConfirm('Delete All?')) return;
-        chrome.storage.local.set({ wildcards: {}, wildcardFolders: [] }, () => {
-          currentFolder = null;
-          refresh();
-        });
-      };
-      // 폴더나 파일이 하나라도 있으면 버튼 보이기 (如果只要有一个文件夹或文件，就显示按钮)
-      delAll.style.display = (folders.length || Object.keys(map).length) ? 'block' : 'none';
-    } else {
-      // 2) 폴더 뷰: 해당 폴더 내 파일만 삭제 (2) 文件夹视图：只删除该文件夹内的文件)
-      const fileKeys = Object.keys(map).filter(k => k.startsWith(currentFolder + '/'));
-      delAll.onclick = async () => {
-        if (!await customConfirm(`Delete all files in '${currentFolder}' folder?`)) return;
-        const newMap = { ...map };
-        fileKeys.forEach(k => delete newMap[k]);
-        chrome.storage.local.set({ wildcards: newMap, wildcardFolders: folders }, () => {
-          refresh();
-        });
-      };
-      // 해당 폴더에 파일이 있을 때만 버튼 보이기 (只有该文件夹内有文件时才显示按钮)
-      delAll.style.display = fileKeys.length ? 'block' : 'none';
-    }
-    list.appendChild(delAll);
 
     if (!currentFolder) {
       // Root view: list folders and root files
@@ -624,6 +607,9 @@ function enterEditMode(key, content) {
   fileInFolder.style.display = 'none';
   fileCreateInFolder.style.display = 'none';
 
+  // 헤더 숨기기 (隐藏 Header)
+  document.querySelector('header').style.display = 'none';
+
   // 편집 UI 표시 (显示编辑 UI)
   editorMode.style.display = 'flex';
 }
@@ -650,6 +636,9 @@ function exitEditMode() {
     fileCreateInFolder.style.display = 'block';
   }
   list.style.display = 'block';
+
+  // 헤더 보이기 (显示 Header)
+  document.querySelector('header').style.display = 'flex';
 
   // 현재 편집 파일 정보 초기화 (初始化当前编辑文件信息)
   currentEditingFile = null;
@@ -711,6 +700,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-jp').addEventListener('click', () => {
     chrome.storage.local.set({ [LANG_KEY]: 'jp' }, () => setLang('jp'));
     lang = 'jp'; // 언어 변수 업데이트
+  });
+  document.getElementById('btn-zh').addEventListener('click', () => {
+    chrome.storage.local.set({ [LANG_KEY]: 'zh' }, () => setLang('zh'));
+    lang = 'zh'; // 语言变量更新
   });
 });
 

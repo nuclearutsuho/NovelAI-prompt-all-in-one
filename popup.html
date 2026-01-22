@@ -6,11 +6,14 @@
   <title>Wildcards txt files</title>
   <style>
     /* 确保所有元素使用 border-box 盒模型 (Ensure all elements use border-box) */
-    *, *::before, *::after {
+    *,
+    *::before,
+    *::after {
       box-sizing: border-box;
     }
 
-    html, body {
+    html,
+    body {
       height: 100%;
       margin: 0;
     }
@@ -232,43 +235,50 @@
 <body>
   <button id="backBtn" style="display:none; margin-bottom:8px;">◀ Back</button>
   <header style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-    <h2 id="viewTitle" data-i18n-key="settings">Settings</h2>
+    <h2 id="viewTitle" data-i18n-key="settings" style="font-size: 1rem; margin: 0;">Settings</h2>
     <div id="langToggle">
       <button id="btn-en">EN</button>
       <button id="btn-jp">JP</button>
+      <button id="btn-zh">中</button>
     </div>
   </header>
 
   <!-- Root view content -->
   <div id="rootContent">
     <!-- Settings -->
-    <div id="settings">
-      <label style="font-size:0.85rem;">
+    <div id="settings" style="font-size: 0.75rem; line-height: 1.4;">
+      <label>
         <input type="checkbox" id="preservePrompt" checked>
-        <b id="preserveLabel" data-i18n-key="preserveLabel">Preserve Original img prompts on Enhance</b><br>
+        <b id="preserveLabel" data-i18n-key="preserveLabel">Preserve Original img prompts on Enhance</b>
+      </label>
+      <div style="margin-left: 18px; color: #999; margin-bottom: 4px;">
         <span id="preserveDesc" data-i18n-key="preserveDesc">・Uncheck this to randomize enhance prompts.</span>
-      </label><br>
+      </div>
 
-      <label style="font-size:0.85rem;">
+      <label>
         <input type="checkbox" id="alternativeDanbooruAutocomplete">
-        <b id="alternativeLabel" data-i18n-key="alternativeLabel">Full Alternative Danbooru Autocomplete</b><br>
+        <b id="alternativeLabel" data-i18n-key="alternativeLabel">Full Alternative Danbooru Autocomplete</b>
+      </label>
+      <div style="margin-left: 18px; color: #999; margin-bottom: 6px;">
         <span id="alternativeDesc" data-i18n-key="alternativeDesc">・a1111 WebUI style Danbooru Autocomplete.</span>
-      </label><br><br>
+      </div>
 
-      <b id="triggerTitle" data-i18n-key="triggerTitle" style="font-size:0.9rem;">Autocomplete Trigger Keys</b><br>
-      <label style="font-size:0.85rem;">
-        <input type="checkbox" id="triggerSpace" checked>
-        <b id="spaceLabel" data-i18n-key="space">Space</b>: <span id="spaceDesc" data-i18n-key="spaceDesc">Works fine
-          along with NAI default.</span>
-      </label><br>
-      <label style="font-size:0.85rem;">
-        <input type="checkbox" id="triggerTab">
-        <b id="tabLabel" data-i18n-key="tab">Tab</b>: <span id="tabDesc" data-i18n-key="tabDesc">Use with "Disable Tag
-          Suggestions" ON.</span>
-      </label><br>
+      <b id="triggerTitle" data-i18n-key="triggerTitle">Autocomplete Trigger Keys</b>
+      <div style="margin-left: 4px; margin-top: 2px;">
+        <label>
+          <input type="checkbox" id="triggerSpace" checked>
+          <b id="spaceLabel" data-i18n-key="space">Space</b>:
+          <span id="spaceDesc" data-i18n-key="spaceDesc" style="color: #999;">Works fine along with NAI default.</span>
+        </label><br>
+        <label>
+          <input type="checkbox" id="triggerTab">
+          <b id="tabLabel" data-i18n-key="tab">Tab</b>:
+          <span id="tabDesc" data-i18n-key="tabDesc" style="color: #999;">Use with "Disable Tag Suggestions" ON.</span>
+        </label>
+      </div>
     </div>
     <!-- Root upload -->
-    <h2 id="wildcardsTitle" data-i18n-key="wildcards">Wildcards</h2>
+    <h2 id="wildcardsTitle" data-i18n-key="wildcards" style="font-size: 1rem; margin: 8px 0 6px 0;">Wildcards</h2>
     <div id="folder-create">
       <input type="text" id="newFolderName" placeholder="New Name">
       <button id="createFolderBtn">New Folder</button>
