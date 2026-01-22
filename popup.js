@@ -550,6 +550,16 @@ function refresh() {
 
 document.addEventListener('DOMContentLoaded', refresh);
 
+// 监听 storage 变化，实现多窗口实时同步 (Listen for storage changes for real-time sync across windows)
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && (changes.wildcards || changes.wildcardFolders)) {
+    // 如果不在编辑模式，则刷新列表 (If not in edit mode, refresh the list)
+    if (!currentEditingFile) {
+      refresh();
+    }
+  }
+});
+
 document.addEventListener('dragstart', e => {
   // file-item 또는 그 자식 요소에서 시작한 드래그라면 (如果是从 file-item 或其子元素开始的拖拽)
   if (e.target.closest('.file-item')) {

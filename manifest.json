@@ -24,7 +24,11 @@
     {
       "resources": [
         "injector.js",
-        "dictionary.csv"
+        "dictionary.csv",
+        "popup.html",
+        "popup.js",
+        "manager-panel.js",
+        "manager-panel.css"
       ],
       "matches": [
         "<all_urls>"
