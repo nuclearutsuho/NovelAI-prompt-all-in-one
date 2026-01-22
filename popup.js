@@ -625,7 +625,7 @@ function enterEditMode(key, content) {
   fileCreateInFolder.style.display = 'none';
 
   // 편집 UI 표시 (显示编辑 UI)
-  editorMode.style.display = 'block';
+  editorMode.style.display = 'flex';
 }
 
 
