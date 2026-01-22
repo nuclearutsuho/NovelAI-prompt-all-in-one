@@ -290,6 +290,19 @@
     <button id="save-file-btn">Save</button>
   </div>
 
+  <!-- Custom Confirm Modal (for iframe compatibility) -->
+  <div id="custom-confirm-modal"
+    style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:10000; align-items:center; justify-content:center;">
+    <div
+      style="background:#2a2a3e; border:1px solid #4a4a6a; border-radius:8px; padding:20px; max-width:300px; text-align:center;">
+      <p id="custom-confirm-message" style="margin:0 0 16px 0; color:#e0e0e0;"></p>
+      <div style="display:flex; gap:10px; justify-content:center;">
+        <button id="custom-confirm-yes" style="background:#e53935; border-color:#e53935;">Yes, Delete</button>
+        <button id="custom-confirm-no">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- External scripts only -->
   <script src="popup.js"></script>
 </body>

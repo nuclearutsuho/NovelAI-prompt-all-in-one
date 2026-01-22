@@ -1,6 +1,28 @@
 // NovelAI Wildcards – popup.js
 let currentFolder = null;
 
+// Custom confirm dialog (for iframe compatibility where native confirm() is blocked)
+function customConfirm(message) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('custom-confirm-modal');
+    const msgEl = document.getElementById('custom-confirm-message');
+    const yesBtn = document.getElementById('custom-confirm-yes');
+    const noBtn = document.getElementById('custom-confirm-no');
+
+    msgEl.textContent = message;
+    modal.style.display = 'flex';
+
+    const cleanup = () => {
+      modal.style.display = 'none';
+      yesBtn.onclick = null;
+      noBtn.onclick = null;
+    };
+
+    yesBtn.onclick = () => { cleanup(); resolve(true); };
+    noBtn.onclick = () => { cleanup(); resolve(false); };
+  });
+}
+
 const list = document.getElementById('list');
 const folderInput = document.getElementById('newFolderName');
 const createFolderBtn = document.getElementById('createFolderBtn');
@@ -191,29 +213,6 @@ backBtn.addEventListener('drop', e => {
 backBtn.addEventListener('dragover', e => {
   if (currentFolder) e.preventDefault();
 });
-backBtn.addEventListener('drop', e => {
-  e.preventDefault();
-  const keys = JSON.parse(e.dataTransfer.getData('application/json'));
-  chrome.storage.local.get('wildcards', data => {
-    const map = data.wildcards || {};
-    keys.forEach(oldKey => {
-      if (!currentFolder) return;
-      // currentFolder/xxx → xxx
-      const prefix = currentFolder + '/';
-      if (oldKey.startsWith(prefix)) {
-        const base = oldKey.slice(prefix.length);
-        if (!map[base]) {
-          map[base] = map[oldKey];
-          delete map[oldKey];
-        }
-      }
-    });
-    chrome.storage.local.set({ wildcards: map }, () => {
-      currentFolder = null;
-      refresh();
-    });
-  });
-});
 
 // Root upload handler
 fileRoot.addEventListener('change', e => {
@@ -309,7 +308,7 @@ function refresh() {
     // Delete all 버튼 (root vs folder 구분) (Delete all 按钮 (区分 root vs folder))
     const delAll = document.createElement('button');
     delAll.textContent = 'delete all';
-    delAll.style.cssText = 'float:right; margin-top:-25px;';
+    delAll.style.cssText = 'float:right; margin-top:-25px; position:relative; z-index:10;';
 
     if (currentFolder) {
       const renameBtn = document.getElementById('renameFolderBtn');
@@ -354,8 +353,8 @@ function refresh() {
 
     if (!currentFolder) {
       // 1) 루트 뷰: 전체 삭제 (1) Root 视图：全部删除)
-      delAll.onclick = () => {
-        if (!confirm('Delete All?')) return;
+      delAll.onclick = async () => {
+        if (!await customConfirm('Delete All?')) return;
         chrome.storage.local.set({ wildcards: {}, wildcardFolders: [] }, () => {
           currentFolder = null;
           refresh();
@@ -366,8 +365,8 @@ function refresh() {
     } else {
       // 2) 폴더 뷰: 해당 폴더 내 파일만 삭제 (2) 文件夹视图：只删除该文件夹内的文件)
       const fileKeys = Object.keys(map).filter(k => k.startsWith(currentFolder + '/'));
-      delAll.onclick = () => {
-        if (!confirm(`Delete all files in '${currentFolder}' folder?`)) return;
+      delAll.onclick = async () => {
+        if (!await customConfirm(`Delete all files in '${currentFolder}' folder?`)) return;
         const newMap = { ...map };
         fileKeys.forEach(k => delete newMap[k]);
         chrome.storage.local.set({ wildcards: newMap, wildcardFolders: folders }, () => {
@@ -417,10 +416,10 @@ function refresh() {
         });
         const delBtn = document.createElement('button');
         delBtn.textContent = 'delete folder';
-        delBtn.style.cssText = 'float:right; margin-top:-18px; padding: 0 5px;';
-        delBtn.onclick = e => {
+        delBtn.style.cssText = 'float:right; margin-top:-18px; padding: 0 5px; position:relative; z-index:10;';
+        delBtn.onclick = async e => {
           e.stopPropagation();
-          if (!confirm(`Delete '${folder}' folder and all files inside?`)) return;
+          if (!await customConfirm(`Delete '${folder}' folder and all files inside?`)) return;
           const newMap = { ...map };
           Object.keys(newMap).forEach(k => { if (k.startsWith(folder + '/')) delete newMap[k]; });
           const newFolders = folders.filter(f => f !== folder);
@@ -560,55 +559,37 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-document.addEventListener('dragstart', e => {
-  // file-item 또는 그 자식 요소에서 시작한 드래그라면 (如果是从 file-item 或其子元素开始的拖拽)
-  if (e.target.closest('.file-item')) {
-    backBtn.classList.add('active');
-  }
-});
-
-// 드래그가 종료될 때 (drop 또는 취소) (拖拽结束时 (drop 或取消))
-document.addEventListener('dragend', e => {
-  backBtn.classList.remove('active');
-});
-
-// 혹시 drop 이벤트에서 바로 제거되지 않는 경우 안전망으로 (万一 drop 事件中没有立即移除，作为安全网)
-backBtn.addEventListener('drop', e => {
-  backBtn.classList.remove('active');
-});
-
+// Drag event handlers - consolidated (拖拽事件处理 - 合并版)
 document.addEventListener('dragstart', e => {
   if (e.target.closest('.file-item')) {
-    // 백 버튼 (返回按钮)
+    isDragging = true;
     backBtn.classList.add('active');
-    // 모든 폴더 헤더 (root 뷰에만 존재) (所有文件夹标题 (只存在于 root 视图))
     document.querySelectorAll('.folder-header')
       .forEach(el => el.classList.add('active'));
   }
 });
 
-// 드래그 종료 시: active 클래스 제거 (拖拽结束时：移除 active 类)
 document.addEventListener('dragend', () => {
+  isDragging = false;
   backBtn.classList.remove('active');
   document.querySelectorAll('.folder-header')
     .forEach(el => el.classList.remove('active'));
 });
-// 혹시 drop 시에도 안전하게 제거 (万一 drop 时也安全移除)
+
 document.addEventListener('drop', () => {
+  isDragging = false;
   backBtn.classList.remove('active');
   document.querySelectorAll('.folder-header')
     .forEach(el => el.classList.remove('active'));
+});
+
+// backBtn drop handler for active class (安全移除 active 类)
+backBtn.addEventListener('drop', e => {
+  backBtn.classList.remove('active');
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  // 1) 드래그 시작/끝 토글 (1) 拖拽开始/结束 切换)
-  document.addEventListener('dragstart', e => {
-    if (e.target.closest('.file-item')) isDragging = true;
-  });
-  document.addEventListener('dragend', () => { isDragging = false; });
-  document.addEventListener('drop', () => { isDragging = false; });
-
-  // 2) 자동 상하 스크롤 (2) 自动上下滚动)
+  // 자동 상하 스크롤 (自动上下滚动)
   document.addEventListener('dragover', e => {
     if (!isDragging) return;
     const TOP_ZONE = 40;                   // 상단에서 40px 이내 (顶部 40px 以内)
