@@ -62,7 +62,16 @@ const translations = {
     spaceDesc: "Works fine along with NAI default.",
     tab: "Tab",
     tabDesc: "Use with \"Disable Tag Suggestions\" ON.",
-    wildcards: "Wildcards"
+    wildcards: "Wildcards",
+    localSync: "Local Sync",
+    linkFolder: "Link Folder",
+    unlink: "Unlink",
+    exportLocal: "Export",
+    importLocal: "Import",
+    syncLocal: "Sync",
+    notLinked: "Not linked to local folder",
+    linkedTo: "Linked to:",
+    openSyncPage: "Open Sync Manager"
   },
   jp: {
     settings: "設定",
@@ -75,7 +84,16 @@ const translations = {
     spaceDesc: "NAIの基本動作と衝突せず動作します。",
     tab: "Tab",
     tabDesc: "「入力候補予測をやめる」ON推奨",
-    wildcards: "ワイルドカード"
+    wildcards: "ワイルドカード",
+    localSync: "ローカル同期",
+    linkFolder: "フォルダを選択",
+    unlink: "解除",
+    exportLocal: "エクスポート",
+    importLocal: "インポート",
+    syncLocal: "同期",
+    notLinked: "ローカルフォルダ未選択",
+    linkedTo: "選択中:",
+    openSyncPage: "同期マネージャーを開く"
   },
   zh: {
     settings: "设置",
@@ -88,7 +106,16 @@ const translations = {
     spaceDesc: "与 NAI 默认设置兼容",
     tab: "Tab",
     tabDesc: "需开启「禁用标签建议」选项",
-    wildcards: "通配符"
+    wildcards: "通配符",
+    localSync: "本地同步",
+    linkFolder: "绑定文件夹",
+    unlink: "解绑",
+    exportLocal: "导出",
+    importLocal: "导入",
+    syncLocal: "同步",
+    notLinked: "未绑定本地文件夹",
+    linkedTo: "已绑定:",
+    openSyncPage: "打开同步管理器"
   }
 };
 
@@ -744,3 +771,87 @@ viewTitle.addEventListener('click', () => {
   }
   refresh();
 });
+
+// ============================================================
+// Local Sync Feature - Simplified (File operations in sync.html)
+// ============================================================
+
+const DIR_HANDLE_KEY = 'wildcardDirHandle';
+const DB_NAME = 'WildcardSyncDB';
+const STORE_NAME = 'handles';
+
+// IndexedDB 辅助函数 (IndexedDB Helper Functions)
+function openSyncDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getDirHandle() {
+  try {
+    const db = await openSyncDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get(DIR_HANDLE_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    console.error('getDirHandle error:', e);
+    return null;
+  }
+}
+
+// UI 元素 (UI Elements)
+const syncStatus = document.getElementById('syncStatus');
+const openSyncPageBtn = document.getElementById('openSyncPageBtn');
+
+// 更新 UI 状态 (Update UI State)
+function updateSyncUI(dirName) {
+  const t = translations[lang] || translations.en;
+  if (dirName) {
+    syncStatus.textContent = `${t.linkedTo} ${dirName}`;
+  } else {
+    syncStatus.textContent = t.notLinked;
+  }
+}
+
+// 初始化同步 UI (Initialize Sync UI)
+async function initSyncUI() {
+  try {
+    const handle = await getDirHandle();
+    if (handle) {
+      updateSyncUI(handle.name);
+    } else {
+      updateSyncUI(null);
+    }
+  } catch (e) {
+    console.error('initSyncUI error:', e);
+    updateSyncUI(null);
+  }
+}
+
+// 打开同步页面 (Open Sync Page)
+// 使用消息传递让 background script 用 chrome.tabs.create 打开，确保完整的扩展权限
+function openSyncPage() {
+  chrome.runtime.sendMessage({ action: 'openSyncPage' }, (response) => {
+    // 如果 sendMessage 成功，页面会在新标签页打开
+    // 如果失败（例如 service worker 未激活），尝试直接打开
+    if (chrome.runtime.lastError) {
+      console.log('sendMessage failed, trying direct open:', chrome.runtime.lastError);
+      const syncUrl = chrome.runtime.getURL('sync.html');
+      window.open(syncUrl, '_blank');
+    }
+  });
+}
+
+// 事件监听器 (Event Listeners)
+if (openSyncPageBtn) {
+  openSyncPageBtn.addEventListener('click', openSyncPage);
+}
+
+// 页面加载时初始化 (Initialize on Page Load)
+document.addEventListener('DOMContentLoaded', initSyncUI);

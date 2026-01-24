@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Wildcard Local Sync</title>
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #1e1e2e;
+            color: #e0e0e0;
+        }
+
+        h1 {
+            color: #818cf8;
+            margin-bottom: 8px;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 6px;
+            margin: 16px 0;
+            background: #252538;
+            border: 1px solid #4a4a6a;
+        }
+
+        .status.linked {
+            border-color: #4ade80;
+            background: #1a2e1a;
+        }
+
+        button {
+            background: #3d3d5c;
+            color: #e0e0e0;
+            border: 1px solid #4a4a6a;
+            border-radius: 6px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 4px;
+            transition: background 0.15s;
+        }
+
+        button:hover {
+            background: #4a4a6a;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #6366f1;
+            border-color: #6366f1;
+        }
+
+        .btn-primary:hover {
+            background: #818cf8;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+            border-color: #dc2626;
+        }
+
+        .btn-danger:hover {
+            background: #ef4444;
+        }
+
+        .actions {
+            margin: 20px 0;
+        }
+
+        .log {
+            background: #0d0d14;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .log-entry {
+            margin: 4px 0;
+        }
+
+        .log-success {
+            color: #4ade80;
+        }
+
+        .log-error {
+            color: #f87171;
+        }
+
+        .log-info {
+            color: #60a5fa;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>📁 Wildcard Local Sync</h1>
+    <p>使用 File System Access API 将通配符与本地文件夹同步</p>
+
+    <div id="status" class="status">
+        <strong>状态:</strong> <span id="statusText">检查中...</span>
+    </div>
+
+    <div class="actions">
+        <button id="linkBtn" class="btn-primary">📁 绑定文件夹</button>
+        <button id="unlinkBtn" class="btn-danger" style="display:none;">解除绑定</button>
+    </div>
+
+    <div class="actions" id="syncActions" style="display:none;">
+        <button id="exportBtn">⬆ 导出到本地</button>
+        <button id="importBtn">⬇ 从本地导入</button>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <script src="sync.js"></script>
+</body>
+
+</html>

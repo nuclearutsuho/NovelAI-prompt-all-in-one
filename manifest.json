@@ -27,6 +27,8 @@
         "dictionary.csv",
         "popup.html",
         "popup.js",
+        "sync.html",
+        "sync.js",
         "manager-panel.js",
         "manager-panel.css"
       ],
@@ -35,6 +37,9 @@
       ]
     }
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html"
   }
