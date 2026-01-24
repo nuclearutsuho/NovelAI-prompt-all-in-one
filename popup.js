@@ -127,13 +127,6 @@ function setLang(lang) {
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  setLang('en'); // 초기 언어 설정 (初始语言设置)
-  document.getElementById('btn-en').addEventListener('click', () => setLang('en'));
-  document.getElementById('btn-jp').addEventListener('click', () => setLang('jp'));
-  document.getElementById('btn-zh').addEventListener('click', () => setLang('zh'));
-});
-
 // Create new folder
 document.getElementById('createFolderBtn').addEventListener('click', () => {
   let raw = folderInput.value.trim();
@@ -309,6 +302,57 @@ fileInFolder.addEventListener('change', e => {
   fileInFolder.value = '';
 });
 
+// 创建文件项辅助函数 (Helper function for creating file items)
+function createFileItem(key, displayName, content, map) {
+  const li = document.createElement('li');
+  li.className = 'file-item';
+  li.dataset.key = key;
+  li.setAttribute('draggable', 'true');
+
+  li.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    enterEditMode(key, content);
+  });
+
+  // 点击选择逻辑 (Click selection logic)
+  li.addEventListener('click', e => {
+    const items = Array.from(document.querySelectorAll('li.file-item'));
+    const thisIndex = items.indexOf(li);
+
+    if (e.shiftKey && lastSelectedIndex !== null) {
+      const [start, end] = [lastSelectedIndex, thisIndex].sort((a, b) => a - b);
+      items.slice(start, end + 1).forEach(el => el.classList.add('selected'));
+    } else if (e.ctrlKey || e.metaKey) {
+      li.classList.toggle('selected');
+    } else {
+      items.forEach(el => el.classList.remove('selected'));
+      li.classList.add('selected');
+    }
+    lastSelectedIndex = thisIndex;
+  });
+
+  // 拖拽开始 (Drag start)
+  li.addEventListener('dragstart', e => {
+    const selItems = document.querySelectorAll('.file-item.selected');
+    const keys = selItems.length
+      ? Array.from(selItems).map(el => el.dataset.key)
+      : [key];
+    e.dataTransfer.setData('application/json', JSON.stringify(keys));
+  });
+
+  li.textContent = displayName;
+
+  const del = document.createElement('button');
+  del.textContent = 'delete';
+  del.onclick = () => {
+    delete map[key];
+    chrome.storage.local.set({ wildcards: map }, refresh);
+  };
+  li.append(del);
+
+  return li;
+}
+
 // Render list function
 function refresh() {
   chrome.storage.local.get(['wildcards', 'wildcardFolders', SETTINGS_VISIBLE_KEY], d => {
@@ -318,8 +362,6 @@ function refresh() {
       d[SETTINGS_VISIBLE_KEY] : true;
     const settings = document.getElementById('settings');
     list.innerHTML = '';
-
-    console.log(translations[lang].settings)
 
     // Toggle root vs folder view
     if (currentFolder) {
@@ -442,57 +484,7 @@ function refresh() {
         list.appendChild(li);
       });
       Object.keys(map).filter(k => !k.includes('/')).sort().forEach(name => {
-        const li = document.createElement('li');
-        li.className = 'file-item';
-        // 파일 경로(key)를 data-key 에 저장 (将文件路径(key)保存到 data-key)
-        const key = currentFolder ? `${currentFolder}/${name}` : name;
-        li.dataset.key = key;
-        // 드래그 가능하게 (使其可拖拽)
-        li.setAttribute('draggable', 'true');
-
-        li.addEventListener('dblclick', e => {
-          e.stopPropagation(); // 이벤트 버블링 방지 (防止事件冒泡)
-          enterEditMode(name, map[name]);
-        });
-
-        // 클릭으로 선택 토글 (Ctrl/Cmd + 클릭으로 멀티셀렉트) (点击切换选择 (Ctrl/Cmd + 点击进行多选))
-        li.addEventListener('click', e => {
-          // 현재 리스트의 모든 파일 아이템 (当前列表的所有文件项)
-          const items = Array.from(document.querySelectorAll('li.file-item'));
-          const thisIndex = items.indexOf(li);
-
-          if (e.shiftKey && lastSelectedIndex !== null) {
-            // Shift+Click: 마지막 선택 지점↔현재 지점 사이 모두 선택 (Shift+Click: 选择最后选择点↔当前点之间的所有项)
-            const [start, end] = [lastSelectedIndex, thisIndex].sort((a, b) => a - b);
-            items.slice(start, end + 1).forEach(el => el.classList.add('selected'));
-          }
-          else if (e.ctrlKey || e.metaKey) {
-            // Ctrl/Cmd+Click: 토글 (Ctrl/Cmd+Click: 切换)
-            li.classList.toggle('selected');
-          }
-          else {
-            // 일반 클릭: 다른 건 해제 후 현재만 선택 (普通点击：取消其他选择后只选择当前项)
-            items.forEach(el => el.classList.remove('selected'));
-            li.classList.add('selected');
-          }
-
-          // 클릭 후에는 인덱스 기억 (点击后记住索引)
-          lastSelectedIndex = thisIndex;
-        });
-
-        // dragstart 시 선택된 항목들의 key 리스트 전송 (dragstart 时发送选中项目的 key 列表)
-        li.addEventListener('dragstart', e => {
-          const selItems = document.querySelectorAll('.file-item.selected');
-          const keys = selItems.length
-            ? Array.from(selItems).map(el => el.dataset.key)
-            : [key];
-          e.dataTransfer.setData('application/json', JSON.stringify(keys));
-        });
-        li.textContent = name;
-        const del = document.createElement('button');
-        del.textContent = 'delete';
-        del.onclick = () => { delete map[name]; chrome.storage.local.set({ wildcards: map }, refresh); };
-        li.append(del);
+        const li = createFileItem(name, name, map[name], map);
         list.appendChild(li);
       });
 
@@ -500,64 +492,14 @@ function refresh() {
       // Folder view: show only files in currentFolder
       Object.keys(map).filter(k => k.startsWith(currentFolder + '/')).sort().forEach(fullKey => {
         const fileName = fullKey.slice(currentFolder.length + 1);
-        const li = document.createElement('li');
-        li.className = 'file-item';
-        // 파일 경로(key)를 data-key 에 저장 (将文件路径(key)保存到 data-key)
-        const key = currentFolder ? `${currentFolder}/${fileName}` : fileName;
-        li.dataset.key = key;
-        // 드래그 가능하게 (使其可拖拽)
-        li.setAttribute('draggable', 'true');
-
-        li.addEventListener('dblclick', e => {
-          e.stopPropagation(); // 이벤트 버블링 방지 (防止事件冒泡)
-          enterEditMode(fullKey, map[fullKey]);
-        });
-
-        // 클릭으로 선택 토글 (Ctrl/Cmd + 클릭으로 멀티셀렉트) (点击切换选择 (Ctrl/Cmd + 点击进行多选))
-        li.addEventListener('click', e => {
-          // 현재 리스트의 모든 파일 아이템 (当前列表的所有文件项)
-          const items = Array.from(document.querySelectorAll('li.file-item'));
-          const thisIndex = items.indexOf(li);
-
-          if (e.shiftKey && lastSelectedIndex !== null) {
-            // Shift+Click: 마지막 선택 지점↔현재 지점 사이 모두 선택 (Shift+Click: 选择最后选择点↔当前点之间的所有项)
-            const [start, end] = [lastSelectedIndex, thisIndex].sort((a, b) => a - b);
-            items.slice(start, end + 1).forEach(el => el.classList.add('selected'));
-          }
-          else if (e.ctrlKey || e.metaKey) {
-            // Ctrl/Cmd+Click: 토글 (Ctrl/Cmd+Click: 切换)
-            li.classList.toggle('selected');
-          }
-          else {
-            // 일반 클릭: 다른 건 해제 후 현재만 선택 (普通点击：取消其他选择后只选择当前项)
-            items.forEach(el => el.classList.remove('selected'));
-            li.classList.add('selected');
-          }
-
-          // 클릭 후에는 인덱스 기억 (点击后记住索引)
-          lastSelectedIndex = thisIndex;
-        });
-
-        // dragstart 시 선택된 항목들의 key 리스트 전송 (dragstart 时发送选中项目的 key 列表)
-        li.addEventListener('dragstart', e => {
-          const selItems = document.querySelectorAll('.file-item.selected');
-          const keys = selItems.length
-            ? Array.from(selItems).map(el => el.dataset.key)
-            : [key];
-          e.dataTransfer.setData('application/json', JSON.stringify(keys));
-        });
-        li.textContent = fileName;
-        const del = document.createElement('button');
-        del.textContent = 'delete';
-        del.onclick = () => { delete map[fullKey]; chrome.storage.local.set({ wildcards: map }, refresh); };
-        li.append(del);
+        const li = createFileItem(fullKey, fileName, map[fullKey], map);
         list.appendChild(li);
       });
     }
   });
 }
 
-document.addEventListener('DOMContentLoaded', refresh);
+
 
 // 监听 storage 变化，实现多窗口实时同步 (Listen for storage changes for real-time sync across windows)
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -598,21 +540,16 @@ backBtn.addEventListener('drop', e => {
   backBtn.classList.remove('active');
 });
 
-document.addEventListener('DOMContentLoaded', () => {
-  // 자동 상하 스크롤 (自动上下滚动)
-  document.addEventListener('dragover', e => {
-    if (!isDragging) return;
-    const TOP_ZONE = 40;                   // 상단에서 40px 이내 (顶部 40px 以内)
-    const BOTTOM_ZONE = window.innerHeight - 40; // 하단에서 40px 이내 (底部 40px 以内)
-
-    if (e.clientY < TOP_ZONE) {
-      // 위로 (向上)
-      window.scrollBy(0, -20);
-    } else if (e.clientY > BOTTOM_ZONE) {
-      // 아래로 (필요시) (向下 (如果需要))
-      window.scrollBy(0, 20);
-    }
-  });
+// 拖拽时自动滚动 (Auto scroll on drag)
+document.addEventListener('dragover', e => {
+  if (!isDragging) return;
+  const TOP_ZONE = 40;
+  const BOTTOM_ZONE = window.innerHeight - 40;
+  if (e.clientY < TOP_ZONE) {
+    window.scrollBy(0, -20);
+  } else if (e.clientY > BOTTOM_ZONE) {
+    window.scrollBy(0, 20);
+  }
 });
 
 // 편집 모드로 전환하는 함수 (切换到编辑模式的函数)
@@ -711,26 +648,31 @@ function saveFile() {
   });
 }
 
-
 document.addEventListener('DOMContentLoaded', () => {
-  // 1) 저장된 언어 불러오기(없으면 en) (1) 加载已保存语言 (如果没有则 en))
+  // 初始化刷新列表 (Initialize and refresh list)
+  refresh();
+
+  // 初始化同步 UI (Initialize sync UI)
+  initSyncUI();
+
+  // 加载已保存语言 (Load saved language)
   chrome.storage.local.get(LANG_KEY, data => {
     lang = data[LANG_KEY] || 'en';
     setLang(lang);
   });
 
-  // 2) 버튼 클릭 시 저장 + 반영 (2) 点击按钮时保存 + 反映)
+  // 语言按钮事件绑定 (Language button event bindings)
   document.getElementById('btn-en').addEventListener('click', () => {
     chrome.storage.local.set({ [LANG_KEY]: 'en' }, () => setLang('en'));
-    lang = 'en'; // 언어 변수 업데이트
+    lang = 'en';
   });
   document.getElementById('btn-jp').addEventListener('click', () => {
     chrome.storage.local.set({ [LANG_KEY]: 'jp' }, () => setLang('jp'));
-    lang = 'jp'; // 언어 변수 업데이트
+    lang = 'jp';
   });
   document.getElementById('btn-zh').addEventListener('click', () => {
     chrome.storage.local.set({ [LANG_KEY]: 'zh' }, () => setLang('zh'));
-    lang = 'zh'; // 语言变量更新
+    lang = 'zh';
   });
 });
 
@@ -852,6 +794,3 @@ function openSyncPage() {
 if (openSyncPageBtn) {
   openSyncPageBtn.addEventListener('click', openSyncPage);
 }
-
-// 页面加载时初始化 (Initialize on Page Load)
-document.addEventListener('DOMContentLoaded', initSyncUI);

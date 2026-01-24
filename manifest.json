@@ -29,7 +29,6 @@
         "popup.js",
         "sync.html",
         "sync.js",
-        "manager-panel.js",
         "manager-panel.css"
       ],
       "matches": [

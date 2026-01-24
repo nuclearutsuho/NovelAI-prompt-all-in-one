@@ -171,15 +171,7 @@
 
   /******** 1. swap logic (now rng based on NAI seed) ********/
   function makeDeepSwap(rng) {
-    const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
-    const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-    const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
-
-    function containsWildcardSyntax(text) {
-      return simpleWildcardPattern.test(text) ||
-        curlyPattern.test(text) ||
-        doublePipePattern.test(text);
-    }
+    // 使用外层定义的正则表达式和 containsWildcardSyntax 函数 (Use outer-scope patterns and function)
 
     function swap(txt) {
       // 1) __token__ lines → pick one line deterministically using rng()
@@ -311,13 +303,13 @@
 
         let json = JSON.parse(body);
 
-        /* ① wildcard 치환 (Wildcard 替换) */
+        /* ① seed 기반 RNG 생성 및 wildcard 치환 (基于 seed 创建 RNG 并替换 wildcard) */
+        const seed32 = getSeed32(json);
+        const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
+        const deepSwap = makeDeepSwap(rng);
         json = deepSwap(json);
 
-        /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */        // <<< NEW
-        if (preservePrompt) json = applyImg2ImgMetadata(json);              // <<< NEW
-
-        /* ③ cosmetic: base_caption = input */
+        /* ② cosmetic: base_caption = input */
         if (json?.parameters?.v4_prompt?.caption &&
           typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
           typeof json.input === 'string') {
