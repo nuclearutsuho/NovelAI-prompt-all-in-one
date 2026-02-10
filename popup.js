@@ -725,7 +725,7 @@ const STORE_NAME = 'handles';
 // IndexedDB 辅助函数 (IndexedDB Helper Functions)
 function openSyncDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

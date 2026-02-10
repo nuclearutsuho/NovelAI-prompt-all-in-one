@@ -23,7 +23,7 @@ function log(msg, type = 'info') {
 // IndexedDB 函数
 function openSyncDB() {
     return new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(DB_NAME, 2);
         req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
