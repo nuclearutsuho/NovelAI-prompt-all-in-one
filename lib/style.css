@@ -1,0 +1,219 @@
+/* TagEditor Styles */
+.tag-editor-container {
+    padding: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.tag-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-content: flex-start;
+}
+
+.tag-item {
+    display: flex;
+    align-items: center;
+    background: #3b3b4f;
+    border: 1px solid #4a4a6a;
+    border-radius: 20px;
+    /* Capsule shape */
+    padding: 2px 8px;
+    color: #eee;
+    font-size: 13px;
+    cursor: default;
+    user-select: none;
+    transition: all 0.1s ease-in-out;
+    max-width: 100%;
+    position: relative;
+    height: 28px;
+}
+
+.tag-item:hover {
+    background: #4a4a6a;
+    border-color: #6c6c94;
+    z-index: 10;
+}
+
+.tag-item.selected {
+    background: rgba(99, 102, 241, 0.2);
+    border-color: #818cf8;
+    box-shadow: 0 0 0 1px #818cf8;
+}
+
+.tag-item.sortable-ghost {
+    opacity: 0.3;
+    background: #818cf8;
+}
+
+.tag-item.disabled {
+    opacity: 0.5;
+    background: #2a2a2e;
+    border-color: #333;
+    text-decoration: line-through;
+}
+
+/* Tag Main Content */
+.tag-main {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tag-text {
+    cursor: text;
+}
+
+/* Weight Badge */
+.tag-weight-badge {
+    font-size: 0.85em;
+    padding: 0 4px;
+    border-radius: 4px;
+    line-height: 1.2;
+    font-weight: bold;
+}
+
+.tag-weight-badge.pos {
+    background: rgba(46, 204, 113, 0.2);
+    color: #2ecc71;
+}
+
+.tag-weight-badge.neg {
+    background: rgba(231, 76, 60, 0.2);
+    color: #e74c3c;
+}
+
+/* Controls */
+.tag-controls {
+    display: none;
+    /* Hidden by default */
+    align-items: center;
+    gap: 2px;
+    margin-left: 2px;
+    padding-left: 4px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tag-item:hover .tag-controls,
+.tag-item.selected .tag-controls {
+    display: flex;
+}
+
+.tbtn {
+    background: transparent;
+    border: none;
+    color: #aaa;
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+
+.tbtn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.tbtn-sub:hover {
+    color: #f39c12;
+}
+
+.tbtn-add:hover {
+    color: #2ecc71;
+}
+
+.tbtn-del:hover {
+    background: rgba(231, 76, 60, 0.2);
+    color: #e74c3c;
+}
+
+/* Inline Edit Input */
+.tag-inline-input {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-family: inherit;
+    font-size: inherit;
+    padding: 0;
+    margin: 0;
+    width: auto;
+    min-width: 50px;
+    outline: none;
+    border-bottom: 1px dashed #818cf8;
+}
+
+/* Autocomplete (reused) */
+.autocomplete-dropdown {
+    position: absolute;
+    background: #2a2a3e;
+    border: 1px solid #4a4a6a;
+    border-radius: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    min-width: 200px;
+}
+
+.autocomplete-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+    background: #4a4a6a;
+}
+
+.autocomplete-tag {
+    color: #e0e0e0;
+    font-weight: 500;
+}
+
+.autocomplete-trans {
+    color: #999;
+    font-size: 0.85em;
+    margin-left: 8px;
+}
+
+.autocomplete-count {
+    color: #666;
+    font-size: 0.75em;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4a4a6a;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #5a5a7a;
+}

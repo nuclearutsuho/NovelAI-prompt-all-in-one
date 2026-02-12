@@ -3,344 +3,241 @@
 
 <head>
   <meta charset="utf-8">
-  <title>Wildcards txt files</title>
+  <title>NovelAI Prompt Editor</title>
+  <link rel="stylesheet" href="lib/style.css">
   <style>
-    /* 确保所有元素使用 border-box 盒模型 (Ensure all elements use border-box) */
-    *,
-    *::before,
-    *::after {
-      box-sizing: border-box;
-    }
-
-    html,
+    /* Popup specific overrides */
     body {
-      height: 100%;
+      width: 600px;
+      height: 500px;
       margin: 0;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      width: auto;
-      min-width: 300px;
-      padding: 12px;
+      padding: 0;
       background: #1e1e2e;
       color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* 滚动条样式 */
-    ::-webkit-scrollbar {
-      width: 8px;
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
     }
 
-    ::-webkit-scrollbar-track {
-      background: #2a2a3e;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: #4a4a6a;
-      border-radius: 4px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-      background: #5a5a7a;
-    }
-
-    ul {
-      padding: 0;
-      list-style: none;
-    }
-
-    li {
-      margin: 4px 0;
-    }
-
-    .folder-header {
+    header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      padding: 8px 12px;
+      background: #2a2a3e;
+      border-bottom: 1px solid #4a4a6a;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: #999;
+      padding: 6px 12px;
       cursor: pointer;
       font-weight: bold;
-      color: #818cf8;
-      padding: 6px 8px;
       border-radius: 4px;
-      transition: box-shadow 0.2s ease-in-out, background 0.2s;
+      transition: all 0.2s;
     }
 
-    .folder-header.active {
-      box-shadow: 0 0 8px 3px rgba(255, 152, 0, 0.8);
-      animation: pulse 1s infinite alternate;
+    .tab-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #ddd;
     }
 
-    .file-item {
+    .tab-btn.active {
+      background: #4a4a6a;
+      color: #fff;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: 1px solid #4a4a6a;
+      color: #ccc;
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      word-break: break-all;
+      justify-content: center;
+      font-size: 1.2em;
     }
 
-    .file-item.selected {
-      background: rgba(99, 102, 241, 0.3);
-    }
-
-    button {
-      margin-left: 8px;
-      background: #3d3d5c;
-      color: #e0e0e0;
-      border: 1px solid #4a4a6a;
-      border-radius: 4px;
-      padding: 4px 10px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    button:hover {
+    .icon-btn:hover {
       background: #4a4a6a;
     }
 
-    input[type="text"],
-    input[type="file"],
-    textarea {
+    #editor-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      background: #181825;
+    }
+
+    #input-area {
+      padding: 8px 12px;
       background: #2a2a3e;
-      color: #e0e0e0;
+      border-top: 1px solid #4a4a6a;
+      display: flex;
+      gap: 8px;
+    }
+
+    #quick-input {
+      flex: 1;
+      height: 36px;
+      background: #181825;
       border: 1px solid #4a4a6a;
+      color: #fff;
       border-radius: 4px;
-      padding: 6px 8px;
+      padding: 6px;
+      resize: none;
     }
 
-    input[type="text"]:focus,
-    textarea:focus {
-      outline: none;
-      border-color: #818cf8;
+    #btn-add {
+      background: #818cf8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 0 16px;
+      cursor: pointer;
+      font-weight: bold;
     }
 
-    select {
-      margin-left: 8px;
+    #btn-add:hover {
+      background: #6366f1;
     }
 
-    .folder-list {
-      padding-left: 12px;
+    /* Settings Modal */
+    #settings-modal {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 100;
       display: none;
+      align-items: center;
+      justify-content: center;
     }
 
-    .folder-header.drop-target {
-      background-color: rgba(0, 172, 193, 0.2);
-      border: 2px dashed #00acc1;
+    .modal-content {
+      background: #2a2a3e;
+      padding: 20px;
+      border-radius: 8px;
+      width: 80%;
+      max-height: 80%;
+      overflow-y: auto;
+      border: 1px solid #4a4a6a;
     }
 
-    #backBtn {
-      transition: box-shadow 0.2s ease-in-out;
+    .setting-group {
+      margin-bottom: 15px;
     }
 
-    #backBtn.active {
-      box-shadow: 0 0 8px 3px rgba(255, 152, 0, 0.8);
-      animation: pulse 1s infinite alternate;
-    }
-
-    #backBtn.drop-target {
-      background-color: rgba(251, 140, 0, 0.2);
-      border: 2px dashed #fb8c00;
-    }
-
-    @keyframes pulse {
-      from {
-        box-shadow: 0 0 8px 3px rgba(255, 152, 0, 0.8);
-      }
-
-      to {
-        box-shadow: 0 0 16px 6px rgba(255, 152, 0, 0.8);
-      }
-    }
-
-    #langToggle {
-      text-align: right;
-      margin-bottom: 8px;
-    }
-
-    #langToggle button {
-      margin: 0 4px;
-      padding: 2px 6px;
-    }
-
-    li.file-item {
-      position: relative;
-      transition: box-shadow 0.2s ease, border-color 0.2s ease;
-    }
-
-    li.file-item:hover {
-      box-shadow: 0 0 0 2px rgba(0, 172, 193, 0.8);
+    .setting-group label {
+      display: block;
+      margin-bottom: 5px;
       cursor: pointer;
     }
 
-    .folder-header {
-      position: relative;
-      transition: box-shadow 0.2s ease, background-color 0.2s ease;
-    }
-
-    .folder-header:hover {
-      box-shadow: 0 0 0 2px rgba(0, 172, 193, 0.8);
-      background-color: rgba(0, 172, 193, 0.1);
-      cursor: pointer;
-    }
-
-    #folder-create {
-      display: flex;
-    }
-
-    #newFolderName {
-      margin-left: -5px;
-    }
-
-    #folder-create button {
-      white-space: nowrap;
-    }
-
-    #fileCreateInFolder {
-      display: flex;
-    }
-
-    #newFileNameInFolder {
-      margin-left: -5px;
-      flex: 0.5;
-      width: 120px;
-    }
-
-    #renameFolderBtn button {
-      white-space: nowrap;
-    }
-
-    #viewTitle {
-      cursor: pointer;
-      position: relative;
-    }
-
-    #viewTitle::after {
-      content: "▶";
+    .setting-desc {
       font-size: 0.8em;
-      margin-left: 5px;
-      transition: transform 0.3s;
-      display: inline-block;
+      color: #999;
+      margin-left: 20px;
     }
 
-    #viewTitle.collapsed::after {
-      transform: rotate(90deg);
-    }
-
-    #viewTitle.inFolder::after {
-      display: none;
+    h3 {
+      margin-top: 0;
+      border-bottom: 1px solid #4a4a6a;
+      padding-bottom: 8px;
     }
   </style>
 </head>
 
 <body>
-  <button id="backBtn" style="display:none; margin-bottom:8px;">◀ Back</button>
-  <header style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-    <h2 id="viewTitle" data-i18n-key="settings" style="font-size: 1rem; margin: 0;">Settings</h2>
-    <div id="langToggle">
-      <button id="btn-en">EN</button>
-      <button id="btn-jp">JP</button>
-      <button id="btn-zh">中</button>
+  <div id="app">
+    <header>
+      <div class="tabs">
+        <button id="tab-positive" class="tab-btn active">Prompt</button>
+        <button id="tab-negative" class="tab-btn">Undesired Content</button>
+      </div>
+      <div class="controls">
+        <span id="sync-status"
+          style="font-size:0.8em; color:#666; margin-right:8px; display:flex; align-items:center;">Ready</span>
+        <button id="btn-sync" class="icon-btn" title="Sync now">⚡</button>
+        <button id="btn-settings" class="icon-btn" title="Settings">⚙️</button>
+      </div>
+    </header>
+
+    <div id="editor-container">
+      <!-- Initial loading state -->
+      <div style="text-align:center; padding-top:50px; color:#666;">
+        Connecting to NovelAI...
+      </div>
     </div>
-  </header>
 
-  <!-- Root view content -->
-  <div id="rootContent">
-    <!-- Settings -->
-    <div id="settings" style="font-size: 0.75rem; line-height: 1.4;">
-      <label>
-        <input type="checkbox" id="preservePrompt" checked>
-        <b id="preserveLabel" data-i18n-key="preserveLabel">Preserve Original img prompts on Enhance</b>
-      </label>
-      <div style="margin-left: 18px; color: #999; margin-bottom: 4px;">
-        <span id="preserveDesc" data-i18n-key="preserveDesc">・Uncheck this to randomize enhance prompts.</span>
+    <div id="input-area">
+      <textarea id="quick-input" placeholder="Enter tags here..."></textarea>
+      <button id="btn-add">Add</button>
+    </div>
+  </div>
+
+  <div id="settings-modal">
+    <div class="modal-content">
+      <h3>Settings <button id="close-settings"
+          style="float:right; background:transparent; border:none; color:#ccc; cursor:pointer;">×</button></h3>
+
+      <!-- Existing Settings -->
+      <div class="setting-group">
+        <label><input type="checkbox" id="preservePrompt" checked> Preserve Original img prompts on Enhance</label>
+        <div class="setting-desc">Uncheck this to randomize enhance prompts.</div>
+      </div>
+      <div class="setting-group">
+        <label><input type="checkbox" id="alternativeDanbooruAutocomplete"> Full Alternative Danbooru
+          Autocomplete</label>
+        <div class="setting-desc">a1111 WebUI style Danbooru Autocomplete.</div>
+      </div>
+      <div class="setting-group">
+        <strong>Trigger Keys:</strong>
+        <label><input type="checkbox" id="triggerSpace" checked> Space</label>
+        <label><input type="checkbox" id="triggerTab"> Tab</label>
       </div>
 
-      <label>
-        <input type="checkbox" id="alternativeDanbooruAutocomplete">
-        <b id="alternativeLabel" data-i18n-key="alternativeLabel">Full Alternative Danbooru Autocomplete</b>
-      </label>
-      <div style="margin-left: 18px; color: #999; margin-bottom: 6px;">
-        <span id="alternativeDesc" data-i18n-key="alternativeDesc">・a1111 WebUI style Danbooru Autocomplete.</span>
+      <!-- Local Sync -->
+      <div class="setting-group" style="border-top:1px solid #4a4a6a; padding-top:10px;">
+        <strong>Local Sync</strong>
+        <div id="localSyncStatus" style="font-size:0.9em; margin:5px 0;">Not linked</div>
+        <button id="openSyncPageBtn" style="padding:4px 8px;">Open Sync Manager</button>
       </div>
 
-      <b id="triggerTitle" data-i18n-key="triggerTitle">Autocomplete Trigger Keys</b>
-      <div style="margin-left: 4px; margin-top: 2px;">
-        <label>
-          <input type="checkbox" id="triggerSpace" checked>
-          <b id="spaceLabel" data-i18n-key="space">Space</b>:
-          <span id="spaceDesc" data-i18n-key="spaceDesc" style="color: #999;">Works fine along with NAI default.</span>
-        </label><br>
-        <label>
-          <input type="checkbox" id="triggerTab">
-          <b id="tabLabel" data-i18n-key="tab">Tab</b>:
-          <span id="tabDesc" data-i18n-key="tabDesc" style="color: #999;">Use with "Disable Tag Suggestions" ON.</span>
-        </label>
-      </div>
-
-      <!-- Local Sync Section -->
-      <div id="localSyncSection"
-        style="margin-top: 10px; padding: 8px; border: 1px solid #4a4a6a; border-radius: 4px; background: #252538;">
-        <b data-i18n-key="localSync">Local Sync</b>
-        <div id="syncStatus" style="font-size: 0.75em; color: #999; margin: 4px 0;" data-i18n-key="notLinked">
-          Not linked to local folder
+      <div style="text-align:right;">
+        <div id="langToggle">
+          <button id="btn-en">EN</button>
+          <button id="btn-jp">JP</button>
+          <button id="btn-zh">中文</button>
         </div>
-        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-          <button id="openSyncPageBtn" style="font-size: 0.75em;">📁 <span data-i18n-key="openSyncPage">Open Sync
-              Manager</span></button>
-        </div>
-      </div>
-    </div>
-    <!-- Root upload -->
-    <h2 id="wildcardsTitle" data-i18n-key="wildcards" style="font-size: 1rem; margin: 8px 0 6px 0;">Wildcards</h2>
-    <div id="folder-create">
-      <input type="text" id="newFolderName" placeholder="New Name">
-      <button id="createFolderBtn">New Folder</button>
-      <button id="createFileBtn">New File</button>
-    </div><br>
-    <input type="file" id="fileRoot" accept=".txt" multiple><br><br>
-  </div>
-
-  <!-- Folder-specific -->
-  <div id="fileCreateInFolder" style="display:none;">
-    <input type="text" id="newFileNameInFolder" placeholder="New Name">
-    <button id="renameFolderBtn">Rename Folder</button>
-    <button id="createFileBtnInFolder">New File</button>
-  </div><br>
-  <input type="file" id="fileInFolder" accept=".txt" multiple style="display:none;">
-  <!-- List container -->
-  <ul id="list"></ul>
-
-  <div id="editor-mode" style="display: none; flex-direction: column; height: 100%;">
-    <div style="flex-shrink: 0;">
-      <button id="editor-back-btn">◀ Back</button>
-    </div>
-    <div style="margin: 10px 0; flex-shrink: 0;">
-      <label for="file-name-editor">Wildcards Name:</label>
-      <input type="text" id="file-name-editor" style="width: 100%;">
-    </div>
-    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; margin-bottom: 10px;">
-      <textarea id="file-content-editor" style="width: 100%; flex: 1; resize: none;"></textarea>
-    </div>
-    <div style="flex-shrink: 0; padding-bottom: 5px;">
-      <button id="save-file-btn">Save</button>
-    </div>
-  </div>
-
-  <!-- Custom Confirm Modal (for iframe compatibility) -->
-  <div id="custom-confirm-modal"
-    style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:10000; align-items:center; justify-content:center;">
-    <div
-      style="background:#2a2a3e; border:1px solid #4a4a6a; border-radius:8px; padding:20px; max-width:300px; text-align:center;">
-      <p id="custom-confirm-message" style="margin:0 0 16px 0; color:#e0e0e0;"></p>
-      <div style="display:flex; gap:10px; justify-content:center;">
-        <button id="custom-confirm-yes" style="background:#e53935; border-color:#e53935;">Yes, Delete</button>
-        <button id="custom-confirm-no">Cancel</button>
       </div>
     </div>
   </div>
 
-  <!-- External scripts only -->
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 
 </html>

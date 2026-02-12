@@ -356,8 +356,23 @@
     }
   });
 
+
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  function init() {
+    // Autocomplete Init
+    initWildcardAutocomplete_PM();
+  }
+
   /******* 3. Autocomplete ********/
-  (function initWildcardAutocomplete_PM() {
+  function initWildcardAutocomplete_PM() {
+    if (!document.body) return;
+
     const STYLE = `
     .wildcard-suggest{
       position:absolute; z-index:2147483647; background:#222; color:#fff;
@@ -391,9 +406,30 @@
 
       let selIdx = -1;
 
+      // Autocomplete update
       editor.addEventListener('input', update);
+      // Real-time sync: Page -> Popup
+      // Use MutationObserver for robust detection of ALL changes (selection delete, undo/redo, etc.)
+      const observer = new MutationObserver(() => notifyPromptUpdate());
+      observer.observe(editor, { childList: true, characterData: true, subtree: true });
+
+      // Keep input for immediate feedback
+      editor.addEventListener('input', notifyPromptUpdate);
+
+
+
       editor.addEventListener('keydown', nav);
-      editor.addEventListener('blur', hide, true);   // capture
+      editor.addEventListener('blur', hide, true);
+
+      function notifyPromptUpdate() {
+        if (typeof window.__getCurrentPrompts_PM === 'function') {
+          const { positive, negative } = window.__getCurrentPrompts_PM();
+          window.postMessage({
+            type: '__RETURN_PROMPT__',
+            data: { positive, negative }
+          }, '*');
+        }
+      }
 
       function textBeforeCaret() {
         const sel = window.getSelection();
@@ -453,7 +489,6 @@
           const prefix = m[1].toLowerCase();
           const allKeys = Object.keys(dict)
 
-          // 1) 폴더명을 단독으로 입력한 경우: 해당 폴더 안의 모든 key 제안 (单独输入文件夹名的情况：建议该文件夹内的所有 key)
           const folderKeys = allKeys.filter(k => k.toLowerCase().startsWith(prefix + '/'));
           if (folderKeys.length && !prefix.includes('/')) {
             render(folderKeys.map(k => ({ type: 'token', text: `__${k}__` })));
@@ -468,11 +503,10 @@
           }
         }
 
-        // 匹配英文、数字、下划线、连字符、以及中文字符
         m = txt.match(/([A-Za-z0-9_\-\u4e00-\u9fff]{1,})$/);
         if (m && autocompleteDict.length) {
           const prefix = m[1].toLowerCase();
-          // 1) 원본 단어에 매치되는 항목 (匹配原始单词的项目)
+
           const origMatches = autocompleteDict
             .filter(d => d.word.toLowerCase().includes(prefix))
             .map(d => ({
@@ -485,7 +519,6 @@
               aliasUsed: false
             }));
 
-          // 2) 원본에 매치 안 되고 alias에만 매치되는 항목 (不匹配原始单词但匹配 alias 的项目)
           const aliasMatches = autocompleteDict
             .filter(d =>
               !d.word.toLowerCase().includes(prefix) &&
@@ -501,7 +534,6 @@
               aliasUsed: true
             }));
 
-          // 3) 中文匹配：不匹配原始单词和alias，只匹配中文翻译的项目
           const zhMatches = autocompleteDict
             .filter(d =>
               d.zhCN &&
@@ -516,14 +548,12 @@
               zhCN: d.zhCN,
               color: colorMap[d.colorCode] || 'red',
               rawCount: d.popCount,
-              aliasUsed: true  // 显示为 "中文 → 英文" 格式
+              aliasUsed: true
             }));
 
-          // 4) 합치고 rawCount 기준 내림차순 정렬 (合并并按 rawCount 降序排列)
           let entries = origMatches.concat(aliasMatches).concat(zhMatches);
           entries.sort((a, b) => b.rawCount - a.rawCount);
 
-          // 5) 포맷 적용 및 상위 50개 추출 (应用格式并提取前 50 个)
           entries = entries
             .slice(0, 50)
             .map(e => ({
@@ -536,7 +566,6 @@
               aliasUsed: e.aliasUsed
             }));
 
-          // 5) 렌더링 (渲染)
           if (entries.length) {
             render(entries);
             return;
@@ -545,7 +574,6 @@
 
         hide();
       }
-
 
       function render(items) {
         list.innerHTML = '';
@@ -556,7 +584,6 @@
 
           if (type === 'dict') {
             li.style.color = color || 'red';
-            // 如果有中文翻译，显示在英文tag后面
             const displayText = zhCN ? `${text} (${zhCN})` : text;
             if (aliasUsed) {
               li.innerHTML = `<span style="color:${color};">${original} → ${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
@@ -590,8 +617,6 @@
         list.style.top = (rect.bottom + window.scrollY + 2) + 'px';
         list.style.display = 'block';
       }
-
-
 
       function nav(e) {
         if (list.style.display === 'none') return;
@@ -632,22 +657,14 @@
           const m = full.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:[A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
         } else if (type === 'dict') {
-          // 匹配英文、数字、下划线、连字符和中文字符 (Match English, numbers, underscores, hyphens and Chinese characters)
           const m = full.match(/[A-Za-z0-9_\-\u4e00-\u9fff]{1,}$/);
           len = m ? m[0].length : 0;
 
-          // 先去掉popCount后缀 (First remove popCount suffix)
           text = text.replace(/\s\([0-9.]+[MK]?\)$/, '');
-
-          // 如果有 alias/中文 标记 "→"，取箭头后面的部分 (If there's alias/Chinese marker "→", take the part after arrow)
           if (text.includes('→')) {
             text = text.split('→')[1].trim();
           }
-
-          // 去掉中文翻译部分 "(中文)" - 只保留第一个英文tag (Remove Chinese translation "(中文)" - only keep the first English tag)
           text = text.replace(/\s*\([^\)]*[\u4e00-\u9fff][^\)]*\)$/, '');
-
-          // 将下划线替换为空格 (Replace underscores with spaces)
           text = text.replace(/_/g, ' ');
         }
 
@@ -658,11 +675,11 @@
           }
         }
 
-        const needsComma = !text.startsWith('__');      // 와일드카드 토큰이면 쉼표 생략 (如果是通配符 Token 则省略逗号)
+        const needsComma = !text.startsWith('__');
         document.execCommand(
           'insertText',
           false,
-          needsComma ? `${text}, ` : text               // 공백도 불필요하면 그냥 text 만 (如果连空格也不需要，就只保留 text)
+          needsComma ? `${text}, ` : text
         );
         hide();
 
@@ -671,28 +688,102 @@
         }
       }
 
-
-
       function highlight() {
-        // 1) active 클래스 토글 (切换 active 类)
         list.querySelectorAll('li').forEach((li, i) =>
           li.classList.toggle('active', i === selIdx)
         );
-
-        // 2) 활성화된 항목이 보이도록 스크롤 (滚动以显示激活的项目)
         const activeLi = list.querySelector('li.active');
         if (activeLi) {
           activeLi.scrollIntoView({ block: 'nearest' });
         }
       }
+
       function hide() {
         list.style.display = 'none'; selIdx = -1;
       }
     }
-  })();
+  }
 
+
+
+
+  /* -------------------------------------------------
+   * 4. Bridge Communication for Popup Editor
+   * ------------------------------------------------- */
+
+  function getCurrentPrompts() {
+    // 1. Array of all ProseMirrors
+    const all = Array.from(document.querySelectorAll('div.ProseMirror[contenteditable="true"]'));
+
+    // 2. Identify Base Positive and Base Negative by parent classes (Stable in V4/V4.5)
+    let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') ||
+      document.querySelector('.prompt-input-box-base-prompt .ProseMirror');
+    let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
+      document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
+
+    // 3. Fallback to index if specific classes not found
+    if (!posEl) posEl = all[0];
+    if (!negEl) negEl = all[1];
+
+    const getVal = el => el ? (el.innerText || el.textContent || '').trim() : '';
+
+    return {
+      positive: getVal(posEl),
+      negative: getVal(negEl)
+    };
+  }
+
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    const { type, data } = e.data || {};
+
+    if (type === '__GET_PROMPT__') {
+      console.log('[Injector] Received __GET_PROMPT__');
+      const { positive, negative } = getCurrentPrompts();
+      console.log('[Injector] Extracted prompts:', { positive, negative });
+      window.postMessage({
+        type: '__RETURN_PROMPT__',
+        data: { positive, negative }
+      }, '*');
+    }
+
+    if (type === '__SET_PROMPT__') {
+      const { positive, negative } = data || {};
+      const all = Array.from(document.querySelectorAll('div.ProseMirror[contenteditable="true"]'));
+
+      // Select best targets for setting
+      let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') ||
+        document.querySelector('.prompt-input-box-base-prompt .ProseMirror') || all[0];
+      let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
+        document.querySelector('.prompt-input-box-undesired-content .ProseMirror') || all[1];
+
+      const setEditorContent = (editor, text) => {
+        if (!editor || typeof text !== 'string') return;
+        editor.focus();
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        sel.addRange(range);
+
+        if (text) {
+          document.execCommand('insertText', false, text);
+        } else {
+          document.execCommand('delete');
+        }
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+
+      if (positive !== undefined) setEditorContent(posEl, positive);
+      if (negative !== undefined) setEditorContent(negEl, negative);
+    }
+  });
+
+  // Export for internal use in hook()
+  window.__getCurrentPrompts_PM = getCurrentPrompts;
 
   console.log('[Wildcard] injector ready');
 })();
+
 
 

@@ -278,11 +278,47 @@
       };
     });
 
-  window.addEventListener('message', e => {
-    if (e.source !== window || e.data?.type !== '__REQUEST_AUTOCOMPLETE_DICT__') return;
+  if (alternativeDanbooruAutocomplete) {
     window.postMessage({
       type: '__AUTOCOMPLETE_DICT__',
       data: autocompleteDict
     }, '*');
+  }
+
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+
+    if (e.data?.type === '__REQUEST_AUTOCOMPLETE_DICT__') {
+      window.postMessage({
+        type: '__AUTOCOMPLETE_DICT__',
+        data: autocompleteDict
+      }, '*');
+    }
+
+    if (e.data?.type === '__RETURN_PROMPT__') {
+      console.log('[Bridge] Received __RETURN_PROMPT__ from injector, relaying to popup');
+      // Relay back to popup
+      chrome.runtime.sendMessage({
+        type: 'RETURN_PROMPT',
+        data: e.data.data
+      });
+    }
+  });
+
+  // Relay from Popup to Injector
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // console.log('[Bridge] Received runtime message:', request);
+    if (request.type === 'GET_PROMPT') {
+      console.log('[Bridge] Broadcasting __GET_PROMPT__ to window');
+      window.postMessage({ type: '__GET_PROMPT__' }, '*');
+    }
+    if (request.type === 'SET_PROMPT') {
+      console.log('[Bridge] Broadcasting __SET_PROMPT__ to window');
+      window.postMessage({
+        type: '__SET_PROMPT__',
+        data: request.data
+      }, '*');
+    }
+    // Return true if we want to sendResponse asynchronously, but here we use runtime.sendMessage for return.
   });
 })();
