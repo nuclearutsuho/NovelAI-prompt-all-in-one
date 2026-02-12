@@ -1,100 +1,459 @@
 <!doctype html>
-<html>
+<html lang="zh">
 
 <head>
     <meta charset="utf-8">
-    <title>Wildcard Local Sync</title>
+    <title>Wildcard Sync Manager</title>
     <style>
+        /* ===== Reset & Base ===== */
         *,
         *::before,
         *::after {
             box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background: #1e1e2e;
-            color: #e0e0e0;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background: #13131d;
+            color: #d4d4e0;
+            display: flex;
+            flex-direction: column;
         }
 
-        h1 {
+        /* ===== Scrollbar ===== */
+        ::-webkit-scrollbar {
+            width: 7px;
+            height: 7px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #3a3a55;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #5a5a7f;
+        }
+
+        /* ===== Top Bar ===== */
+        .topbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background: #1a1a2e;
+            border-bottom: 1px solid #2a2a44;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+
+        .topbar-logo {
+            font-size: 1.1rem;
+            font-weight: 700;
             color: #818cf8;
-            margin-bottom: 8px;
+            white-space: nowrap;
         }
 
-        .status {
-            padding: 12px;
+        .topbar-status {
+            font-size: 0.82rem;
+            color: #8888aa;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .topbar-status.linked {
+            color: #4ade80;
+        }
+
+        .topbar-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        /* ===== Buttons ===== */
+        button,
+        .btn {
+            background: #2d2d48;
+            color: #d4d4e0;
+            border: 1px solid #3d3d5c;
             border-radius: 6px;
-            margin: 16px 0;
-            background: #252538;
-            border: 1px solid #4a4a6a;
-        }
-
-        .status.linked {
-            border-color: #4ade80;
-            background: #1a2e1a;
-        }
-
-        button {
-            background: #3d3d5c;
-            color: #e0e0e0;
-            border: 1px solid #4a4a6a;
-            border-radius: 6px;
-            padding: 10px 20px;
+            padding: 6px 14px;
             cursor: pointer;
-            font-size: 14px;
-            margin: 4px;
-            transition: background 0.15s;
+            font-size: 0.82rem;
+            transition: all 0.15s ease;
+            white-space: nowrap;
         }
 
         button:hover {
-            background: #4a4a6a;
+            background: #3d3d5c;
+            border-color: #5555aa;
+        }
+
+        button:active {
+            transform: scale(0.97);
         }
 
         button:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
         }
 
         .btn-primary {
-            background: #6366f1;
-            border-color: #6366f1;
+            background: #5b5bd6;
+            border-color: #6b6be6;
         }
 
         .btn-primary:hover {
-            background: #818cf8;
+            background: #6b6be6;
         }
 
         .btn-danger {
-            background: #dc2626;
-            border-color: #dc2626;
+            background: #c0392b;
+            border-color: #e74c3c;
         }
 
         .btn-danger:hover {
-            background: #ef4444;
+            background: #e74c3c;
         }
 
-        .actions {
-            margin: 20px 0;
+        .btn-success {
+            background: #27ae60;
+            border-color: #2ecc71;
         }
 
-        .log {
-            background: #0d0d14;
-            border: 1px solid #333;
-            border-radius: 6px;
-            padding: 12px;
-            max-height: 200px;
+        .btn-success:hover {
+            background: #2ecc71;
+        }
+
+        .btn-warning {
+            background: #d4a017;
+            border-color: #f1c40f;
+        }
+
+        .btn-warning:hover {
+            background: #f1c40f;
+            color: #1a1a2e;
+        }
+
+        .btn-sm {
+            padding: 3px 8px;
+            font-size: 0.75rem;
+        }
+
+        .btn-icon {
+            padding: 4px 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* ===== Main Area ===== */
+        .main {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        /* ===== Sidebar (File Tree) ===== */
+        .sidebar {
+            width: 260px;
+            min-width: 180px;
+            max-width: 50%;
+            background: #181828;
+            border-right: 1px solid #2a2a44;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 12px 8px;
+            border-bottom: 1px solid #2a2a44;
+            flex-wrap: wrap;
+        }
+
+        .sidebar-header input[type="text"] {
+            flex: 1;
+            min-width: 80px;
+            background: #222238;
+            color: #d4d4e0;
+            border: 1px solid #3a3a55;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 0.8rem;
+        }
+
+        .sidebar-header input[type="text"]:focus {
+            outline: none;
+            border-color: #818cf8;
+        }
+
+        .file-tree {
+            flex: 1;
             overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
-            margin-top: 20px;
+            padding: 6px 0;
         }
 
+        .tree-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px 5px 16px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: background 0.1s;
+            user-select: none;
+            position: relative;
+        }
+
+        .tree-item:hover {
+            background: #222240;
+        }
+
+        .tree-item.active,
+        .tree-item.selected {
+            background: #2d2d5c;
+            color: #c4c4ff;
+        }
+
+        .tree-item.drag-over {
+            background: #3d3d6e;
+            border: 1px dashed #6b6be6;
+        }
+
+        .tree-item .icon {
+            flex-shrink: 0;
+            width: 16px;
+            text-align: center;
+        }
+
+        .tree-item .name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-item .actions {
+            display: none;
+            gap: 2px;
+        }
+
+        .tree-item:hover .actions {
+            display: flex;
+        }
+
+        .tree-item .actions button {
+            padding: 1px 5px;
+            font-size: 0.7rem;
+            border: none;
+            background: transparent;
+            color: #888;
+        }
+
+        .tree-item .actions button:hover {
+            color: #ff6b6b;
+            background: rgba(255, 100, 100, 0.15);
+            border-radius: 3px;
+        }
+
+        .tree-folder-children {
+            padding-left: 14px;
+        }
+
+        .tree-folder-children.collapsed {
+            display: none;
+        }
+
+        /* ===== Resize Handle ===== */
+        .resize-handle {
+            width: 4px;
+            cursor: col-resize;
+            background: transparent;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .resize-handle:hover,
+        .resize-handle.dragging {
+            background: #5b5bd6;
+        }
+
+        /* ===== Editor Panel ===== */
+        .editor-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            background: #15152a;
+        }
+
+        .editor-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 14px;
+            border-bottom: 1px solid #2a2a44;
+            background: #1a1a30;
+            flex-shrink: 0;
+        }
+
+        .editor-header .file-label {
+            font-size: 0.85rem;
+            color: #818cf8;
+            font-weight: 600;
+        }
+
+        .editor-header input[type="text"] {
+            flex: 1;
+            background: #222238;
+            color: #d4d4e0;
+            border: 1px solid #3a3a55;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 0.85rem;
+        }
+
+        .editor-header input[type="text"]:focus {
+            outline: none;
+            border-color: #818cf8;
+        }
+
+        .editor-placeholder {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            font-size: 1rem;
+        }
+
+        .editor-container {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .editor-container .cm-editor {
+            height: 100%;
+        }
+
+        .editor-container .cm-scroller {
+            overflow: auto !important;
+        }
+
+        .editor-statusbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 14px;
+            border-top: 1px solid #2a2a44;
+            background: #1a1a30;
+            font-size: 0.75rem;
+            color: #666;
+            flex-shrink: 0;
+        }
+
+        .editor-statusbar .modified {
+            color: #f1c40f;
+        }
+
+        .editor-statusbar .saved {
+            color: #4ade80;
+        }
+
+        /* ===== Bottom Panel ===== */
+        .bottom-panel {
+            border-top: 1px solid #2a2a44;
+            background: #181828;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            max-height: 40vh;
+            min-height: 36px;
+        }
+
+        .bottom-tabs {
+            display: flex;
+            gap: 0;
+            background: #1a1a30;
+            border-bottom: 1px solid #2a2a44;
+            flex-shrink: 0;
+        }
+
+        .bottom-tab {
+            padding: 6px 16px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: #888;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+            border-radius: 0;
+        }
+
+        .bottom-tab.active {
+            color: #818cf8;
+            border-bottom-color: #818cf8;
+        }
+
+        .bottom-tab:hover {
+            color: #aaa;
+            background: #222240;
+        }
+
+        .bottom-toggle {
+            margin-left: auto;
+            padding: 4px 10px;
+            font-size: 0.72rem;
+            background: transparent;
+            border: none;
+            color: #666;
+            cursor: pointer;
+        }
+
+        .bottom-toggle:hover {
+            color: #aaa;
+        }
+
+        .bottom-content {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+
+        .bottom-content>div {
+            display: none;
+            padding: 8px 12px;
+        }
+
+        .bottom-content>div.active {
+            display: block;
+        }
+
+        /* ===== Log ===== */
         .log-entry {
-            margin: 4px 0;
+            margin: 3px 0;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.78rem;
         }
 
         .log-success {
@@ -108,29 +467,957 @@
         .log-info {
             color: #60a5fa;
         }
+
+        .log-warn {
+            color: #fbbf24;
+        }
+
+        /* ===== Snapshot List (Card UI) ===== */
+        .snapshot-list {
+            list-style: none;
+            padding: 10px;
+        }
+
+        .snapshot-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #232338;
+            border: 1px solid #33334d;
+            border-radius: 10px;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .snapshot-item:hover {
+            background: #2a2a44;
+            border-color: #4d4d6b;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .snapshot-item.selected {
+            border-color: #818cf8;
+            background: #282846;
+        }
+
+        .snapshot-select {
+            padding-top: 4px;
+        }
+
+        .snapshot-content {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .snapshot-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .snapshot-time {
+            color: #d4d4e0;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .snapshot-tag-type {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        .snapshot-tag-type.auto {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .snapshot-tag-type.manual {
+            background: rgba(139, 92, 246, 0.2);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        .snapshot-label {
+            color: #8888aa;
+            font-size: 0.85rem;
+        }
+
+        /* Diff Tags */
+        .snapshot-diff-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+            max-height: 120px;
+            /* Limit height to approx 4-5 rows */
+            overflow-y: auto;
+            /* Scroll if too many */
+            padding-right: 4px;
+            /* Space for scrollbar */
+        }
+
+        /* Custom scrollbar for diff container */
+        .snapshot-diff-container::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .snapshot-diff-container::-webkit-scrollbar-thumb {
+            background: #3a3a55;
+            border-radius: 2px;
+        }
+
+        .diff-file-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: 'Cascadia Code', monospace;
+            background: #1a1a2e;
+            border: 1px solid #3a3a55;
+            color: #aaa;
+            max-width: 100%;
+            /* Allow full width if needed, or wrap */
+            white-space: nowrap;
+            /* Keep filename on one line */
+        }
+
+        .diff-file-tag.added {
+            color: #86efac;
+            border-color: rgba(74, 222, 128, 0.3);
+            background: rgba(74, 222, 128, 0.05);
+        }
+
+        .diff-file-tag.removed {
+            color: #fca5a5;
+            border-color: rgba(248, 113, 113, 0.3);
+            background: rgba(248, 113, 113, 0.05);
+        }
+
+        .diff-file-tag.modified {
+            color: #fcd34d;
+            border-color: rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.05);
+        }
+
+        .diff-more-tag {
+            color: #888;
+            font-size: 0.75rem;
+            padding: 2px 4px;
+        }
+
+        /* Actions */
+        .snapshot-actions {
+            display: flex;
+            gap: 6px;
+            align-self: flex-start;
+            opacity: 0.4;
+            transition: opacity 0.2s;
+        }
+
+        .snapshot-item:hover .snapshot-actions {
+            opacity: 1;
+        }
+
+        .snapshot-actions button {
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+        }
+
+        /* ===== Toast / Notification ===== */
+        .toast {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: #2d2d48;
+            border: 1px solid #4a4a6a;
+            border-radius: 8px;
+            padding: 10px 18px;
+            font-size: 0.85rem;
+            color: #d4d4e0;
+            z-index: 10000;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+            animation: toast-in 0.3s ease;
+            max-width: 360px;
+        }
+
+        .toast.success {
+            border-color: #4ade80;
+        }
+
+        .toast.error {
+            border-color: #f87171;
+        }
+
+        @keyframes toast-in {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ===== Confirm Modal ===== */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.65);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal-box {
+            background: #1e1e35;
+            border: 1px solid #3a3a55;
+            border-radius: 10px;
+            padding: 20px 24px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .modal-box p {
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .modal-box .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        /* ===== External Change Banner ===== */
+        .ext-change-banner {
+            display: none;
+            padding: 6px 14px;
+            background: #2a2a10;
+            border-bottom: 1px solid #5a5a20;
+            font-size: 0.8rem;
+            color: #f1c40f;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .ext-change-banner.show {
+            display: flex;
+        }
+
+        .ext-change-banner span {
+            flex: 1;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 767px) {
+            .main {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0;
+                max-height: 35vh;
+                border-right: none;
+                border-bottom: 1px solid #2a2a44;
+            }
+
+            .resize-handle {
+                display: none;
+            }
+
+            .editor-panel {
+                min-height: 200px;
+            }
+        }
+
+        .resize-handle-vertical {
+            height: 4px;
+            cursor: row-resize;
+            background: #1a1a2e;
+            border-top: 1px solid #2a2a44;
+            transition: background 0.2s;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .resize-handle-vertical:hover,
+        .resize-handle-vertical.dragging {
+            background: #5b5bd6;
+        }
+
+        /* ===== Snapshot Toolbar ===== */
+        .snapshot-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-bottom: 1px solid #2a2a44;
+            background: #1a1a30;
+            flex-shrink: 0;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            color: #d4d4e0;
+            cursor: pointer;
+            user-select: none;
+            margin-right: 8px;
+        }
+
+        /* ===== Modal Common ===== */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #2d2d48;
+            border: 1px solid #4a4a6a;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            color: #d4d4e0;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .diff-added {
+            background: rgba(74, 222, 128, 0.1);
+            color: #86efac;
+        }
+
+        .diff-removed {
+            background: rgba(248, 113, 113, 0.1);
+            color: #fca5a5;
+        }
+
+        .diff-modified {
+            background: rgba(251, 191, 36, 0.1);
+            color: #fcd34d;
+        }
+
+        /* ===== View Switcher ===== */
+        .view-switcher {
+            display: flex;
+            background: #232338;
+            border-radius: 6px;
+            border: 1px solid #3a3a55;
+            overflow: hidden;
+            margin-right: 10px;
+        }
+
+        .view-switcher button {
+            padding: 4px 14px;
+            font-size: 0.78rem;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            color: #888;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .view-switcher button.active {
+            background: #5b5bd6;
+            color: #fff;
+        }
+
+        .view-switcher button:hover:not(.active) {
+            background: #2d2d48;
+            color: #ccc;
+        }
+
+        /* ===== Dictionary View ===== */
+        .dict-view {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .dict-view.active {
+            display: flex;
+        }
+
+        .dict-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: #1a1a30;
+            border-bottom: 1px solid #2a2a44;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+
+        .dict-select {
+            background: #222238;
+            color: #d4d4e0;
+            border: 1px solid #3a3a55;
+            border-radius: 6px;
+            padding: 7px 12px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+
+        .dict-select:focus {
+            outline: none;
+            border-color: #818cf8;
+        }
+
+        .dict-search {
+            flex: 1;
+            min-width: 200px;
+            background: #222238;
+            color: #d4d4e0;
+            border: 1px solid #3a3a55;
+            border-radius: 6px;
+            padding: 7px 12px 7px 32px;
+            font-size: 0.85rem;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23666' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.242.156a5 5 0 1 1 0-10 5 5 0 0 1 0 10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: 10px center;
+        }
+
+        .dict-search:focus {
+            outline: none;
+            border-color: #818cf8;
+        }
+
+        /* Virtual Grid Container */
+        .dict-grid-viewport {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 0;
+            position: relative;
+        }
+
+        .dict-grid-spacer {
+            position: relative;
+            width: 100%;
+        }
+
+        .dict-grid-window {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 8px;
+            padding: 12px 16px;
+        }
+
+        /* Card */
+        .dict-card {
+            background: #232338;
+            border: 1px solid #2e2e4a;
+            border-radius: 8px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            min-height: 90px;
+            position: relative;
+            cursor: default;
+        }
+
+        .dict-card:hover {
+            border-color: #4d4d6b;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .dict-card.modified {
+            border-color: #f59e0b;
+        }
+
+
+
+        .dict-card-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+
+        .dict-color-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .dict-count {
+            font-size: 0.7rem;
+            color: #555;
+            white-space: nowrap;
+        }
+
+        .dict-tag {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #eee;
+            margin-bottom: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border: 1px solid transparent;
+            /* Match input border */
+            padding: 1px 4px;
+            /* Match input padding */
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .dict-tag:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .dict-aliases {
+            font-size: 0.75rem;
+            color: #777;
+            margin-bottom: 4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-height: 20px;
+            /* Adjusted for padding */
+            border: 1px solid transparent;
+            padding: 1px 4px;
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .dict-aliases:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .dict-zh {
+            font-size: 0.85rem;
+            color: #b0b0d0;
+            min-height: 24px;
+            /* Adjusted */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border: 1px solid transparent;
+            padding: 1px 4px;
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .dict-zh:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .dict-card-actions {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            display: none;
+        }
+
+        .dict-card:hover .dict-card-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        .dict-card-actions button {
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            border: none;
+            background: rgba(255, 100, 100, 0.15);
+            color: #f87171;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dict-card-actions button:hover {
+            background: rgba(255, 100, 100, 0.3);
+        }
+
+        /* Editable fields */
+        .dict-card .editable {
+            cursor: text;
+            padding: 1px 4px;
+            margin: -1px -4px;
+            border-radius: 3px;
+            transition: background 0.15s;
+        }
+
+        .dict-card .editable:hover {
+            background: rgba(129, 140, 248, 0.1);
+        }
+
+        .dict-card .editable:focus {
+            outline: none;
+            background: rgba(129, 140, 248, 0.15);
+            border: 1px solid #818cf8;
+            padding: 0 3px;
+        }
+
+        .dict-card input.dict-edit-input {
+            width: 100%;
+            background: #1a1a2e;
+            color: #eee;
+            border: 1px solid #818cf8;
+            border-radius: 4px;
+            padding: 1px 4px;
+            font-size: inherit;
+            font-family: inherit;
+            box-sizing: border-box;
+            margin: 0;
+            line-height: inherit;
+        }
+
+        /* Remove parent padding/border when editing to prevent double-boxing */
+        .dict-card .editable:has(input.dict-edit-input) {
+            padding: 0 !important;
+            border: none !important;
+            min-height: auto !important;
+            /* Allow input to define height */
+        }
+
+        .dict-card input.dict-edit-input:focus {
+            outline: none;
+        }
+
+        /* Status Bar */
+        .dict-statusbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 16px;
+            background: #1a1a30;
+            border-top: 1px solid #2a2a44;
+            font-size: 0.78rem;
+            color: #666;
+            flex-shrink: 0;
+        }
+
+        .dict-statusbar .stat-modified {
+            color: #f59e0b;
+        }
+
+        /* Color code mapping */
+        .color-0 {
+            background: #9ca3af;
+        }
+
+        /* gray - default */
+        .color-1 {
+            background: #ef4444;
+        }
+
+        /* red - artist */
+        .color-2 {
+            background: #f59e0b;
+        }
+
+        /* amber */
+        .color-3 {
+            background: #8b5cf6;
+        }
+
+        /* purple - copyright */
+        .color-4 {
+            background: #22c55e;
+        }
+
+        /* green - character */
+        .color-5 {
+            background: #3b82f6;
+        }
+
+        /* blue - meta */
+        .color-6 {
+            background: #ec4899;
+        }
+
+        /* pink */
+        .color-7 {
+            background: #14b8a6;
+        }
+
+        /* teal */
+        .color-8 {
+            background: #f97316;
+        }
+
+        /* orange */
+        .color-9 {
+            background: #6366f1;
+        }
+
+        /* indigo */
+        .dict-card.modified {
+            border-color: #eab308;
+            background: rgba(234, 179, 8, 0.05);
+        }
+
+        .dict-card.deleted {
+            opacity: 0.6;
+            border: 1px dashed #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .dict-card.deleted .dict-tag {
+            text-decoration: line-through;
+            color: #fca5a5;
+        }
     </style>
 </head>
 
 <body>
-    <h1>📁 Wildcard Local Sync</h1>
-    <p>使用 File System Access API 将通配符与本地文件夹同步</p>
-
-    <div id="status" class="status">
-        <strong>状态:</strong> <span id="statusText">检查中...</span>
+    <!-- Top Bar -->
+    <div class="topbar">
+        <span class="topbar-logo">📁 Wildcard Sync Manager</span>
+        <div class="view-switcher" id="viewSwitcher">
+            <button class="active" data-view="sync">📂 通配符管理</button>
+            <button data-view="dict">📖 字典编辑</button>
+        </div>
+        <span id="statusText" class="topbar-status">检查中...</span>
+        <div class="topbar-actions" id="syncActions">
+            <button id="linkBtn" class="btn-primary btn-icon">📂 绑定文件夹</button>
+            <button id="unlinkBtn" class="btn-danger btn-icon" style="display:none;">✕ 解除绑定</button>
+            <button id="exportBtn" class="btn-icon" style="display:none;">⬆ 导出到本地</button>
+            <button id="importBtn" class="btn-icon" style="display:none;">⬇ 从本地导入</button>
+            <button id="snapshotBtn" class="btn-warning btn-icon" style="display:none;">📸 手动快照</button>
+        </div>
     </div>
 
-    <div class="actions">
-        <button id="linkBtn" class="btn-primary">📁 绑定文件夹</button>
-        <button id="unlinkBtn" class="btn-danger" style="display:none;">解除绑定</button>
+    <!-- Main Area -->
+    <div class="main">
+        <!-- Sidebar / File Tree -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <input type="text" id="newItemName" placeholder="新建名称...">
+                <button id="newFileBtn" class="btn-sm btn-icon" title="新建文件">📄+</button>
+                <button id="newFolderBtn" class="btn-sm btn-icon" title="新建文件夹">📁+</button>
+            </div>
+            <div class="file-tree" id="fileTree"></div>
+        </div>
+
+        <!-- Resize Handle -->
+        <div class="resize-handle" id="resizeHandle"></div>
+
+        <!-- Editor Panel -->
+        <div class="editor-panel">
+            <!-- External change banner -->
+            <div class="ext-change-banner" id="extChangeBanner">
+                <span>⚠ 文件已被外部修改</span>
+                <button class="btn-sm" id="reloadFileBtn">重新加载</button>
+                <button class="btn-sm" id="dismissBannerBtn">忽略</button>
+            </div>
+            <!-- Editor Header -->
+            <div class="editor-header" id="editorHeader" style="display:none;">
+                <span class="file-label">📝</span>
+                <input type="text" id="fileNameInput" placeholder="文件名">
+                <button id="saveBtn" class="btn-success btn-sm btn-icon">💾 保存 (Ctrl+S)</button>
+            </div>
+            <!-- Editor Body -->
+            <div class="editor-placeholder" id="editorPlaceholder">
+                <span>← 在左侧选择或新建一个文件开始编辑</span>
+            </div>
+            <div class="editor-container" id="editorContainer" style="display:none;"></div>
+            <!-- Status Bar -->
+            <div class="editor-statusbar" id="editorStatusbar" style="display:none;">
+                <span id="lineInfo">第 1 行 / 共 1 行</span>
+                <span id="saveStatus"></span>
+            </div>
+        </div>
     </div>
 
-    <div class="actions" id="syncActions" style="display:none;">
-        <button id="exportBtn">⬆ 导出到本地</button>
-        <button id="importBtn">⬇ 从本地导入</button>
+    <!-- Dictionary View (hidden by default) -->
+    <div class="dict-view" id="dictView">
+        <div class="dict-toolbar">
+            <select id="dictFilterType" class="dict-select" title="按类型筛选">
+                <option value="-1">全部类型</option>
+                <option value="0">General (常规)</option>
+                <option value="1">Artist (画师)</option>
+                <option value="3">Copyright (版权)</option>
+                <option value="4">Character (角色)</option>
+                <option value="5">Meta (元数据)</option>
+            </select>
+            <input type="text" class="dict-search" id="dictSearch" placeholder="搜索 tag / 中文 / 别名...">
+            <button id="dictAddBtn" class="btn-sm btn-primary btn-icon">＋ 新增</button>
+            <button id="dictImportBtn" class="btn-sm btn-icon">⬇ 导入 CSV</button>
+            <button id="dictExportBtn" class="btn-sm btn-icon">⬆ 导出 CSV</button>
+            <button id="dictToggleChangesBtn" class="btn-sm btn-icon" title="只显示已修改项">👁️ 只看变更</button>
+            <button id="dictResetBtn" class="btn-sm btn-danger btn-icon">↺ 重置修改</button>
+        </div>
+        <div class="dict-grid-viewport" id="dictViewport">
+            <div class="dict-grid-spacer" id="dictSpacer">
+                <div class="dict-grid-window" id="dictWindow"></div>
+            </div>
+        </div>
+        <div class="dict-statusbar" id="dictStatusbar">
+            <span id="dictStatTotal">加载中...</span>
+            <span id="dictStatModified"></span>
+        </div>
     </div>
 
-    <div class="log" id="log"></div>
+    <!-- Bottom Resize Handle -->
+    <div class="resize-handle-vertical" id="resizeHandleBottom"></div>
 
+    <!-- Bottom Panel -->
+    <div class="bottom-panel" id="bottomPanel">
+        <div class="bottom-tabs">
+            <button class="bottom-tab active" data-tab="log">📋 日志</button>
+            <button class="bottom-tab" data-tab="snapshots">📸 快照</button>
+            <button class="bottom-toggle" id="toggleBottom">▼ 折叠</button>
+        </div>
+        <div class="bottom-content" id="bottomContent">
+            <div id="logPanel" class="active"></div>
+            <div id="snapshotsPanel">
+                <div class="snapshot-toolbar">
+                    <label class="checkbox-label"><input type="checkbox" id="selectAllSnapshots"> 全选</label>
+                    <button id="batchDeleteBtn" class="btn-sm btn-danger" disabled>🗑️ 批量删除</button>
+                    <button id="batchExportBtn" class="btn-sm" disabled>💾 批量导出</button>
+                    <div style="flex:1"></div>
+                    <button id="snapshotSettingsBtn" class="btn-sm" title="快照设置">⚙️ 设置</button>
+                </div>
+                <div style="flex:1; overflow-y:auto">
+                    <ul class="snapshot-list" id="snapshotList"></ul>
+                    <div id="noSnapshots" style="color:#666; text-align:center; padding:16px;">暂无快照</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Snapshots Settings Modal -->
+    <div id="snapSettingsModal" class="modal">
+        <div class="modal-content" style="width: 300px;">
+            <h3 style="margin-top:0">快照设置</h3>
+            <div style="margin: 16px 0;">
+                <label style="display:flex; align-items:center; margin-bottom:12px;">
+                    <span style="flex:1">快照保留数量:</span>
+                    <input type="number" id="settingMaxSnapshots" min="1" max="100"
+                        style="width:60px; padding:4px; background:#222238; color:#fff; border:1px solid #3a3a55; border-radius:4px;">
+                </label>
+                <label style="display:flex; align-items:center; cursor:pointer;">
+                    <input type="checkbox" id="settingConfirmDelete" style="margin-right:8px;"> 删除快照时确认
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button id="saveSnapSettingsBtn" class="btn-primary">保存</button>
+                <button id="closeSnapSettingsBtn" class="btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Diff Modal -->
+    <div id="diffModal" class="modal">
+        <div class="modal-content" style="width: 800px; max-width:95%; height: 80vh;">
+            <h3 style="margin-top:0; margin-bottom:10px;">快照对比</h3>
+            <div id="diffSummary" style="margin-bottom: 10px; font-weight: bold; font-size:0.9rem;"></div>
+            <div id="diffContainer"
+                style="flex: 1; overflow: auto; border: 1px solid #2a2a44; background: #0f0f1a; padding: 10px; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;">
+            </div>
+            <div class="modal-actions">
+                <button id="closeDiffBtn" class="btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Prompt Modal -->
+    <div class="modal" id="promptModal">
+        <div class="modal-content" style="width: 380px;">
+            <h3 style="margin-top:0" id="promptTitle">输入</h3>
+            <input type="text" id="promptInput"
+                style="width:100%; padding:8px 12px; background:#222238; color:#d4d4e0; border:1px solid #3a3a55; border-radius:6px; font-size:0.9rem; margin-top:8px;"
+                placeholder="">
+            <div class="modal-actions">
+                <button id="promptOkBtn" class="btn-primary">确认</button>
+                <button id="promptCancelBtn" class="btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <!-- Confirm Modal -->
+    <div class="modal-overlay" id="confirmModal">
+        <div class="modal-box">
+            <p id="confirmMessage"></p>
+            <div class="modal-actions">
+                <button id="confirmYes" class="btn-danger">确认</button>
+                <button id="confirmNo">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="codemirror-bundle.js"></script>
     <script src="sync.js"></script>
 </body>
 

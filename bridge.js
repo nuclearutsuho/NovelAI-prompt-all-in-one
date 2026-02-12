@@ -229,30 +229,52 @@
   const autocompleteDict = text.split(/\r?\n/)
     .filter(Boolean)
     .map(line => {
-      const regex = /"([^"]*(?:""[^"]*)*)"|([^,]+)/g;
-      const row = [];
-      let match;
+      // Manual CSV parsing to handle empty fields and quotes correctly
+      const row = []; // row 변수 추가 (Add row variable)
+      let currentField = '';
+      let inQuote = false;
 
-      // 정규표현식을 순회하며 매치된 그룹을 배열에 저장 (遍历正则表达式并将匹配的组保存到数组)
-      while ((match = regex.exec(line))) {
-        if (match[1] !== undefined) {
-          // 큰따옴표 내부 내용: 내부의 이스케이프된 큰따옴표 처리 (예: "" -> ") (双引号内部内容：处理内部转义的双引号 (例如: "" -> "))
-          row.push(match[1].replace(/""/g, '"'));
-        } else if (match[2] !== undefined) {
-          // 큰따옴표에 묶이지 않은 필드 (未被双引号包裹的字段)
-          row.push(match[2]);
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuote && line[i + 1] === '"') {
+            currentField += '"';
+            i++; // skip escaped quote
+          } else {
+            inQuote = !inQuote;
+          }
+        } else if (char === ',' && !inQuote) {
+          row.push(currentField);
+          currentField = '';
+        } else {
+          currentField += char;
         }
       }
+      row.push(currentField);
 
       let [word, colorCode, popCount, aliases, zhCN] = row;
-      if (aliases) aliases = `"${aliases}"`;
-      else aliases = '""';
+
+      // Handle aliases safely
+      if (aliases) {
+        // Remove surrounding quotes if they were added erroneously or exist
+        // Note: Our manual parser already strips surrounding quotes if they were part of the CSV structure, 
+        // but let's just split by comma.
+        // Wait, the manual parser creates raw fields.
+        // If the CSV was: "alias1, alias2", the field is `alias1, alias2`.
+        // If it was empty: the field is ``.
+
+        // Split aliases by comma
+        aliases = aliases.split(',').map(a => a.trim()).filter(Boolean);
+      } else {
+        aliases = [];
+      }
+
       return {
         word,
-        colorCode: colorCode.trim(),
-        popCount: parseInt(popCount),
-        aliases: aliases.replace(/"/g, '').split(',').map(a => a.trim()),
-        zhCN: zhCN ? zhCN.trim() : ''  // 中文翻译 (Chinese translation)
+        colorCode: colorCode ? colorCode.trim() : '0',
+        popCount: popCount ? parseInt(popCount) : 0,
+        aliases,
+        zhCN: zhCN ? zhCN.trim() : ''
       };
     });
 

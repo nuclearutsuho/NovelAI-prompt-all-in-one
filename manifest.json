@@ -29,7 +29,9 @@
         "popup.js",
         "sync.html",
         "sync.js",
-        "manager-panel.css"
+        "codemirror-bundle.js",
+        "manager-panel.css",
+        "worker.js"
       ],
       "matches": [
         "<all_urls>"
