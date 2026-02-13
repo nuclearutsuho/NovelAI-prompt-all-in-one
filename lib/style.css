@@ -66,9 +66,12 @@
 }
 
 .tag-capsule.disabled {
-    opacity: 0.5;
     background: #2a2a2e;
     border-color: #333;
+}
+
+.tag-capsule.disabled .tag-primary {
+    opacity: 0.5;
 }
 
 .tag-capsule.disabled .tag-text {
@@ -236,6 +239,33 @@
     color: #e74c3c;
 }
 
+/* Weight Control Group */
+.weight-control {
+    display: flex;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    padding: 1px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.weight-input {
+    width: 32px;
+    background: transparent;
+    border: none;
+    color: #818cf8;
+    font-size: 11px;
+    text-align: center;
+    font-family: monospace;
+    padding: 0;
+    outline: none;
+}
+
+.weight-input:hover,
+.weight-input:focus {
+    color: #fff;
+}
+
 
 
 /* Animations */
@@ -375,4 +405,20 @@
 
 ::-webkit-scrollbar-thumb:hover {
     background: #5a5a7a;
+}
+
+/* Copy Feedback Animation */
+.tag-item.flash-success .tag-capsule {
+    animation: flashSuccess 0.5s ease-out;
+}
+
+@keyframes flashSuccess {
+    0% {
+        background-color: rgba(76, 175, 80, 0.4);
+        border-color: #4caf50;
+    }
+
+    100% {
+        background-color: transparent;
+    }
 }

@@ -317,37 +317,72 @@ let lastSentPositive = null;
 let lastSentNegative = null;
 
 /* Communication */
+
+function normalizePrompt(str) {
+  // Remove all whitespace and newlines for comparison
+  // Also remove commas to handle "a, b" vs "a,b"
+  if (!str) return '';
+  return str.replace(/[\s\r\n,]/g, '');
+}
+
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'RETURN_PROMPT') {
       const { positive, negative } = msg.data;
 
       // Skip echo: if this matches what we just sent, ignore
-      if (positive === lastSentPositive && negative === lastSentNegative) {
+      // Use normalized comparison to avoid loops on minor formatting diffs
+      if (normalizePrompt(positive) === normalizePrompt(lastSentPositive) &&
+        normalizePrompt(negative) === normalizePrompt(lastSentNegative)) {
         return;
       }
 
-      // Skip if identical to current popup state
+      // Skip if identical to current popup state (normalized)
       const currentPosStr = tagsToString(positiveTags);
       const currentNegStr = tagsToString(negativeTags);
-      if (positive === currentPosStr && negative === currentNegStr) {
+
+      if (normalizePrompt(positive) === normalizePrompt(currentPosStr) &&
+        normalizePrompt(negative) === normalizePrompt(currentNegStr)) {
+        // Just update raw strings, no need to re-parse / re-render
         rawPositive = positive;
         rawNegative = negative;
         return;
       }
 
       // Apply external change
+      // logic: If we are receiving a TRUE update from the page, we want to
+      // PRESERVE the currently disabled tags in the popup.
+      // Because the page doesn't know about disabled tags (it only sees active ones).
+
+      const disabledPos = positiveTags.filter(t => t.disabled);
+      const disabledNeg = negativeTags.filter(t => t.disabled);
+
       rawPositive = positive || '';
       rawNegative = negative || '';
-      positiveTags = parsePromptToTags(rawPositive);
-      negativeTags = parsePromptToTags(rawNegative);
+
+      // Parse new tags
+      const newPosTags = parsePromptToTags(rawPositive);
+      const newNegTags = parsePromptToTags(rawNegative);
+
+      // Append saved disabled tags
+      // (We append them because we don't know where they belong in the new text structure)
+      disabledPos.forEach(d => {
+        newPosTags.push(d);
+      });
+
+      disabledNeg.forEach(d => {
+        newNegTags.push(d);
+      });
+
+      positiveTags = newPosTags;
+      negativeTags = newNegTags;
 
       hasReceivedInitialData = true;
 
       editor.setTags(currentMode === 'positive' ? positiveTags : negativeTags);
 
-      lastSentPositive = rawPositive;
-      lastSentNegative = rawNegative;
+      lastSentPositive = tagsToString(positiveTags);
+      lastSentNegative = tagsToString(negativeTags);
 
       // Update visual status
       const statusEl = document.getElementById('sync-status');
