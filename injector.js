@@ -324,6 +324,7 @@
   };
 
   let autocompleteDict = [];
+  let isSyncingFromPopup = false;
   window.addEventListener('message', e => {
     if (e.source !== window) return;
     const { type, map, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
@@ -464,6 +465,10 @@
       }
 
       function update() {
+        if (isSyncingFromPopup) {
+          hide();
+          return;
+        }
         const txt = textBeforeCaret();
 
         let m = txt.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:([A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*))$/);
@@ -712,8 +717,9 @@
    * ------------------------------------------------- */
 
   function getCurrentPrompts() {
-    // 1. Array of all ProseMirrors
-    const all = Array.from(document.querySelectorAll('div.ProseMirror[contenteditable="true"]'));
+    // 1. Target main container editors only
+    const mainContainer = document.querySelector('.image-gen-prompt-main');
+    const allMain = mainContainer ? Array.from(mainContainer.querySelectorAll('div.ProseMirror[contenteditable="true"]')) : [];
 
     // 2. Identify Base Positive and Base Negative by parent classes (Stable in V4/V4.5)
     let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') ||
@@ -721,9 +727,9 @@
     let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
       document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
 
-    // 3. Fallback to index if specific classes not found
-    if (!posEl) posEl = all[0];
-    if (!negEl) negEl = all[1];
+    // 3. Fallback logic—only within the main container
+    if (!posEl) posEl = allMain[0];
+    if (!negEl) negEl = allMain[1];
 
     const getVal = el => el ? (el.innerText || el.textContent || '').trim() : '';
 
@@ -748,34 +754,44 @@
     }
 
     if (type === '__SET_PROMPT__') {
-      const { positive, negative } = data || {};
-      const all = Array.from(document.querySelectorAll('div.ProseMirror[contenteditable="true"]'));
+      isSyncingFromPopup = true;
+      try {
+        const { positive, negative } = data || {};
+        const mainContainer = document.querySelector('.image-gen-prompt-main');
+        const allMain = mainContainer ? Array.from(mainContainer.querySelectorAll('div.ProseMirror[contenteditable="true"]')) : [];
 
-      // Select best targets for setting
-      let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') ||
-        document.querySelector('.prompt-input-box-base-prompt .ProseMirror') || all[0];
-      let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
-        document.querySelector('.prompt-input-box-undesired-content .ProseMirror') || all[1];
+        // Select best targets
+        let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') || allMain[0];
+        let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') || allMain[1];
 
-      const setEditorContent = (editor, text) => {
-        if (!editor || typeof text !== 'string') return;
-        editor.focus();
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        sel.addRange(range);
+        const setEditorContent = (editor, text) => {
+          if (!editor || typeof text !== 'string') return;
 
-        if (text) {
-          document.execCommand('insertText', false, text);
-        } else {
-          document.execCommand('delete');
-        }
-        editor.dispatchEvent(new Event('input', { bubbles: true }));
-      };
+          // Visibility check: Avoid hidden editors (inactive tabs)
+          const rect = editor.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return;
 
-      if (positive !== undefined) setEditorContent(posEl, positive);
-      if (negative !== undefined) setEditorContent(negEl, negative);
+
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          sel.addRange(range);
+
+          if (text) {
+            document.execCommand('insertText', false, text);
+          } else {
+            document.execCommand('delete');
+          }
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+
+        if (positive !== undefined) setEditorContent(posEl, positive);
+        if (negative !== undefined) setEditorContent(negEl, negative);
+      } finally {
+        // Use timeout to ensure all immediate side effects (like 'input' events) are processed
+        setTimeout(() => { isSyncingFromPopup = false; }, 100);
+      }
     }
   });
 

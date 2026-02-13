@@ -47,7 +47,9 @@ function initUI() {
   autocomplete.attach(input, (val) => {
     // When autocomplete selects, add tag
     const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
-    newTags.forEach(t => editor.addTag(t));
+    // Replace _ with space
+    const cleanTags = newTags.map(t => t.replace(/_/g, ' '));
+    cleanTags.forEach(t => editor.addTag(t));
     input.value = '';
     input.focus();
   });
@@ -57,41 +59,149 @@ function initUI() {
     if (val) {
       // Split by comma if user pasted multiple
       const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
-      newTags.forEach(t => editor.addTag(t));
+      // Replace _ with space
+      const cleanTags = newTags.map(t => t.replace(/_/g, ' '));
+      cleanTags.forEach(t => editor.addTag(t));
       input.value = '';
       // scroll to bottom
       container.scrollTop = container.scrollHeight;
     }
+    // Always hide autocomplete when adding tag via Enter or button
+    if (autocomplete) autocomplete.hide();
   };
 
   btnAdd.addEventListener('click', addTag);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter') {
       e.preventDefault();
-      // If autocomplete is visible, let it handle Enter?
-      // Autocomplete handles Enter in its own keydown.
-      // But if no selection, we add tag.
-      // We need to know if autocomplete handled it.
-      // Autocomplete.js swallows Event?
-      // Autocomplete.js: input.addEventListener('keydown'...
-      // If we add listener here, order matters.
-      // But Autocomplete logic: if dropdown visible and selected -> preventDefault.
-      // If not visible or no selection -> let it bubble?
-      // Autocomplete: if (e.key === 'Enter') { ... e.preventDefault(); ... }
-
-      // So if generic Enter reaches here, it means autocomplete didn't take it.
-      // Wait, we need a small delay or check?
-      // Let's assume correct behavior.
+      // Small timeout to allow autocomplete to process first if it's active
       setTimeout(() => {
         if (input.value.trim()) addTag();
-      }, 50);
+      }, 100);
     }
   });
 
-  // Start Sync Page
-  document.getElementById('openSyncPageBtn').addEventListener('click', () => {
+  // Library & Settings
+  document.getElementById('btn-library').addEventListener('click', () => {
     chrome.tabs.create({ url: 'sync.html' });
   });
+
+  // Language Support
+  const translations = {
+    en: {
+      tab_positive: "Prompt",
+      tab_negative: "Undesired Content",
+      status_ready: "Ready",
+      loading: "Connecting to NovelAI...",
+      input_placeholder: "Enter tags here...",
+      btn_add: "Add",
+      settings_title: "Settings",
+      setting_preserve: "Preserve Original img prompts on Enhance",
+      setting_preserve_desc: "Uncheck this to randomize enhance prompts.",
+      setting_alt_autocomplete: "Full Alternative Danbooru Autocomplete",
+      setting_alt_autocomplete_desc: "a1111 WebUI style Danbooru Autocomplete.",
+      setting_trigger_keys: "Trigger Keys:",
+      setting_space: "Space",
+      setting_tab: "Tab",
+      status_linked: "Linked",
+      btn_library: "Resource Center",
+      btn_settings: "Settings",
+      tag_help_tooltip: "Left-click: Edit | Double-click: Toggle | Drag: Sort",
+      setting_render_newlines: "Render Real Newlines",
+      setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags."
+    },
+    zh: {
+      tab_positive: "正向提示词",
+      tab_negative: "排除内容",
+      status_ready: "就绪",
+      loading: "正在连接 NovelAI...",
+      input_placeholder: "输入标签...",
+      btn_add: "添加",
+      settings_title: "设置",
+      setting_preserve: "增强时保留原始提示词",
+      setting_preserve_desc: "取消勾选以随机化增强提示词。",
+      setting_alt_autocomplete: "完整 Danbooru 自动补全",
+      setting_alt_autocomplete_desc: "A1111 WebUI 风格的补全逻辑。",
+      setting_trigger_keys: "触发按键:",
+      setting_space: "空格",
+      setting_tab: "Tab 键",
+      status_linked: "连接正常",
+      btn_library: "资源中心",
+      btn_settings: "设置",
+      tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
+      setting_render_newlines: "渲染真实换行",
+      setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。"
+    },
+    jp: {
+      tab_positive: "プロンプト",
+      tab_negative: "除外したい内容",
+      status_ready: "準備完了",
+      loading: "NovelAIに接続中...",
+      input_placeholder: "タグを入力...",
+      btn_add: "追加",
+      settings_title: "設定",
+      setting_preserve: "強化時に元のプロンプトを保持",
+      setting_preserve_desc: "無効にすると強化時のプロンプトがランダム化されます。",
+      setting_alt_autocomplete: "Danbooru オートコンプリート",
+      setting_alt_autocomplete_desc: "A1111 WebUI スタイルのオートコンプリート。",
+      setting_trigger_keys: "トリガーキー:",
+      setting_space: "スペース",
+      setting_tab: "タブ",
+      status_linked: "接続済み",
+      btn_library: "リソースセンター",
+      btn_settings: "設定",
+      tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え"
+    }
+  };
+
+  let currentLang = 'en';
+
+  const applyTranslations = (lang) => {
+    currentLang = lang;
+    const dict = translations[lang] || translations.en;
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      if (dict[key]) {
+        // If element has children (like Settings title with close button), preserve them
+        if (el.children.length === 0) {
+          el.textContent = dict[key];
+        } else {
+          // Find text node and replace it
+          for (let node of el.childNodes) {
+            if (node.nodeType === 3) {
+              node.textContent = dict[key] + ' ';
+              break;
+            }
+          }
+        }
+      }
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      const key = el.getAttribute('data-i18n-placeholder');
+      if (dict[key]) el.placeholder = dict[key];
+    });
+
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+      const key = el.getAttribute('data-i18n-title');
+      if (dict[key]) el.title = dict[key];
+    });
+
+    if (editor && dict.tag_help_tooltip) {
+      editor.options.helpTooltip = dict.tag_help_tooltip;
+      editor.render();
+    }
+
+    // Handle button active state
+    ['btn-en', 'btn-jp', 'btn-zh'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.classList.toggle('active', id === `btn-${lang}`);
+    });
+  };
+
+  const setLanguage = (lang) => {
+    applyTranslations(lang);
+    chrome.storage.local.set({ language: lang });
+  };
 
   // Language Toggle
   const langBtns = {
@@ -101,12 +211,13 @@ function initUI() {
   };
   Object.keys(langBtns).forEach(id => {
     document.getElementById(id).addEventListener('click', () => {
-      // Simple hack: reload popup or just ignore for now? 
-      // Ideally we should apply translations. 
-      // Let's at least save the preference if we had one.
-      // For now, let's just implement basic text replacement if possible, or just acknowledge the click.
-      console.log('Language switch not fully re-implemented yet');
+      setLanguage(langBtns[id]);
     });
+  });
+
+  // Load language preference
+  chrome.storage.local.get('language', (data) => {
+    if (data.language) applyTranslations(data.language);
   });
 
   // Settings Persistence
@@ -114,7 +225,8 @@ function initUI() {
     'preservePrompt',
     'alternativeDanbooruAutocomplete',
     'triggerSpace',
-    'triggerTab'
+    'triggerTab',
+    'renderNewlines'
   ];
 
   // Load Settings
@@ -123,8 +235,18 @@ function initUI() {
       const el = document.getElementById(key);
       if (el) {
         el.checked = !!data[key];
+
+        // Initial state for editor
+        if (key === 'renderNewlines') {
+          editor.options.renderNewlines = el.checked;
+        }
+
         el.addEventListener('change', () => {
           chrome.storage.local.set({ [key]: el.checked });
+          if (key === 'renderNewlines') {
+            editor.options.renderNewlines = el.checked;
+            editor.render();
+          }
         });
       }
     });
@@ -137,23 +259,6 @@ function initUI() {
 
   btnSettings.addEventListener('click', () => { modal.style.display = 'flex'; });
   closeSettings.addEventListener('click', () => { modal.style.display = 'none'; });
-
-  // Sync UI is handled automatically, but button provides feedback
-  const btnSync = document.getElementById('btn-sync');
-  btnSync.addEventListener('click', () => {
-    requestPrompt(); // Re-fetch from page
-    syncToPage();    // Force push current? No, usually "Sync" button in header means "Refresh from page" or "Push to page"?
-    // In this context, let's make it "Refresh from Page" because "Push" happens on edit.
-    // Or maybe "Push to Page" is safer?
-    // Let's make it bidirectional: Pull if empty, Push if changed? 
-    // Safer: Pull from page (Refresh). Explicit action.
-
-    requestPrompt();
-
-    // Visual animation
-    btnSync.classList.add('rotating');
-    setTimeout(() => btnSync.classList.remove('rotating'), 500);
-  });
 }
 
 function switchTab(mode) {
@@ -178,19 +283,33 @@ function updateTagsFromEditor(updatedTags) {
 }
 
 function tagsToString(tags) {
-  return tags.map(t => {
-    // We include disabled tags but they are handled by logic?
-    // No, usually we don't include disabled tags in the prompt sent to NAI.
-    if (t.disabled) return '';
-    return t.value;
-  }).filter(Boolean).join(', ');
+  let result = '';
+  const activeTags = tags.filter(t => !t.disabled);
+
+  activeTags.forEach((t, i) => {
+    const val = t.value;
+    if (val === '\n') {
+      result += '\n';
+    } else {
+      result += val;
+      // Add comma after this tag if there are more regular (non-newline) tags later
+      const hasMoreRegularTags = activeTags.slice(i + 1).some(t2 => t2.value !== '\n');
+      if (hasMoreRegularTags) {
+        result += ', ';
+      }
+    }
+  });
+  return result;
 }
 
 function parsePromptToTags(promptText) {
   if (!promptText) return [];
   // Use common.splitTags logic
   const parts = common.splitTags(promptText);
-  return parts.map(p => ({ value: p.trim(), disabled: false }));
+  return parts.map(p => {
+    const isNL = p === '\n';
+    return { value: isNL ? p : p.trim(), disabled: false };
+  }).filter(t => t.value !== '');
 }
 
 // Track last sent prompt to avoid echo loops destroying focus
@@ -233,7 +352,8 @@ function initCommunication() {
       // Update visual status
       const statusEl = document.getElementById('sync-status');
       if (statusEl) {
-        statusEl.textContent = 'Linked';
+        const dict = translations[currentLang] || translations.en;
+        statusEl.textContent = dict.status_linked || 'Linked';
         statusEl.style.color = '#4caf50';
       }
     }

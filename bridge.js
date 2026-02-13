@@ -86,6 +86,7 @@
 
     // 拖拽功能
     let isDragging = false;
+    let isInitializing = true; // Flag to prevent saving state during load
     let dragStartX, dragStartY, initialLeft, initialTop;
 
     header.addEventListener('mousedown', e => {
@@ -128,12 +129,13 @@
 
     // 监听大小变化 (CSS resize)
     const resizeObserver = new ResizeObserver(() => {
-      saveState();
+      if (!isInitializing) saveState();
     });
     resizeObserver.observe(container);
 
     // 保存面板状态
     function saveState() {
+      if (isInitializing) return; // Don't save if we are still setting up
       const rect = container.getBoundingClientRect();
       const state = {
         visible: container.classList.contains('visible'),
@@ -148,20 +150,34 @@
     // 恢复面板状态
     chrome.storage.local.get(STORAGE_KEY, data => {
       const state = data[STORAGE_KEY];
-      if (!state) return;
+      if (state) {
+        // Apply dimensions and position while hidden
+        if (state.width) container.style.width = state.width + 'px';
+        if (state.height) container.style.height = state.height + 'px';
 
-      if (state.width) container.style.width = state.width + 'px';
-      if (state.height) container.style.height = state.height + 'px';
-      if (typeof state.left === 'number') {
-        container.style.left = Math.min(state.left, window.innerWidth - 100) + 'px';
-        container.style.right = 'auto';
+        if (typeof state.left === 'number') {
+          // Robust boundary check
+          const safeLeft = Math.max(0, Math.min(state.left, window.innerWidth - 50));
+          container.style.left = safeLeft + 'px';
+          container.style.right = 'auto';
+        }
+        if (typeof state.top === 'number') {
+          const safeTop = Math.max(0, Math.min(state.top, window.innerHeight - 50));
+          container.style.top = safeTop + 'px';
+        }
+
+        if (state.visible) {
+          container.classList.add('visible');
+        }
       }
-      if (typeof state.top === 'number') {
-        container.style.top = Math.min(state.top, window.innerHeight - 100) + 'px';
-      }
-      if (state.visible) {
-        container.classList.add('visible');
-      }
+
+      // Allow saving state only after we are sure initialization is done
+      // and initial layout shifts have settled.
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          isInitializing = false;
+        }, 300);
+      });
     });
 
     // 键盘快捷键 Ctrl+Shift+W 切换面板

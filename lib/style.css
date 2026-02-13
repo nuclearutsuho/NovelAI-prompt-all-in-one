@@ -3,11 +3,13 @@
     padding: 0;
     width: 100%;
     height: 100%;
+    overflow-x: hidden;
+    /* Prevent floating toolbars from causing horizontal scroll */
 }
 
 .tag-list {
     list-style: none;
-    padding: 0;
+    padding: 0 40px 0 0;
     margin: 0;
     display: flex;
     flex-wrap: wrap;
@@ -17,29 +19,39 @@
 
 .tag-item {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    background: #3b3b4f;
-    border: 1px solid #4a4a6a;
-    border-radius: 20px;
-    /* Capsule shape */
-    padding: 2px 8px;
-    color: #eee;
-    font-size: 13px;
+    gap: 4px;
     cursor: default;
     user-select: none;
     transition: all 0.1s ease-in-out;
     max-width: 100%;
     position: relative;
-    height: 28px;
+    box-sizing: border-box;
 }
 
-.tag-item:hover {
+.tag-capsule {
+    display: flex;
+    align-items: center;
+    background: #3b3b4f;
+    border: 1px solid #4a4a6a;
+    border-radius: 6px;
+    padding: 2px 8px;
+    color: #eee;
+    font-size: 13px;
+    position: relative;
+    min-height: 28px;
+    box-sizing: border-box;
+    transition: all 0.2s;
+}
+
+.tag-item:hover .tag-capsule {
     background: #4a4a6a;
     border-color: #6c6c94;
-    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-.tag-item.selected {
+.tag-item.selected .tag-capsule {
     background: rgba(99, 102, 241, 0.2);
     border-color: #818cf8;
     box-shadow: 0 0 0 1px #818cf8;
@@ -47,29 +59,38 @@
 
 .tag-item.sortable-ghost {
     opacity: 0.3;
+}
+
+.tag-item.sortable-ghost .tag-capsule {
     background: #818cf8;
 }
 
-.tag-item.disabled {
+.tag-capsule.disabled {
     opacity: 0.5;
     background: #2a2a2e;
     border-color: #333;
+}
+
+.tag-capsule.disabled .tag-text {
     text-decoration: line-through;
 }
 
 /* Tag Main Content */
-.tag-main {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-right: 4px;
-    white-space: nowrap;
+.tag-zh-row {
+    font-size: 11px;
+    color: #888;
+    line-height: 1.2;
+    text-align: center;
+    max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+    min-height: 1.2em;
+    /* Ensure layout doesn't jump */
 }
 
-.tag-text {
-    cursor: text;
+.tag-capsule.disabled+.tag-zh-row {
+    opacity: 0.5;
 }
 
 /* Weight Badge */
@@ -91,41 +112,115 @@
     color: #e74c3c;
 }
 
-/* Controls */
+/* Controls - Side Floating Overlay (WebUI Style) */
 .tag-controls {
-    display: none;
-    /* Hidden by default */
-    align-items: center;
-    gap: 2px;
-    margin-left: 2px;
-    padding-left: 4px;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    position: absolute;
+    top: 50%;
+    left: calc(100% - 4px);
+    /* Slightly overlap to prevent losing hover */
+    transform: translateY(-50%) translateX(5px);
+    background: rgba(26, 26, 46, 0.95);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(129, 140, 248, 0.4);
+    border-radius: 8px;
+    padding: 3px 5px;
+    gap: 4px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    pointer-events: none;
+    opacity: 0;
+    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.1);
+    white-space: nowrap;
 }
 
-.tag-item:hover .tag-controls,
-.tag-item.selected .tag-controls {
-    display: flex;
+/* Left side variant when hitting boundary */
+.tag-controls.pos-left {
+    left: auto;
+    right: calc(100% - 4px);
+    transform: translateY(-50%) translateX(-5px);
+}
+
+/* Arrow for the floating tooltip (Overlap: Move arrow inside or adjust border) */
+.tag-controls::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 100%;
+    transform: translateY(-50%);
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent rgba(26, 26, 46, 0.95) transparent transparent;
+}
+
+/* Arrow for the left side variant */
+.tag-controls.pos-left::after {
+    right: auto;
+    left: 100%;
+    border-color: transparent transparent transparent rgba(26, 26, 46, 0.95);
+}
+
+.tag-capsule:hover .tag-controls {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0);
+}
+
+/* Suppress toolbars during drag */
+.tag-editor-container.is-dragging .tag-controls {
+    display: none !important;
 }
 
 .tbtn {
     background: transparent;
     border: none;
-    color: #aaa;
+    color: #eee;
     cursor: pointer;
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 14px;
     line-height: 1;
     padding: 0;
+    transition: background 0.2s;
 }
 
 .tbtn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.15);
     color: #fff;
+    transform: scale(1.1);
+}
+
+.tbtn-bracket:hover {
+    color: #818cf8;
+}
+
+.tbtn-copy:hover {
+    color: #3498db;
+}
+
+.tbtn-fav {
+    color: #555;
+    /* Dim by default */
+    filter: grayscale(1);
+}
+
+.tbtn-fav:hover {
+    filter: grayscale(0.5);
+    color: #f1c40f;
+}
+
+.tbtn-fav.active {
+    color: #ffd700;
+    text-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+}
+
+.fav-star {
+    color: #ffd700;
+    font-size: 0.9em;
 }
 
 .tbtn-sub:hover {
@@ -139,6 +234,25 @@
 .tbtn-del:hover {
     background: rgba(231, 76, 60, 0.2);
     color: #e74c3c;
+}
+
+
+
+/* Animations */
+@keyframes flash-green {
+    0% {
+        background: rgba(46, 204, 113, 0.4);
+        border-color: #2ecc71;
+    }
+
+    100% {
+        background: #3b3b4f;
+        border-color: #4a4a6a;
+    }
+}
+
+.tag-item.flash-success {
+    animation: flash-green 0.5s ease-out;
 }
 
 /* Inline Edit Input */
@@ -167,6 +281,51 @@
     z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     min-width: 200px;
+}
+
+/* Newline tag specific styles */
+.tag-item.tag-newline .tag-capsule {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    min-width: 32px;
+    justify-content: center;
+}
+
+.tag-item.tag-newline .tag-text {
+    opacity: 0.6;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.tag-item.tag-newline .tag-zh-row {
+    visibility: hidden;
+    /* Newlines don't need translations */
+}
+
+/* Force Newline mode */
+.tag-newline-separator {
+    flex-basis: 100%;
+    width: 100%;
+    height: 4px;
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    /* Separator shouldn't be interactable */
+}
+
+.tag-newline-separator::before {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.3), transparent);
+    opacity: 0.5;
 }
 
 .autocomplete-item {
