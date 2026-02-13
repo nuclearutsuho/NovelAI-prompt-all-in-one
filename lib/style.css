@@ -84,10 +84,12 @@
     color: #888;
     line-height: 1.2;
     text-align: center;
-    max-width: 120px;
+    /* max-width removed to allow JS dynamic sizing */
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* text-overflow: ellipsis;  Removed for multi-line */
+    white-space: normal;
+    word-break: break-all;
+    overflow-wrap: break-word;
     min-height: 1.2em;
     /* Ensure layout doesn't jump */
 }
@@ -122,7 +124,7 @@
     top: 50%;
     left: calc(100% - 4px);
     /* Slightly overlap to prevent losing hover */
-    transform: translateY(-50%) translateX(5px);
+    transform: translateY(-50%) translateX(5px) scale(0.95);
     background: rgba(26, 26, 46, 0.95);
     backdrop-filter: blur(8px);
     border: 1px solid rgba(129, 140, 248, 0.4);
@@ -133,7 +135,7 @@
     z-index: 1000;
     pointer-events: none;
     opacity: 0;
-    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.1);
+    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
     white-space: nowrap;
 }
 
@@ -141,7 +143,28 @@
 .tag-controls.pos-left {
     left: auto;
     right: calc(100% - 4px);
-    transform: translateY(-50%) translateX(-5px);
+    transform: translateY(-50%) translateX(-5px) scale(0.95);
+}
+
+/* Top variant when both sides overflow */
+.tag-controls.pos-top {
+    left: 50%;
+    top: auto;
+    bottom: calc(100% + 4px);
+    transform: translateX(-50%) translateY(8px) scale(0.9);
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+}
+
+/* Bottom variant */
+.tag-controls.pos-bottom {
+    left: 50%;
+    top: calc(100% + 4px);
+    transform: translateX(-50%) translateY(-8px) scale(0.9);
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
 }
 
 /* Arrow for the floating tooltip (Overlap: Move arrow inside or adjust border) */
@@ -163,10 +186,41 @@
     border-color: transparent transparent transparent rgba(26, 26, 46, 0.95);
 }
 
+/* Arrow for top variant (pointing down) */
+.tag-controls.pos-top::after {
+    top: 100%;
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    border-color: rgba(26, 26, 46, 0.95) transparent transparent transparent;
+}
+
+/* Arrow for bottom variant (pointing up) */
+.tag-controls.pos-bottom::after {
+    top: auto;
+    bottom: 100%;
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    border-color: transparent transparent rgba(26, 26, 46, 0.95) transparent;
+}
+
 .tag-capsule:hover .tag-controls {
     opacity: 1;
     pointer-events: auto;
-    transform: translateY(-50%) translateX(0);
+    transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.tag-capsule:hover .tag-controls.pos-left {
+    transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.tag-capsule:hover .tag-controls.pos-top {
+    transform: translateX(-50%) translateY(0) scale(1);
+}
+
+.tag-capsule:hover .tag-controls.pos-bottom {
+    transform: translateX(-50%) translateY(0) scale(1);
 }
 
 /* Suppress toolbars during drag */
@@ -247,6 +301,83 @@
     border-radius: 4px;
     padding: 1px;
     border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/*.tag-group-header .tag-capsule*/
+.tag-group-header .tag-capsule {
+    border-radius: 12px 2px 2px 12px;
+    background: rgba(129, 140, 248, 0.15);
+    /* Slightly stronger bg */
+    border: 1px solid rgba(129, 140, 248, 0.3);
+    border-right: none;
+    /* Open to right */
+    padding-left: 6px;
+    border-left-width: 3px;
+    border-left-color: #818cf8;
+    min-width: 24px;
+    margin-right: -4px;
+    /* Pull next item closer */
+    z-index: 2;
+    /* Layer on top */
+}
+
+/* items inside the group */
+.tag-group-member .tag-capsule {
+    border-radius: 2px;
+    background: rgba(129, 140, 248, 0.1);
+    border-top: 1px solid rgba(129, 140, 248, 0.3);
+    border-bottom: 1px solid rgba(129, 140, 248, 0.3);
+    border-left: none;
+    border-right: none;
+    margin-left: -1px;
+    margin-right: -4px;
+    width: calc(100% + 5px);
+    /* Compensate margins? tricky with flex wrap */
+    /* Easier approach: Use box shadow or simple border */
+}
+
+/* Let's try a simpler approach for member spacing */
+.tag-group-member {
+    /* Reduce margin to create connected look? */
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+.tag-group-member .tag-capsule {
+    border-radius: 0;
+    background: rgba(129, 140, 248, 0.1);
+    border: 1px solid rgba(129, 140, 248, 0.3);
+    border-left: none;
+    border-right: none;
+}
+
+.tag-group-header {
+    margin-right: 0 !important;
+}
+
+.tag-group-footer {
+    margin-left: 0 !important;
+}
+
+.tag-group-footer .tag-capsule {
+    border-radius: 2px 12px 12px 2px;
+    background: rgba(129, 140, 248, 0.15);
+    border: 1px solid rgba(129, 140, 248, 0.3);
+    border-left: none;
+    /* Open to left */
+    padding-right: 6px;
+    border-right-width: 3px;
+    border-right-color: #818cf8;
+    min-width: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.tag-group-footer .tag-text {
+    font-size: 14px;
+    font-weight: bold;
+    color: #818cf8;
 }
 
 .weight-input {

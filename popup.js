@@ -288,13 +288,24 @@ function tagsToString(tags) {
 
   activeTags.forEach((t, i) => {
     const val = t.value;
+    const isHeader = val.match(/^([-?\d\.]+)::$/);
+    const isFooter = val === ' ::';
+
     if (val === '\n') {
       result += '\n';
     } else {
       result += val;
-      // Add comma after this tag if there are more regular (non-newline) tags later
-      const hasMoreRegularTags = activeTags.slice(i + 1).some(t2 => t2.value !== '\n');
-      if (hasMoreRegularTags) {
+
+      const next = activeTags[i + 1];
+      const nextIsNL = next && next.value === '\n';
+      const nextIsFooter = next && next.value === ' ::';
+
+      // Rules for NOT adding a comma:
+      // 1. Current tag is a Header
+      // 2. Next tag is a Footer
+      // 3. Next tag is a Newline
+      // 4. This is the last tag
+      if (!isHeader && !nextIsFooter && !nextIsNL && i < activeTags.length - 1) {
         result += ', ';
       }
     }
@@ -308,7 +319,9 @@ function parsePromptToTags(promptText) {
   const parts = common.splitTags(promptText);
   return parts.map(p => {
     const isNL = p === '\n';
-    return { value: isNL ? p : p.trim(), disabled: false };
+    const isFooter = p === ' ::';
+    // Preserve ' ::' exactly, otherwise trim
+    return { value: (isNL || isFooter) ? p : p.trim(), disabled: false };
   }).filter(t => t.value !== '');
 }
 
