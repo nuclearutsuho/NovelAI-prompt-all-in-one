@@ -303,9 +303,8 @@ function tagsToString(tags) {
       // Rules for NOT adding a comma:
       // 1. Current tag is a Header
       // 2. Next tag is a Footer
-      // 3. Next tag is a Newline
-      // 4. This is the last tag
-      if (!isHeader && !nextIsFooter && !nextIsNL && i < activeTags.length - 1) {
+      // 3. This is the last tag
+      if (!isHeader && !nextIsFooter && i < activeTags.length - 1) {
         result += ', ';
       }
     }
