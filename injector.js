@@ -4,7 +4,7 @@
 
   const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
   const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
-  const simpleWildcardPattern = /__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
+  const simpleWildcardPattern = /([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
 
   function containsWildcardSyntax(text) {
     return simpleWildcardPattern.test(text) ||
@@ -13,6 +13,7 @@
   }
 
   let dict = {};
+  let sequentialCounters = {};
   let v3 = false;
   let preservePrompt = true;
   let alternativeDanbooruAutocomplete = true;
@@ -172,14 +173,19 @@
   /******** 1. swap logic (now rng based on NAI seed) ********/
   function makeDeepSwap(rng) {
     // 使用外层定义的正则表达式和 containsWildcardSyntax 函数 (Use outer-scope patterns and function)
+    let pendingUIResync = false;
 
-    function swap(txt) {
-      // 1) __token__ lines → pick one line deterministically using rng()
-      let result = txt.replace(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/g, (match, name) => {
+    function swap(txt, slotCounters) {
+      // 1) [sS]?(\d+)?__token__ lines → pick one line OR sequentially
+      let result = txt.replace(/([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/g, (match, prefix, startNum, name) => {
+        let effectiveKey = name;
         let raw = dict[name];
         if (!raw && !name.includes('/')) {
           const fallbackKey = Object.keys(dict).find(k => k.split('/').pop() === name);
-          if (fallbackKey) raw = dict[fallbackKey];
+          if (fallbackKey) {
+            raw = dict[fallbackKey];
+            effectiveKey = fallbackKey;
+          }
         }
         if (!raw) return match;
 
@@ -189,6 +195,40 @@
 
         const forceV3 = lines.some(line => containsWildcardSyntax(line));
         const effectiveV3 = forceV3 || v3;
+
+        // --- Sequential Logic ---
+        if (prefix) {
+          // Slot identification
+          const slotIdx = slotCounters[effectiveKey] || 0;
+          slotCounters[effectiveKey] = slotIdx + 1;
+          const storageKey = `${effectiveKey}:${slotIdx}`;
+
+          // Numeric jump logic
+          if (startNum) {
+            const jumpTarget = parseInt(startNum, 10) - 1;
+            sequentialCounters[storageKey] = jumpTarget;
+            window.postMessage({
+              type: '__UPDATE_SEQUENTIAL_COUNTER__',
+              name: storageKey,
+              value: jumpTarget
+            }, '*');
+            pendingUIResync = true;
+          }
+
+          const idx = sequentialCounters[storageKey] || 0;
+          const picked = lines[idx % lines.length];
+
+          // Increment for next time
+          const nextVal = idx + 1;
+          sequentialCounters[storageKey] = nextVal;
+          window.postMessage({
+            type: '__UPDATE_SEQUENTIAL_COUNTER__',
+            name: storageKey,
+            value: nextVal
+          }, '*');
+
+          return picked;
+        }
 
         if (effectiveV3) {
           // deterministic pick
@@ -217,8 +257,12 @@
     function recursiveSwap(txt) {
       let current = txt;
       let iteration = 0;
+      // Per-request slot counters must be consistent for input vs base_caption
+      // But we use memoization to ensure same input string gets processed once.
+      const slotCounters = {};
+
       while (containsWildcardSyntax(current) && iteration < 100) {
-        const next = swap(current);
+        const next = swap(current, slotCounters);
         if (next === current) break;
         current = next;
         iteration++;
@@ -226,8 +270,14 @@
       return current;
     }
 
+    const memo = new Map();
     const deepSwap = o => {
-      if (typeof o === 'string') return recursiveSwap(o);
+      if (typeof o === 'string') {
+        if (memo.has(o)) return memo.get(o);
+        const processed = recursiveSwap(o);
+        memo.set(o, processed);
+        return processed;
+      }
       if (Array.isArray(o)) return o.map(deepSwap);
       if (o && typeof o === 'object') {
         for (const k in o) {
@@ -241,7 +291,44 @@
       return o;
     };
 
-    return deepSwap;
+    return { deepSwap, getPendingUIResync: () => pendingUIResync };
+  }
+
+  function cleanNumericPrefixesFromUI() {
+    const editors = document.querySelectorAll('div.ProseMirror[contenteditable="true"]');
+    editors.forEach(editor => {
+      const walk = (node) => {
+        if (node.nodeType === 3) { // Text node
+          const old = node.nodeValue;
+          // s10__ -> s__ (case insensitive for S)
+          const fixed = old.replace(/([sS])\d+__/g, '$1__');
+          if (fixed !== old) node.nodeValue = fixed;
+        } else {
+          node.childNodes.forEach(walk);
+        }
+      };
+      // We don't want to use insertText here because it might trigger more swaps or be messy.
+      // Direct text node manipulation is safer for ProseMirror if we don't break the structure.
+      // Actually ProseMirror might complain. Let's try execCommand on selection if we find it.
+      
+      const content = editor.innerText;
+      if (/([sS])\d+__/.test(content)) {
+        // Save selection
+        const sel = window.getSelection();
+        const ranges = [];
+        for(let i=0; i<sel.rangeCount; i++) ranges.push(sel.getRangeAt(i));
+
+        editor.innerHTML = editor.innerHTML.replace(/([sS])\d+__/g, (match, prefix) => prefix + '__');
+        
+        // Restore selection (best effort)
+        sel.removeAllRanges();
+        ranges.forEach(r => {
+          try { sel.addRange(r); } catch(e) {}
+        });
+
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
   }
 
   /* 2‑A. fetch 패치 (fetch 补丁) */
@@ -259,10 +346,14 @@
 
           const seed32 = getSeed32(json);
           const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
-          const deepSwap = makeDeepSwap(rng);
+          const swapper = makeDeepSwap(rng);
 
           /* ① wildcard 치환 (Wildcard 替换) */
-          json = deepSwap(json);
+          json = swapper.deepSwap(json);
+
+          if (swapper.getPendingUIResync()) {
+            setTimeout(cleanNumericPrefixesFromUI, 100);
+          }
 
           /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */      // <<< NEW
           if (preservePrompt) await applyImg2ImgMetadata(json);            // <<< NEW
@@ -306,8 +397,12 @@
         /* ① seed 기반 RNG 생성 및 wildcard 치환 (基于 seed 创建 RNG 并替换 wildcard) */
         const seed32 = getSeed32(json);
         const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
-        const deepSwap = makeDeepSwap(rng);
-        json = deepSwap(json);
+        const swapper = makeDeepSwap(rng);
+        json = swapper.deepSwap(json);
+
+        if (swapper.getPendingUIResync()) {
+          setTimeout(cleanNumericPrefixesFromUI, 100);
+        }
 
         /* ② cosmetic: base_caption = input */
         if (json?.parameters?.v4_prompt?.caption &&
@@ -336,6 +431,9 @@
       preservePrompt = !!newPreserve;
       triggerTab = !!newTab;
       triggerSpace = !!newSpace;
+      if (e.data.sequentialCounters) {
+        sequentialCounters = e.data.sequentialCounters;
+      }
 
       // alternativeDanbooruAutocomplete 토글 즉시 반영 (立即反映 alternativeDanbooruAutocomplete 切换)
       if (typeof newAlt !== 'undefined') {
@@ -471,10 +569,12 @@
         }
         const txt = textBeforeCaret();
 
-        let m = txt.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:([A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*))$/);
-        if (m && dict[m[1]]) {
-          const fileKey = m[1];
-          const part = (m[2] || '').toLowerCase();
+        let m = txt.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:([A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*))$/);
+        if (m && dict[m[3]]) {
+          const prefix = m[1] || '';
+          const num = m[2] || '';
+          const fileKey = m[3];
+          const part = (m[4] || '').toLowerCase();
 
           const lines = dict[fileKey]
             .replace(/\\\(/g, '(').replace(/\\\)/g, ')')
@@ -484,26 +584,28 @@
             .slice(0, 100);
 
           if (lines.length) {
-            render(lines.map(l => ({ type: 'value', text: l, key: fileKey })));
+            render(lines.map(l => ({ type: 'value', text: l, key: fileKey, prefix: prefix + num })));
             return;
           }
         }
 
-        m = txt.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
+        m = txt.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
         if (m) {
-          const prefix = m[1].toLowerCase();
+          const prefix = m[1] || '';
+          const num = m[2] || '';
+          const namePart = m[3].toLowerCase();
           const allKeys = Object.keys(dict)
 
-          const folderKeys = allKeys.filter(k => k.toLowerCase().startsWith(prefix + '/'));
-          if (folderKeys.length && !prefix.includes('/')) {
-            render(folderKeys.map(k => ({ type: 'token', text: `__${k}__` })));
+          const folderKeys = allKeys.filter(k => k.toLowerCase().startsWith(namePart + '/'));
+          if (folderKeys.length && !namePart.includes('/')) {
+            render(folderKeys.map(k => ({ type: 'token', text: `${prefix}${num}__${k}__` })));
             return;
           }
 
-          const keys = allKeys.filter(k => k.toLowerCase().includes(prefix))
+          const keys = allKeys.filter(k => k.toLowerCase().includes(namePart))
             .sort();
           if (keys.length) {
-            render(keys.map(k => ({ type: 'token', text: `__${k}__` })));
+            render(keys.map(k => ({ type: 'token', text: `${prefix}${num}__${k}__` })));
             return;
           }
         }
@@ -656,11 +758,13 @@
 
         let len = 0;
         if (type === 'token') {
-          const m = full.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
+          const m = full.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
+          if (m && m[0].startsWith(' ') || m && m[0].match(/^[^sS\d_]/)) len--;
         } else if (type === 'value') {
-          const m = full.match(/__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:[A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
+          const m = full.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__(?:[A-Za-z0-9 \-_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
+          if (m && m[0].startsWith(' ') || m && m[0].match(/^[^sS\d_]/)) len--;
         } else if (type === 'dict') {
           const m = full.match(/[A-Za-z0-9_\-\u4e00-\u9fff]{1,}$/);
           len = m ? m[0].length : 0;

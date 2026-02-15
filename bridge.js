@@ -7,8 +7,9 @@
     preservePrompt = true,
     alternativeDanbooruAutocomplete = true,
     triggerTab = false,
-    triggerSpace = true
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace']);
+    triggerSpace = true,
+    sequentialCounters = {}
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters']);
 
   // 2) inject script to page
   const s = document.createElement('script');
@@ -21,7 +22,8 @@
       preservePrompt,
       alternativeDanbooruAutocomplete,
       triggerTab,
-      triggerSpace
+      triggerSpace,
+      sequentialCounters
     }, '*');
     s.remove();
   };
@@ -234,7 +236,19 @@
         alternativeDanbooruAutocomplete,
         triggerTab,
         triggerSpace,
+        sequentialCounters,
       }, '*');
+    }
+  });
+
+  // Handle sequential counter updates from injector
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    if (e.data?.type === '__UPDATE_SEQUENTIAL_COUNTER__') {
+      const { name, value } = e.data;
+      sequentialCounters[name] = value;
+      // Debounce could be added if needed, but generation is relatively slow
+      chrome.storage.local.set({ sequentialCounters });
     }
   });
 
