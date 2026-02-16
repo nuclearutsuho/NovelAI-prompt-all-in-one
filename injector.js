@@ -201,16 +201,17 @@
           // Slot identification
           const slotIdx = slotCounters[effectiveKey] || 0;
           slotCounters[effectiveKey] = slotIdx + 1;
-          const storageKey = `${effectiveKey}:${slotIdx}`;
+          // Aligned key logic: Slot 0 uses 'name', others use 'name:idx'
+          const storageKey = slotIdx === 0 ? effectiveKey : `${effectiveKey}:${slotIdx}`;
 
           // Numeric jump logic
           if (startNum) {
             const jumpTarget = parseInt(startNum, 10) - 1;
-            sequentialCounters[storageKey] = jumpTarget;
+            sequentialCounters[storageKey] = jumpTarget % lines.length; // Apply modulo to jump target
             window.postMessage({
               type: '__UPDATE_SEQUENTIAL_COUNTER__',
               name: storageKey,
-              value: jumpTarget
+              value: sequentialCounters[storageKey]
             }, '*');
             pendingUIResync = true;
           }
@@ -218,8 +219,8 @@
           const idx = sequentialCounters[storageKey] || 0;
           const picked = lines[idx % lines.length];
 
-          // Increment for next time
-          const nextVal = idx + 1;
+          // Increment with wrap-around
+          const nextVal = (idx + 1) % lines.length;
           sequentialCounters[storageKey] = nextVal;
           window.postMessage({
             type: '__UPDATE_SEQUENTIAL_COUNTER__',
@@ -329,6 +330,9 @@
         editor.dispatchEvent(new Event('input', { bubbles: true }));
       }
     });
+
+    // Notify bridge to notify popup/others
+    window.postMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' }, '*');
   }
 
   /* 2‑A. fetch 패치 (fetch 补丁) */

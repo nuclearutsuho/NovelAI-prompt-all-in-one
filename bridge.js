@@ -250,6 +250,9 @@
       // Debounce could be added if needed, but generation is relatively slow
       chrome.storage.local.set({ sequentialCounters });
     }
+    if (e.data?.type === '__CLEAN_NUMERIC_PREFIXES__') {
+      chrome.runtime.sendMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' });
+    }
   });
 
   const csvUrl = chrome.runtime.getURL('dictionary.csv');

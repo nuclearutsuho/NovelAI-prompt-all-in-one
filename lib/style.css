@@ -117,6 +117,19 @@
     color: #e74c3c;
 }
 
+/* Counter Badge */
+.tag-counter-badge {
+    font-size: 10px;
+    background: rgba(129, 140, 248, 0.2);
+    color: #818cf8;
+    padding: 0 4px;
+    border-radius: 4px;
+    margin-left: 4px;
+    font-weight: bold;
+    font-family: monospace;
+    vertical-align: middle;
+}
+
 /* Controls - Side Floating Overlay (WebUI Style) */
 .tag-controls {
     display: flex;

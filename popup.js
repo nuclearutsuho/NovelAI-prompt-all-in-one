@@ -10,10 +10,27 @@ let rawNegative = '';
 let positiveTags = [];
 let negativeTags = [];
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initUI();
+  await initData();
   initCommunication();
 });
+
+async function initData() {
+  const data = await chrome.storage.local.get('sequentialCounters');
+  if (editor && data.sequentialCounters) {
+    editor.setSequentialCounters(data.sequentialCounters);
+  }
+
+  // Listen for storage changes to keep counters in sync
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.sequentialCounters) {
+      if (editor) {
+        editor.setSequentialCounters(changes.sequentialCounters.newValue);
+      }
+    }
+  });
+}
 
 function initUI() {
   // Autocomplete
@@ -47,8 +64,11 @@ function initUI() {
   autocomplete.attach(input, (val) => {
     // When autocomplete selects, add tag
     const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
-    // Replace _ with space
-    const cleanTags = newTags.map(t => t.replace(/_/g, ' '));
+    // Replace _ with space, UNLESS it's a wildcard format
+    const cleanTags = newTags.map(t => {
+      const isWildcard = /^(s|S)?(\d+)?__.*__$/.test(t);
+      return isWildcard ? t : t.replace(/_/g, ' ');
+    });
     cleanTags.forEach(t => editor.addTag(t));
     input.value = '';
     input.focus();
@@ -59,8 +79,11 @@ function initUI() {
     if (val) {
       // Split by comma if user pasted multiple
       const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
-      // Replace _ with space
-      const cleanTags = newTags.map(t => t.replace(/_/g, ' '));
+      // Replace _ with space, UNLESS it's a wildcard format
+      const cleanTags = newTags.map(t => {
+        const isWildcard = /^(s|S)?(\d+)?__.*__$/.test(t);
+        return isWildcard ? t : t.replace(/_/g, ' ');
+      });
       cleanTags.forEach(t => editor.addTag(t));
       input.value = '';
       // scroll to bottom
@@ -402,6 +425,33 @@ function initCommunication() {
         const dict = translations[currentLang] || translations.en;
         statusEl.textContent = dict.status_linked || 'Linked';
         statusEl.style.color = '#4caf50';
+      }
+    }
+
+    if (msg.type === '__CLEAN_NUMERIC_PREFIXES__') {
+      console.log('[Popup] Received cleanup request for numeric prefixes');
+      let changed = false;
+      const clean = (tag) => {
+        const old = tag.value;
+        const fixed = old.replace(/^(([sS])(\d+)__.*?__)$/, (match, full, prefix, num) => {
+          if (num) {
+            const parts = match.split('__');
+            return (prefix || 's') + '__' + parts[1] + '__'; // Simple split index logic
+          }
+          return match;
+        });
+        if (fixed !== old) {
+          changed = true;
+          tag.value = fixed;
+        }
+      };
+
+      positiveTags.forEach(clean);
+      negativeTags.forEach(clean);
+
+      if (changed) {
+        editor.setTags(currentMode === 'positive' ? positiveTags : negativeTags);
+        syncToPage();
       }
     }
   });
