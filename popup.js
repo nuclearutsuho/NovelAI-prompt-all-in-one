@@ -308,27 +308,51 @@ function updateTagsFromEditor(updatedTags) {
 function tagsToString(tags) {
   let result = '';
   const activeTags = tags.filter(t => !t.disabled);
+  let inDynamic = false;
 
   activeTags.forEach((t, i) => {
     const val = t.value;
+    const isDynStart = val.startsWith('||') && (val !== '||' || t.isStart);
+    const isDynEnd = val === '||' && !t.isStart;
     const isHeader = val.match(/^([-?\d\.]+)::$/);
     const isFooter = val === ' ::';
 
     if (val === '\n') {
       result += '\n';
     } else {
-      result += val;
+      if (isDynStart) inDynamic = true;
+      
+      // Handle native value
+      let outputVal = val;
+      if (inDynamic && !isDynStart && !isDynEnd && t.dynWeight && t.dynWeight !== 1) {
+          // Correct Fix: Always append to the very end of the value string.
+          // If val is "2::tag ::", output should be "2::tag :: :5"
+          // If val is "tag", output should be "tag:5"
+          outputVal = val + `:${t.dynWeight}`;
+      }
 
-      const next = activeTags[i + 1];
-      const nextIsNL = next && next.value === '\n';
-      const nextIsFooter = next && next.value === ' ::';
+      result += outputVal;
+      if (isDynEnd) inDynamic = false;
 
-      // Rules for NOT adding a comma:
-      // 1. Current tag is a Header
-      // 2. Next tag is a Footer
-      // 3. This is the last tag
-      if (!isHeader && !nextIsFooter && i < activeTags.length - 1) {
-        result += ', ';
+      if (i < activeTags.length - 1) {
+        const next = activeTags[i + 1];
+        const nextVal = next.value;
+        const nextIsNL = nextVal === '\n';
+        const nextIsFooter = nextVal === ' ::';
+        const nextIsDynEnd = nextVal === '||';
+        const nextIsDynStart = nextVal.startsWith('||') && nextVal !== '||';
+
+        if (inDynamic) {
+          // Inside dynamic: use | between members
+          if (!isDynStart && !nextIsDynEnd && !nextIsNL) {
+            result += '|';
+          }
+        } else {
+          // Outside dynamic: use ,
+          if (!isHeader && !nextIsFooter && !nextIsNL) {
+            result += ', ';
+          }
+        }
       }
     }
   });
@@ -339,12 +363,77 @@ function parsePromptToTags(promptText) {
   if (!promptText) return [];
   // Use common.splitTags logic
   const parts = common.splitTags(promptText);
-  return parts.map(p => {
-    const isNL = p === '\n';
-    const isFooter = p === ' ::';
-    // Preserve ' ::' exactly, otherwise trim
-    return { value: (isNL || isFooter) ? p : p.trim(), disabled: false };
-  }).filter(t => t.value !== '');
+  const result = [];
+
+  let inDynamic = false;
+  parts.forEach(p => {
+    // Check if part is a dynamic block: ||...||
+    if (p.startsWith('||') && p.endsWith('||') && p.length >= 4) {
+      const content = p.slice(2, -2);
+      let options = content;
+      let config = '';
+
+      if (content.includes('$$')) {
+        const dParts = content.split('$$');
+        options = dParts.pop();
+        config = dParts.join('$$');
+      }
+
+      // Push start marker
+      result.push({ value: `||${config}${config ? '$$' : ''}`, isStart: true, disabled: false });
+
+      // Push members
+      options.split('|').forEach(opt => {
+        let val = opt.trim();
+        if (!val) return;
+
+        let dynWeight = 1;
+        // Match :weight at the end, support decimals
+        const dMatch = val.match(/^(.*?)\s*:\s*(\d+(\.\d+)?)\s*$/);
+        if (dMatch && dMatch[2]) {
+            val = dMatch[1];
+            dynWeight = parseFloat(dMatch[2]);
+        }
+
+        result.push({ value: val, dynWeight: dynWeight, disabled: false });
+      });
+
+      // Push end marker
+      result.push({ value: '||', disabled: false });
+    } else if (p === '||') {
+      if (!inDynamic) {
+        result.push({ value: '||', isStart: true, disabled: false });
+        inDynamic = true;
+      } else {
+        result.push({ value: '||', disabled: false });
+        inDynamic = false;
+      }
+    } else if (p.startsWith('||') && !p.endsWith('||')) {
+      // Half-finished block like ||tag1|tag2
+      const content = p.slice(2);
+      let options = content;
+      let config = '';
+      if (content.includes('$$')) {
+        const dParts = content.split('$$');
+        options = dParts.pop();
+        config = dParts.join('$$');
+      }
+      result.push({ value: `||${config}${config ? '$$' : ''}`, isStart: true, disabled: false });
+      inDynamic = true;
+      options.split('|').forEach(opt => {
+        let val = opt.trim();
+        if (!val) return;
+        result.push({ value: val, disabled: false });
+      });
+    } else {
+      const isNL = p === '\n';
+      const isFooter = p === ' ::';
+      // Preserve ' ::' exactly, otherwise trim
+      result.push({ value: (isNL || isFooter) ? p : p.trim(), disabled: false });
+    }
+  });
+
+  return result.filter(t => t.value !== '');
 }
 
 // Track last sent prompt to avoid echo loops destroying focus

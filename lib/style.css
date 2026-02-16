@@ -316,26 +316,36 @@
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/*.tag-group-header .tag-capsule*/
-.tag-group-header .tag-capsule {
-    border-radius: 12px 2px 2px 12px;
+/* Composite Tag Group (Blueish) */
+.tag-comp-header .tag-capsule, .tag-comp-footer .tag-capsule {
     background: rgba(129, 140, 248, 0.15);
-    /* Slightly stronger bg */
     border: 1px solid rgba(129, 140, 248, 0.3);
+}
+
+.tag-comp-header .tag-capsule {
+    border-radius: 12px 2px 2px 12px;
     border-right: none;
-    /* Open to right */
     padding-left: 6px;
     border-left-width: 3px;
     border-left-color: #818cf8;
     min-width: 24px;
     margin-right: -4px;
-    /* Pull next item closer */
     z-index: 2;
-    /* Layer on top */
 }
 
-/* items inside the group */
-.tag-group-member .tag-capsule {
+.tag-comp-footer .tag-capsule {
+    border-radius: 2px 12px 12px 2px;
+    border-left: none;
+    padding-right: 6px;
+    border-right-width: 3px;
+    border-right-color: #818cf8;
+    min-width: 14px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.tag-comp-member .tag-capsule {
     border-radius: 2px;
     background: rgba(129, 140, 248, 0.1);
     border-top: 1px solid rgba(129, 140, 248, 0.3);
@@ -345,52 +355,151 @@
     margin-left: -1px;
     margin-right: -4px;
     width: calc(100% + 5px);
-    /* Compensate margins? tricky with flex wrap */
-    /* Easier approach: Use box shadow or simple border */
 }
 
-/* Let's try a simpler approach for member spacing */
-.tag-group-member {
-    /* Reduce margin to create connected look? */
+.tag-comp-member, .tag-comp-header, .tag-comp-footer {
     margin-left: 0 !important;
     margin-right: 0 !important;
 }
 
-.tag-group-member .tag-capsule {
-    border-radius: 0;
-    background: rgba(129, 140, 248, 0.1);
-    border: 1px solid rgba(129, 140, 248, 0.3);
-    border-left: none;
+/* Dynamic Syntax Group (Purplish) */
+.tag-dyn-header .tag-capsule, .tag-dyn-footer .tag-capsule {
+    background: rgba(167, 139, 250, 0.15);
+    border: 1px solid rgba(167, 139, 250, 0.4);
+}
+
+.tag-dyn-header .tag-capsule {
+    border-radius: 12px 2px 2px 12px;
     border-right: none;
+    padding-left: 8px;
+    border-left-width: 3px;
+    border-left-color: #a78bfa;
+    min-width: 24px;
+    margin-right: -4px;
+    z-index: 2;
 }
 
-.tag-group-header {
-    margin-right: 0 !important;
-}
-
-.tag-group-footer {
-    margin-left: 0 !important;
-}
-
-.tag-group-footer .tag-capsule {
+.tag-dyn-footer .tag-capsule {
     border-radius: 2px 12px 12px 2px;
-    background: rgba(129, 140, 248, 0.15);
-    border: 1px solid rgba(129, 140, 248, 0.3);
     border-left: none;
-    /* Open to left */
-    padding-right: 6px;
+    padding-right: 8px;
     border-right-width: 3px;
-    border-right-color: #818cf8;
-    min-width: 20px;
+    border-right-color: #a78bfa;
+    min-width: 14px;
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
-.tag-group-footer .tag-text {
-    font-size: 14px;
+.tag-dyn-header .tag-capsule::before, .tag-dyn-footer .tag-capsule::after {
+    content: "||";
     font-weight: bold;
-    color: #818cf8;
+    color: #a78bfa;
+    margin: 0 2px;
+}
+
+.tag-dynamic .tag-capsule:not(.gh):not(.gf):not(.dh):not(.df) {
+    background: rgba(167, 139, 250, 0.05);
+    border-color: rgba(167, 139, 250, 0.2);
+}
+
+/* Specificity Fix for Nesting: Composite Header inside Dynamic Group */
+.tag-dyn-member.tag-comp-header .tag-capsule.gh {
+    background: rgba(129, 140, 248, 0.2) !important;
+    border-left-color: #818cf8 !important;
+    border-color: rgba(129, 140, 248, 0.3) !important;
+}
+
+.tag-dyn-member.tag-comp-footer .tag-capsule.gf {
+    background: rgba(129, 140, 248, 0.2) !important;
+    border-right-color: #818cf8 !important;
+    border-color: rgba(129, 140, 248, 0.3) !important;
+}
+
+/* Dynamic Syntax Badges */
+.tag-dyn-pick-badge, .tag-dyn-weight-mini-badge {
+    background: #a78bfa;
+    color: #fff;
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: bold;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+}
+
+.tag-dyn-pick-badge {
+    margin-right: 4px;
+    white-space: nowrap;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tag-dyn-weight-mini-badge {
+    margin-left: 4px;
+}
+
+/* Dynamic Config Toolbar */
+.dyn-config-control {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: rgba(0,0,0,0.2);
+    padding: 2px 4px;
+    border-radius: 4px;
+    margin: 0 4px;
+}
+
+.dyn-config-input {
+    width: 24px;
+    height: 18px;
+    background: #1a1a2e;
+    border: 1px solid #444;
+    color: #fff;
+    font-size: 10px;
+    text-align: center;
+    padding: 0;
+    border-radius: 2px;
+    outline: none;
+}
+
+.dyn-config-input:focus {
+    border-color: #a78bfa;
+}
+
+.dyn-config-input.sep {
+    width: 32px;
+}
+
+.dyn-config-input.sep.has-custom-sep {
+    border-color: #a78bfa;
+    box-shadow: 0 0 4px rgba(167, 139, 250, 0.4);
+    background: rgba(167, 139, 250, 0.1);
+}
+
+.dyn-weight-control {
+    border-left: 1px solid rgba(167, 139, 250, 0.4) !important;
+    padding-left: 6px !important;
+    margin-left: 6px !important;
+}
+
+.dyn-weight-input {
+    width: 25px !important;
+    background: rgba(167, 139, 250, 0.1) !important;
+    color: #a78bfa !important;
+    border: 1px solid rgba(167, 139, 250, 0.3) !important;
+    font-weight: bold;
+    text-align: center;
+    border-radius: 4px;
+    font-size: 11px;
+    height: 20px;
+}
+
+.tbtn-dyn-add:hover, .tbtn-dyn-sub:hover {
+    color: #a78bfa !important;
 }
 
 .weight-input {
@@ -409,8 +518,6 @@
 .weight-input:focus {
     color: #fff;
 }
-
-
 
 /* Animations */
 @keyframes flash-green {

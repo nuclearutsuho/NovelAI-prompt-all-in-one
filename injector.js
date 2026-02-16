@@ -246,10 +246,86 @@
         return opts[Math.floor(rng() * opts.length)];
       });
 
-      // 3) ||a|b|| deterministic pick
-      result = result.replace(/\|\|((?:[^|]+\|)+[^|]+)\|\|/g, (m, group) => {
-        const opts = group.split('|');
-        return opts[Math.floor(rng() * opts.length)];
+      // 3) ||a|b|| deterministic pick (Enhanced with Pick-N, Weights, Joiners)
+      result = result.replace(/\|\|(.*?)\|\|/g, (m, content) => {
+        let configPart = '';
+        let optionsPart = content;
+
+        if (content.includes('$$')) {
+          const parts = content.split('$$');
+          optionsPart = parts.pop();
+          configPart = parts.join('$$'); // Handle multiple $$ if any
+        }
+
+        // Parse Config: [count[$$joiner]]
+        let countRange = '1';
+        let joiner = ', ';
+        if (configPart) {
+          const cfg = configPart.split('$$');
+          countRange = cfg[0].trim() || '1';
+          if (cfg.length > 1 && cfg[1]) joiner = cfg[1];
+        }
+
+        // Parse Count Range
+        let pickCount = 1;
+        if (countRange.includes('-')) {
+          const [min, max] = countRange.split('-').map(Number);
+          if (!isNaN(min) && !isNaN(max)) {
+            pickCount = Math.floor(rng() * (max - min + 1)) + min;
+          }
+        } else {
+          pickCount = parseInt(countRange, 10) || 1;
+        }
+
+        // Parse Options and Weights
+        const rawOpts = optionsPart.split('|');
+        const options = rawOpts.map(o => {
+          const trimmed = o.trim();
+          const weightMatch = trimmed.match(/^(.*?)\s*:\s*(\d+(\.\d+)?)\s*$/);
+          if (weightMatch) {
+            return { text: weightMatch[1].trim(), weight: parseFloat(weightMatch[2]) };
+          }
+          return { text: trimmed, weight: 1.0 };
+        });
+
+        if (options.length === 0) return '';
+        if (pickCount <= 0) return '';
+
+        // Selection Logic (Weighted Random Choice without replacement as much as possible)
+        const picked = [];
+        const availableOptions = [...options];
+
+        for (let i = 0; i < pickCount && availableOptions.length > 0; i++) {
+          const totalWeight = availableOptions.reduce((sum, opt) => sum + opt.weight, 0);
+          let r = rng() * totalWeight;
+          
+          for (let j = 0; j < availableOptions.length; j++) {
+            r -= availableOptions[j].weight;
+            if (r <= 0) {
+              picked.push(availableOptions[j].text);
+              availableOptions.splice(j, 1); // Remove to avoid duplicates
+              break;
+            }
+          }
+        }
+
+        if (picked.length === 0) return '';
+        if (picked.length === 1) return picked[0];
+
+        // Smart Join Logic
+        // If joiner is default ", ", check for existing commas to avoid double separators
+        if (joiner === ', ') {
+          let res = picked[0];
+          for (let k = 1; k < picked.length; k++) {
+            const prev = res.trim();
+            const curr = picked[k].trim();
+            const hasSep = prev.endsWith(',') || curr.startsWith(',');
+            res += (hasSep ? ' ' : ', ') + picked[k];
+          }
+          return res;
+        }
+
+        return picked.join(joiner);
       });
 
       return result;
