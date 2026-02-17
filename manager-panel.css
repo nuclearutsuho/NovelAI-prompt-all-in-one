@@ -97,6 +97,11 @@
     color: #fff;
 }
 
+#wildcard-manager-header .controls .min-btn:hover {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+}
+
 #wildcard-manager-header .controls .close-btn:hover {
     background: #e53935;
     color: #fff;
@@ -112,6 +117,22 @@
 /* 拖拽时禁用 iframe 交互 */
 #wildcard-manager-container.dragging #wildcard-manager-iframe {
     pointer-events: none;
+}
+
+#wildcard-manager-container.minimized {
+    height: auto !important;
+    min-height: 0 !important;
+    resize: none !important;
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+}
+
+#wildcard-manager-container.minimized #wildcard-manager-iframe {
+    display: none;
+}
+
+#wildcard-manager-container.minimized #wildcard-manager-header {
+    border-bottom: none;
 }
 
 /* 响应式调整 */

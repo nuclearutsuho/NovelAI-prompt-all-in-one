@@ -62,6 +62,7 @@
       <div id="wildcard-manager-header">
         <span class="title">🎴 Wildcard Manager</span>
         <div class="controls">
+          <button class="min-btn" title="Minimize">_</button>
           <button class="close-btn" title="Close">×</button>
         </div>
       </div>
@@ -71,6 +72,7 @@
 
     const header = container.querySelector('#wildcard-manager-header');
     const closeBtn = container.querySelector('.close-btn');
+    const minBtn = container.querySelector('.min-btn');
 
     // 显示/隐藏面板
     function togglePanel() {
@@ -83,8 +85,14 @@
       saveState();
     }
 
+    function toggleMinimize() {
+      container.classList.toggle('minimized');
+      saveState();
+    }
+
     toggleBtn.addEventListener('click', togglePanel);
     closeBtn.addEventListener('click', hidePanel);
+    minBtn.addEventListener('click', toggleMinimize);
 
     // 拖拽功能
     let isDragging = false;
@@ -141,6 +149,7 @@
       const rect = container.getBoundingClientRect();
       const state = {
         visible: container.classList.contains('visible'),
+        minimized: container.classList.contains('minimized'),
         left: rect.left,
         top: rect.top,
         width: container.offsetWidth,
@@ -170,6 +179,9 @@
 
         if (state.visible) {
           container.classList.add('visible');
+        }
+        if (state.minimized) {
+          container.classList.add('minimized');
         }
       }
 
