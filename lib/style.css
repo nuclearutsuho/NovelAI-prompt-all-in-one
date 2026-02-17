@@ -17,6 +17,16 @@
     align-content: flex-start;
 }
 
+/* Marquee Selection Box */
+.selection-box {
+    position: fixed;
+    border: 1px solid #818cf8;
+    background: rgba(129, 140, 248, 0.2);
+    pointer-events: none;
+    z-index: 10000;
+    display: none;
+}
+
 .tag-item {
     display: flex;
     flex-direction: column;
@@ -45,6 +55,10 @@
     transition: all 0.2s;
 }
 
+.tag-item:hover {
+    z-index: 100;
+}
+
 .tag-item:hover .tag-capsule {
     background: #4a4a6a;
     border-color: #6c6c94;
@@ -52,9 +66,9 @@
 }
 
 .tag-item.selected .tag-capsule {
-    background: rgba(99, 102, 241, 0.2);
-    border-color: #818cf8;
-    box-shadow: 0 0 0 1px #818cf8;
+    background: rgba(99, 102, 241, 0.35);
+    border-color: #a5b4fc;
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.6), 0 0 12px rgba(99, 102, 241, 0.3);
 }
 
 .tag-item.sortable-ghost {
@@ -236,9 +250,21 @@
     transform: translateX(-50%) translateY(0) scale(1);
 }
 
-/* Suppress toolbars during drag */
-.tag-editor-container.is-dragging .tag-controls {
+/* Suppress toolbars during drag or marquee selection */
+.tag-editor-container.is-dragging .tag-controls,
+.tag-editor-container.is-selecting .tag-controls {
     display: none !important;
+}
+
+/* Simplification for multi-selection: hide non-batch buttons */
+.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls > *:not(.tbtn-del):not(.tbtn-copy):not(.tbtn-toggle) {
+    display: none !important;
+}
+
+/* Ensure the remaining buttons look balanced */
+.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls {
+    gap: 12px;
+    padding: 6px 14px;
 }
 
 .tbtn {

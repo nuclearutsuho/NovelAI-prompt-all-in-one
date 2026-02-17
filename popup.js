@@ -349,8 +349,13 @@ function tagsToString(tags) {
           }
         } else {
           // Outside dynamic: use ,
-          if (!isHeader && !nextIsFooter && !nextIsNL) {
-            result += ', ';
+          // Optimized: Allow comma before newline, but avoid double commas
+          if (!isHeader && !nextIsFooter) {
+            if (!outputVal.trim().endsWith(',')) {
+              result += ', ';
+            } else if (!outputVal.endsWith(' ')) {
+              result += ' '; // Add space if user provided comma but no space
+            }
           }
         }
       }
