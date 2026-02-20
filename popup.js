@@ -32,7 +32,9 @@ const translations = {
     btn_settings: "Settings",
     tag_help_tooltip: "Left-click: Edit | Double-click: Toggle | Drag: Sort",
     setting_render_newlines: "Render Real Newlines",
-    setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags."
+    setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags.",
+    btn_quick_wildcard: "Insert Wildcard",
+    btn_quick_random: "Insert Random"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -54,7 +56,9 @@ const translations = {
     btn_settings: "设置",
     tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
     setting_render_newlines: "渲染真实换行",
-    setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。"
+    setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。",
+    btn_quick_wildcard: "通配符",
+    btn_quick_random: "随机选择"
   },
   jp: {
     tab_positive: "プロンプト",
@@ -74,7 +78,9 @@ const translations = {
     status_linked: "接続済み",
     btn_library: "リソースセンター",
     btn_settings: "設定",
-    tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え"
+    tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え",
+    btn_quick_wildcard: "ワイルドカード",
+    btn_quick_random: "ランダム選択"
   }
 };
 
@@ -129,6 +135,31 @@ function initUI() {
   // Input Area
   const input = document.getElementById('quick-input');
   const btnAdd = document.getElementById('btn-add');
+  const btnQuickWildcard = document.getElementById('btn-quick-wildcard');
+  const btnQuickRandom = document.getElementById('btn-quick-random');
+
+  if (btnQuickWildcard) {
+    btnQuickWildcard.addEventListener('click', () => {
+      input.value += '__';
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  if (btnQuickRandom) {
+    btnQuickRandom.addEventListener('click', () => {
+      if (editor) {
+        editor.addTag('||');
+        const container = document.getElementById('editor-container');
+        if (container) container.scrollTop = container.scrollHeight;
+        input.focus();
+      } else {
+        input.value += '||';
+        input.focus();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+  }
 
   // Attach Autocomplete to Input
   autocomplete.attach(input, (val) => {

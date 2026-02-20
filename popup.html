@@ -126,6 +126,26 @@
       border-color: #818cf8;
     }
 
+    .quick-btn {
+      background: #3a3a55;
+      color: #ccc;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      padding: 0 8px;
+      height: 24px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+
+    .quick-btn:hover {
+      background: #4a4a6a;
+    }
+
     #btn-add {
       background: #818cf8;
       color: #fff;
@@ -210,6 +230,8 @@
 
     <div id="input-area">
       <input id="quick-input" type="text" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
+      <button id="btn-quick-wildcard" class="quick-btn" title="Wildcard" data-i18n-title="btn_quick_wildcard">__</button>
+      <button id="btn-quick-random" class="quick-btn" title="Random Choice" data-i18n-title="btn_quick_random">||</button>
       <button id="btn-add" data-i18n="btn_add">Add</button>
     </div>
 
