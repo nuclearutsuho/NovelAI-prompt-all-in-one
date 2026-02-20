@@ -901,21 +901,17 @@
    * ------------------------------------------------- */
 
   function getCurrentPrompts() {
-    // 1. Target main container editors only
-    const mainContainer = document.querySelector('.image-gen-prompt-main');
-    const allMain = mainContainer ? Array.from(mainContainer.querySelectorAll('div.ProseMirror[contenteditable="true"]')) : [];
-
-    // 2. Identify Base Positive and Base Negative by parent classes (Stable in V4/V4.5)
-    let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') ||
-      document.querySelector('.prompt-input-box-base-prompt .ProseMirror');
+    // NovelAI unmounts the inactive tab's editor. 
+    // If we're on the 'Prompt' tab, the 'Undesired Content' editor is gone from the DOM.
+    // So we use strict selectors. If it's missing, we return undefined so the popup knows it wasn't seen.
+    
+    let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-prompt .ProseMirror') ||
+                document.querySelector('.prompt-input-box-prompt .ProseMirror'); // Fallback if main wrap changes
+                
     let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
-      document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
+                document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
 
-    // 3. Fallback logic—only within the main container
-    if (!posEl) posEl = allMain[0];
-    if (!negEl) negEl = allMain[1];
-
-    const getVal = el => el ? (el.innerText || el.textContent || '').trim() : '';
+    const getVal = el => el ? (el.innerText || el.textContent || '').trim() : undefined;
 
     return {
       positive: getVal(posEl),
@@ -928,9 +924,7 @@
     const { type, data } = e.data || {};
 
     if (type === '__GET_PROMPT__') {
-      console.log('[Injector] Received __GET_PROMPT__');
       const { positive, negative } = getCurrentPrompts();
-      console.log('[Injector] Extracted prompts:', { positive, negative });
       window.postMessage({
         type: '__RETURN_PROMPT__',
         data: { positive, negative }
@@ -941,12 +935,12 @@
       isSyncingFromPopup = true;
       try {
         const { positive, negative } = data || {};
-        const mainContainer = document.querySelector('.image-gen-prompt-main');
-        const allMain = mainContainer ? Array.from(mainContainer.querySelectorAll('div.ProseMirror[contenteditable="true"]')) : [];
-
-        // Select best targets
-        let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-base-prompt .ProseMirror') || allMain[0];
-        let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') || allMain[1];
+        
+        let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-prompt .ProseMirror') || 
+                    document.querySelector('.prompt-input-box-prompt .ProseMirror');
+                    
+        let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') || 
+                    document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
 
         const setEditorContent = (editor, text) => {
           if (!editor || typeof text !== 'string') return;
@@ -954,7 +948,6 @@
           // Visibility check: Avoid hidden editors (inactive tabs)
           const rect = editor.getBoundingClientRect();
           if (rect.width === 0 || rect.height === 0) return;
-
 
           const sel = window.getSelection();
           sel.removeAllRanges();
@@ -970,14 +963,45 @@
           editor.dispatchEvent(new Event('input', { bubbles: true }));
         };
 
-        if (positive !== undefined) setEditorContent(posEl, positive);
-        if (negative !== undefined) setEditorContent(negEl, negative);
+        if (positive !== undefined && posEl) setEditorContent(posEl, positive);
+        if (negative !== undefined && negEl) setEditorContent(negEl, negative);
       } finally {
         // Use timeout to ensure all immediate side effects (like 'input' events) are processed
         setTimeout(() => { isSyncingFromPopup = false; }, 100);
       }
     }
+
+    if (type === '__SWITCH_TAB__') {
+      const targetText = data === 'positive' ? 'Prompt' : 'Undesired Content';
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(el => el.textContent.trim() === targetText);
+      if (btn) btn.click();
+    }
   });
+
+  // Poll for active tab changes to sync back to popup
+  let lastActiveTab = null;
+  setInterval(() => {
+    const isPromptActive = (() => {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(el => el.textContent.trim() === 'Prompt');
+      return !!(btn && window.getComputedStyle(btn.parentElement).opacity === '1');
+    })();
+    const isUndesiredActive = (() => {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(el => el.textContent.trim() === 'Undesired Content');
+      return !!(btn && window.getComputedStyle(btn.parentElement).opacity === '1');
+    })();
+
+    let currentTab = null;
+    if (isPromptActive) currentTab = 'positive';
+    else if (isUndesiredActive) currentTab = 'negative';
+
+    if (currentTab && currentTab !== lastActiveTab) {
+      lastActiveTab = currentTab;
+      window.postMessage({ type: '__SYNC_TAB__', data: currentTab }, '*');
+    }
+  }, 500);
 
   // Export for internal use in hook()
   window.__getCurrentPrompts_PM = getCurrentPrompts;

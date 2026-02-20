@@ -354,6 +354,13 @@
         data: e.data.data
       });
     }
+    
+    if (e.data?.type === '__SYNC_TAB__') {
+      chrome.runtime.sendMessage({
+        type: 'SYNC_TAB',
+        data: e.data.data
+      });
+    }
   });
 
   // Relay from Popup to Injector
@@ -367,6 +374,12 @@
       console.log('[Bridge] Broadcasting __SET_PROMPT__ to window');
       window.postMessage({
         type: '__SET_PROMPT__',
+        data: request.data
+      }, '*');
+    }
+    if (request.type === 'SWITCH_TAB') {
+      window.postMessage({
+        type: '__SWITCH_TAB__',
         data: request.data
       }, '*');
     }

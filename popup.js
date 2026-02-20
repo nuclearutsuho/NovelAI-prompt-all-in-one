@@ -117,8 +117,8 @@ function initUI() {
   const tabPositive = document.getElementById('tab-positive');
   const tabNegative = document.getElementById('tab-negative');
 
-  tabPositive.addEventListener('click', () => switchTab('positive'));
-  tabNegative.addEventListener('click', () => switchTab('negative'));
+  tabPositive.addEventListener('click', (e) => switchTab('positive', e.isTrusted));
+  tabNegative.addEventListener('click', (e) => switchTab('negative', e.isTrusted));
 
   // Editor
   const container = document.getElementById('editor-container');
@@ -317,7 +317,7 @@ function initUI() {
   closeSettings.addEventListener('click', () => { modal.style.display = 'none'; });
 }
 
-function switchTab(mode) {
+function switchTab(mode, fromUserClick = false) {
   currentMode = mode;
 
   document.getElementById('tab-positive').classList.toggle('active', mode === 'positive');
@@ -327,6 +327,18 @@ function switchTab(mode) {
     editor.setTags(positiveTags);
   } else {
     editor.setTags(negativeTags);
+  }
+
+  // Notify webpage about the tab switch
+  if (fromUserClick) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'SWITCH_TAB',
+          data: mode
+        });
+      }
+    });
   }
 }
 
@@ -579,6 +591,13 @@ function initCommunication() {
       if (changed) {
         editor.setTags(currentMode === 'positive' ? positiveTags : negativeTags);
         syncToPage();
+      }
+    }
+
+    if (msg.type === 'SYNC_TAB') {
+      if (currentMode !== msg.data) {
+        // Trigger tab switch without firing back (false for fromUserClick)
+        switchTab(msg.data, false);
       }
     }
   });
