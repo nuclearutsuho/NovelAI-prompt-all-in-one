@@ -24,6 +24,7 @@
     {
       "resources": [
         "injector.js",
+        "auto-clicker.js",
         "dictionary.csv",
         "popup.html",
         "popup.js",

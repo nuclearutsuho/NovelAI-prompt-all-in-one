@@ -29,6 +29,12 @@
   };
   (document.head || document.documentElement).appendChild(s);
 
+  // 2.5) inject auto-clicker to page context
+  const ac = document.createElement('script');
+  ac.src = chrome.runtime.getURL('auto-clicker.js');
+  ac.onload = () => ac.remove();
+  (document.head || document.documentElement).appendChild(ac);
+
   // 3) inject manager panel (runs in Content Script context)
   const tabSessionId = Math.random().toString(36).substring(2, 11);
 

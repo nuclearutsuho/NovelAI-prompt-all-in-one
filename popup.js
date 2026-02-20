@@ -11,6 +11,76 @@ let rawNegative = '';
 let positiveTags = [];
 let negativeTags = [];
 
+// Language Support
+const translations = {
+  en: {
+    tab_positive: "Prompt",
+    tab_negative: "Undesired Content",
+    status_ready: "Ready",
+    loading: "Connecting to NovelAI...",
+    input_placeholder: "Enter tags here...",
+    btn_add: "Add",
+    settings_title: "Settings",
+    setting_preserve: "Preserve Original img prompts on Enhance",
+    setting_preserve_desc: "Uncheck this to randomize enhance prompts.",
+    setting_alt_autocomplete: "Full Alternative Danbooru Autocomplete",
+    setting_alt_autocomplete_desc: "a1111 WebUI style Danbooru Autocomplete.",
+    setting_trigger_keys: "Trigger Keys:",
+    setting_space: "Space",
+    setting_tab: "Tab",
+    status_linked: "Linked",
+    btn_library: "Resource Center",
+    btn_settings: "Settings",
+    tag_help_tooltip: "Left-click: Edit | Double-click: Toggle | Drag: Sort",
+    setting_render_newlines: "Render Real Newlines",
+    setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags."
+  },
+  zh: {
+    tab_positive: "正向提示词",
+    tab_negative: "排除内容",
+    status_ready: "就绪",
+    loading: "正在连接 NovelAI...",
+    input_placeholder: "输入标签...",
+    btn_add: "添加",
+    settings_title: "设置",
+    setting_preserve: "增强时保留原始提示词",
+    setting_preserve_desc: "取消勾选以随机化增强提示词。",
+    setting_alt_autocomplete: "完整 Danbooru 自动补全",
+    setting_alt_autocomplete_desc: "A1111 WebUI 风格的补全逻辑。",
+    setting_trigger_keys: "触发按键:",
+    setting_space: "空格",
+    setting_tab: "Tab 键",
+    status_linked: "连接正常",
+    btn_library: "资源中心",
+    btn_settings: "设置",
+    tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
+    setting_render_newlines: "渲染真实换行",
+    setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。"
+  },
+  jp: {
+    tab_positive: "プロンプト",
+    tab_negative: "除外したい内容",
+    status_ready: "準備完了",
+    loading: "NovelAIに接続中...",
+    input_placeholder: "タグを入力...",
+    btn_add: "追加",
+    settings_title: "設定",
+    setting_preserve: "強化時に元のプロンプトを保持",
+    setting_preserve_desc: "無効にすると強化時のプロンプトがランダム化されます。",
+    setting_alt_autocomplete: "Danbooru オートコンプリート",
+    setting_alt_autocomplete_desc: "A1111 WebUI スタイルのオートコンプリート。",
+    setting_trigger_keys: "トリガーキー:",
+    setting_space: "スペース",
+    setting_tab: "タブ",
+    status_linked: "接続済み",
+    btn_library: "リソースセンター",
+    btn_settings: "設定",
+    tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え"
+  }
+};
+
+let currentLang = 'en';
+
 document.addEventListener('DOMContentLoaded', async () => {
   initUI();
   await initData();
@@ -110,75 +180,7 @@ function initUI() {
     chrome.tabs.create({ url: 'sync.html' });
   });
 
-  // Language Support
-  const translations = {
-    en: {
-      tab_positive: "Prompt",
-      tab_negative: "Undesired Content",
-      status_ready: "Ready",
-      loading: "Connecting to NovelAI...",
-      input_placeholder: "Enter tags here...",
-      btn_add: "Add",
-      settings_title: "Settings",
-      setting_preserve: "Preserve Original img prompts on Enhance",
-      setting_preserve_desc: "Uncheck this to randomize enhance prompts.",
-      setting_alt_autocomplete: "Full Alternative Danbooru Autocomplete",
-      setting_alt_autocomplete_desc: "a1111 WebUI style Danbooru Autocomplete.",
-      setting_trigger_keys: "Trigger Keys:",
-      setting_space: "Space",
-      setting_tab: "Tab",
-      status_linked: "Linked",
-      btn_library: "Resource Center",
-      btn_settings: "Settings",
-      tag_help_tooltip: "Left-click: Edit | Double-click: Toggle | Drag: Sort",
-      setting_render_newlines: "Render Real Newlines",
-      setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags."
-    },
-    zh: {
-      tab_positive: "正向提示词",
-      tab_negative: "排除内容",
-      status_ready: "就绪",
-      loading: "正在连接 NovelAI...",
-      input_placeholder: "输入标签...",
-      btn_add: "添加",
-      settings_title: "设置",
-      setting_preserve: "增强时保留原始提示词",
-      setting_preserve_desc: "取消勾选以随机化增强提示词。",
-      setting_alt_autocomplete: "完整 Danbooru 自动补全",
-      setting_alt_autocomplete_desc: "A1111 WebUI 风格的补全逻辑。",
-      setting_trigger_keys: "触发按键:",
-      setting_space: "空格",
-      setting_tab: "Tab 键",
-      status_linked: "连接正常",
-      btn_library: "资源中心",
-      btn_settings: "设置",
-      tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
-      setting_render_newlines: "渲染真实换行",
-      setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。"
-    },
-    jp: {
-      tab_positive: "プロンプト",
-      tab_negative: "除外したい内容",
-      status_ready: "準備完了",
-      loading: "NovelAIに接続中...",
-      input_placeholder: "タグを入力...",
-      btn_add: "追加",
-      settings_title: "設定",
-      setting_preserve: "強化時に元のプロンプトを保持",
-      setting_preserve_desc: "無効にすると強化時のプロンプトがランダム化されます。",
-      setting_alt_autocomplete: "Danbooru オートコンプリート",
-      setting_alt_autocomplete_desc: "A1111 WebUI スタイルのオートコンプリート。",
-      setting_trigger_keys: "トリガーキー:",
-      setting_space: "スペース",
-      setting_tab: "タブ",
-      status_linked: "接続済み",
-      btn_library: "リソースセンター",
-      btn_settings: "設定",
-      tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え"
-    }
-  };
-
-  let currentLang = 'en';
+  // Language Support translations now at top level
 
   const applyTranslations = (lang) => {
     currentLang = lang;
