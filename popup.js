@@ -4,7 +4,6 @@ import Autocomplete from './lib/Autocomplete.js';
 
 let editor;
 let autocomplete;
-let sessionId = new URLSearchParams(window.location.search).get('sid');
 let currentMode = 'positive'; // 'positive' | 'negative'
 let rawPositive = '';
 let rawNegative = '';
@@ -459,11 +458,6 @@ function normalizePrompt(str) {
 
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // If msg has a sid, it MUST match ours.
-    // If we have no sessionId (top-level popup), we ignore messages with sid.
-    if (msg.sid && msg.sid !== sessionId) return;
-    if (!msg.sid && sessionId) return; // We are in an iframe but message is for top-level popup
-
     if (msg.type === 'RETURN_PROMPT') {
       const { positive, negative } = msg.data;
 
@@ -577,26 +571,25 @@ function requestPromptWithRetry(retries, delayMs) {
 }
 
 function requestPrompt() {
-  console.log(`[Popup][${sessionId || 'Global'}] Sending GET_PROMPT to active tab`);
+  console.log('[Popup] Sending GET_PROMPT to active tab');
 
   // Method 1: Target active tab (Standard Popup)
-  // If we are the top-level popup (no sessionId), target the active tab.
-  if (!sessionId) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        console.log('[Popup] Target tab ID:', tabs[0].id);
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_PROMPT' });
-      } else {
-        console.warn('[Popup] No active tab found');
-      }
-    });
-  }
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      console.log('[Popup] Target tab ID:', tabs[0].id);
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_PROMPT' });
+    } else {
+      console.warn('[Popup] No active tab found');
+    }
+  });
 
   // Method 2: Broadcast to Runtime (Manager Panel / Iframe / DevTools)
+  // If Popup is in an iframe, tabs.query might fail or return the wrong thing.
   // Bridge.js listens to runtime.onMessage too.
-  chrome.runtime.sendMessage({ type: 'GET_PROMPT', sid: sessionId }, (response) => {
+  chrome.runtime.sendMessage({ type: 'GET_PROMPT' }, (response) => {
     if (chrome.runtime.lastError) {
-      // Ignore
+      // Ignore "Could not establish connection" if no background listener
+      // console.log('Runtime broadcast error (expected if no BG listener):', chrome.runtime.lastError);
     }
   });
 }
@@ -609,28 +602,15 @@ function syncToPage() {
   lastSentPositive = posStr;
   lastSentNegative = negStr;
 
-  // Method 1: If we have SID, broadcast to runtime (Bridge.js of specific tab will pick it up)
-  if (sessionId) {
-    chrome.runtime.sendMessage({
-      type: 'SET_PROMPT',
-      sid: sessionId,
-      data: {
-        positive: posStr,
-        negative: negStr
-      }
-    });
-  } else {
-    // Method 2: Standard Popup targets active tab
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          type: 'SET_PROMPT',
-          data: {
-            positive: posStr,
-            negative: negStr
-          }
-        });
-      }
-    });
-  }
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'SET_PROMPT',
+        data: {
+          positive: posStr,
+          negative: negStr
+        }
+      });
+    }
+  });
 }

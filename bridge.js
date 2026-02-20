@@ -36,14 +36,12 @@
   (document.head || document.documentElement).appendChild(ac);
 
   // 3) inject manager panel (runs in Content Script context)
-  const tabSessionId = Math.random().toString(36).substring(2, 11);
-
   function injectManagerPanel() {
     // 避免重复注入
     if (document.getElementById('wildcard-manager-container')) return;
 
     const STORAGE_KEY = 'wildcardPanelState';
-    const popupUrl = chrome.runtime.getURL('popup.html') + `?sid=${tabSessionId}`;
+    const popupUrl = chrome.runtime.getURL('popup.html');
     const cssUrl = chrome.runtime.getURL('manager-panel.css');
 
     // Inject CSS
@@ -349,11 +347,10 @@
     }
 
     if (e.data?.type === '__RETURN_PROMPT__') {
-      console.log(`[Bridge][${tabSessionId}] Received __RETURN_PROMPT__ from injector, relaying to popup`);
+      console.log('[Bridge] Received __RETURN_PROMPT__ from injector, relaying to popup');
       // Relay back to popup
       chrome.runtime.sendMessage({
         type: 'RETURN_PROMPT',
-        sid: tabSessionId,
         data: e.data.data
       });
     }
@@ -361,20 +358,13 @@
 
   // Relay from Popup to Injector
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    // Filter by SID for embedded panels
-    // If request has no SID, it's from the global popup, only process if we are the active tab.
-    if (request.sid && request.sid !== tabSessionId) return;
-    
-    // If it's a global popup (no sid), we rely on chrome.tabs.sendMessage targeting us specifically,
-    // OR we check if we think we are active (though background-to-bridge broadcasts are rare now).
-
     // console.log('[Bridge] Received runtime message:', request);
     if (request.type === 'GET_PROMPT') {
-      console.log(`[Bridge][${tabSessionId}] Broadcasting __GET_PROMPT__ to window`);
+      console.log('[Bridge] Broadcasting __GET_PROMPT__ to window');
       window.postMessage({ type: '__GET_PROMPT__' }, '*');
     }
     if (request.type === 'SET_PROMPT') {
-      console.log(`[Bridge][${tabSessionId}] Broadcasting __SET_PROMPT__ to window`);
+      console.log('[Bridge] Broadcasting __SET_PROMPT__ to window');
       window.postMessage({
         type: '__SET_PROMPT__',
         data: request.data
