@@ -136,11 +136,20 @@ function initUI() {
   const input = document.getElementById('quick-input');
   const btnAdd = document.getElementById('btn-add');
   const btnQuickWildcard = document.getElementById('btn-quick-wildcard');
+  const btnQuickSeqWildcard = document.getElementById('btn-quick-seq-wildcard');
   const btnQuickRandom = document.getElementById('btn-quick-random');
 
   if (btnQuickWildcard) {
     btnQuickWildcard.addEventListener('click', () => {
       input.value += '__';
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  if (btnQuickSeqWildcard) {
+    btnQuickSeqWildcard.addEventListener('click', () => {
+      input.value += 's__';
       input.focus();
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
