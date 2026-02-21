@@ -104,7 +104,7 @@
       align-items: center;
     }
 
-    #quick-input {
+    #quick-input, .char-quick-input {
       flex: 1;
       height: 24px;
       /* Slightly adjusted for standard input feel */
@@ -122,7 +122,7 @@
       align-items: center;
     }
 
-    #quick-input:focus {
+    #quick-input:focus, .char-quick-input:focus {
       border-color: #818cf8;
     }
 
@@ -146,7 +146,7 @@
       background: #4a4a6a;
     }
 
-    #btn-add {
+    #btn-add, .primary-add-btn {
       background: #818cf8;
       color: #fff;
       border: none;
@@ -161,7 +161,7 @@
       justify-content: center;
     }
 
-    #btn-add:hover {
+    #btn-add:hover, .primary-add-btn:hover {
       background: #6366f1;
     }
 
@@ -233,7 +233,7 @@
       <button id="btn-quick-wildcard" class="quick-btn" title="Wildcard" data-i18n-title="btn_quick_wildcard">随机抽取</button>
       <button id="btn-quick-seq-wildcard" class="quick-btn" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard">顺序抽取</button>
       <button id="btn-quick-random" class="quick-btn" title="Random Choice" data-i18n-title="btn_quick_random">动态抽取</button>
-      <button id="btn-add" data-i18n="btn_add">Add</button>
+      <button id="btn-add" class="primary-add-btn" data-i18n="btn_add">Add</button>
     </div>
 
     <div id="editor-container">
@@ -242,7 +242,39 @@
         Connecting to NovelAI...
       </div>
     </div>
+
+    <!-- Panel Resizer -->
+    <div id="resizer"></div>
+
+    <!-- Character Prompts Section -->
+    <div id="character-prompts-section">
+      <div class="char-section-header">
+        <span class="char-title" data-i18n="char_title">Character Prompts</span>
+        <button id="btn-add-char" class="quick-btn" style="display:block;" data-i18n="btn_add_char">+ Add Character</button>
+      </div>
+      <div id="char-list-container"></div>
+    </div>
   </div>
+
+  <template id="char-prompt-template">
+    <div class="char-prompt-block">
+      <div class="char-input-area">
+        <div class="char-pn-toggle">
+          <button class="char-pn-btn active char-tab-pos" title="Positive Prompts">+</button>
+          <button class="char-pn-btn char-tab-neg" title="Undesired Content">-</button>
+        </div>
+        <input type="text" class="char-quick-input" placeholder="Enter tags here...">
+        <button class="quick-btn char-btn-wildcard" title="Wildcard">随机抽取</button>
+        <button class="quick-btn char-btn-seq-wildcard" title="Sequential Wildcard">顺序抽取</button>
+        <button class="quick-btn char-btn-random" title="Random Choice">动态抽取</button>
+        <button class="primary-add-btn">Add</button>
+        <button class="char-delete" title="Remove Character">×</button>
+      </div>
+      <div class="char-editor-container">
+        <!-- Tag Editor mounts here -->
+      </div>
+    </div>
+  </template>
 
   <div id="settings-modal">
     <div class="modal-content">

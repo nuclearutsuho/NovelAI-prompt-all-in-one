@@ -9,6 +9,10 @@ let rawPositive = '';
 let rawNegative = '';
 let positiveTags = [];
 let negativeTags = [];
+// State now stores an object per character with both positive and negative prompts
+let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", negTags: [], gender: "other" }]
+let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
+let maxCharacters = 6;
 
 // Language Support
 const translations = {
@@ -34,7 +38,9 @@ const translations = {
     setting_render_newlines: "Render Real Newlines",
     setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags.",
     btn_quick_wildcard: "Insert Wildcard",
-    btn_quick_random: "Insert Random"
+    btn_quick_random: "Insert Random",
+    btn_add_char: "+ Add Character",
+    char_title: "Character Prompts"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -58,7 +64,9 @@ const translations = {
     setting_render_newlines: "渲染真实换行",
     setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。",
     btn_quick_wildcard: "通配符",
-    btn_quick_random: "随机选择"
+    btn_quick_random: "随机选择",
+    btn_add_char: "+ 增加角色",
+    char_title: "角色提示词"
   },
   jp: {
     tab_positive: "プロンプト",
@@ -80,7 +88,9 @@ const translations = {
     btn_settings: "設定",
     tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え",
     btn_quick_wildcard: "ワイルドカード",
-    btn_quick_random: "ランダム選択"
+    btn_quick_random: "ランダム選択",
+    btn_add_char: "+ キャラクター追加",
+    char_title: "キャラクタープロンプト"
   }
 };
 
@@ -108,6 +118,214 @@ async function initData() {
   });
 }
 
+// === Character Prompts Logic ===
+function updateCharAddButton() {
+  const btnAddChar = document.getElementById('btn-add-char');
+  if (btnAddChar) {
+    btnAddChar.style.display = characterPromptsData.length < maxCharacters ? 'block' : 'none';
+  }
+}
+
+function syncCharactersToPage() {
+  // Phase 1 Mock Sync: 只在本地做日志，不发送跨组件消息
+  console.log('[Phase 1] Local sync triggered. Current Data:\n', JSON.parse(JSON.stringify(characterPromptsData)));
+}
+
+function createCharacterEditor(index, initialPos = '', initialNeg = '') {
+  const template = document.getElementById('char-prompt-template');
+  const container = document.getElementById('char-list-container');
+  
+  if (!template || !container) return;
+  
+  const clone = template.content.cloneNode(true);
+  const block = clone.querySelector('.char-prompt-block');
+  const inputArea = clone.querySelector('.char-input-area');
+
+  // Insert Character Index Label at the start
+  const indexLabel = document.createElement('span');
+  indexLabel.className = 'char-index-label';
+  indexLabel.textContent = '#' + (index + 1);
+  inputArea.insertBefore(indexLabel, inputArea.firstChild);
+
+  const editorContainer = clone.querySelector('.char-editor-container');
+  const input = clone.querySelector('.char-quick-input');
+  const btnAdd = clone.querySelector('.primary-add-btn');
+  const btnWildcard = clone.querySelector('.char-btn-wildcard');
+  const btnSeqWildcard = clone.querySelector('.char-btn-seq-wildcard');
+  const btnRandom = clone.querySelector('.char-btn-random');
+  const deleteBtn = clone.querySelector('.char-delete');
+
+  // Apply translations directly to the new clone components
+  const dict = translations[currentLang] || translations.en;
+  if(btnAdd && dict.btn_add) btnAdd.textContent = dict.btn_add;
+  if(input && dict.input_placeholder) input.placeholder = dict.input_placeholder;
+  if(btnWildcard && dict.btn_quick_wildcard) {
+      btnWildcard.title = dict.btn_quick_wildcard;
+      btnWildcard.textContent = dict.btn_quick_wildcard;
+  }
+  if(btnSeqWildcard && dict.btn_quick_seq_wildcard) {
+      btnSeqWildcard.title = dict.btn_quick_seq_wildcard;
+      btnSeqWildcard.textContent = dict.btn_quick_seq_wildcard;
+  }
+  if(btnRandom && dict.btn_quick_random) {
+      btnRandom.title = dict.btn_quick_random;
+      btnRandom.textContent = dict.btn_quick_random;
+  }
+
+  // Initialize data if not fully set
+  if (!characterPromptsData[index]) {
+    characterPromptsData[index] = { 
+        posPrompt: initialPos, 
+        posTags: parsePromptToTags(initialPos), 
+        negPrompt: initialNeg,
+        negTags: parsePromptToTags(initialNeg),
+        gender: 'other' 
+    };
+  } else {
+    // Force 'other' explicitly
+    characterPromptsData[index].gender = 'other';
+  }
+
+  // Set up Delete
+  deleteBtn.addEventListener('click', () => {
+    characterPromptsData.splice(index, 1);
+    const editorObj = charEditors[index];
+    if (editorObj && editorObj.editor && typeof editorObj.editor.destroy === 'function') {
+        try { editorObj.editor.destroy(); } catch(e){}
+    }
+    charEditors.splice(index, 1);
+    rebuildCharacterPromptsUI();
+    syncCharactersToPage();
+  });
+
+  // Set up Editor
+  const charEditor = new TagEditor(editorContainer, {
+    onChange: (tags) => {
+      const active = charEditors[index]?.activeTab || 'pos';
+      if (active === 'pos') {
+          characterPromptsData[index].posTags = tags;
+          characterPromptsData[index].posPrompt = tagsToString(tags);
+      } else {
+          characterPromptsData[index].negTags = tags;
+          characterPromptsData[index].negPrompt = tagsToString(tags);
+      }
+      syncCharactersToPage();
+    }
+  });
+
+  // Track the state wrapper
+  charEditors[index] = { editor: charEditor, activeTab: 'pos' };
+
+  // Set up Pos/Neg Toggles
+  const btnPos = clone.querySelector('.char-tab-pos');
+  const btnNeg = clone.querySelector('.char-tab-neg');
+
+  const switchTab = (tab) => {
+    charEditors[index].activeTab = tab;
+    // Update active UI classes
+    if (tab === 'pos') {
+        btnPos.classList.add('active');
+        btnNeg.classList.remove('active');
+        editorContainer.classList.remove('negative-mode');
+        // Load pos tags
+        charEditor.setTags(characterPromptsData[index].posTags || []);
+    } else {
+        btnNeg.classList.add('active');
+        btnPos.classList.remove('active');
+        editorContainer.classList.add('negative-mode');
+        // Load neg tags
+        charEditor.setTags(characterPromptsData[index].negTags || []);
+    }
+  };
+
+  btnPos.addEventListener('click', () => switchTab('pos'));
+  btnNeg.addEventListener('click', () => switchTab('neg'));
+
+  // Attach autocomplete logic so TagEditor can render translations and weights
+  if (autocomplete) {
+    charEditor.bindAutocomplete(autocomplete);
+  }
+
+  // Initial load
+  switchTab('pos');
+
+  // Bind autocomplete to this new input
+  autocomplete.attach(input, (val) => {
+    const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
+    const cleanTags = newTags.map(t => {
+      const isWildcard = /^(s|S)?(\d+)?__.*__$/.test(t);
+      return isWildcard ? t : t.replace(/_/g, ' ');
+    });
+    // Use local closure reference 'charEditor' not the mutable charEditors[]
+    cleanTags.forEach(t => charEditor.addTag(t));
+    input.value = '';
+    input.focus();
+  });
+
+  // Attach buttons
+  const addTag = () => {
+    const val = input.value.trim();
+    if (val) {
+      const newTags = val.split(',').map(t => t.trim()).filter(Boolean);
+      const cleanTags = newTags.map(t => {
+        const isWildcard = /^(s|S)?(\d+)?__.*__$/.test(t);
+        return isWildcard ? t : t.replace(/_/g, ' ');
+      });
+      // Use local closure reference 'charEditor'
+      cleanTags.forEach(t => charEditor.addTag(t));
+      input.value = '';
+    }
+    if (autocomplete) autocomplete.hide();
+  };
+
+  btnAdd.addEventListener('click', addTag);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      setTimeout(() => { if (input.value.trim()) addTag(); }, 100);
+    }
+  });
+
+  btnWildcard.addEventListener('mousedown', (e) => e.preventDefault());
+  btnWildcard.addEventListener('click', () => {
+    input.value += '__';
+    input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  btnSeqWildcard.addEventListener('mousedown', (e) => e.preventDefault());
+  btnSeqWildcard.addEventListener('click', () => {
+    input.value += 's__';
+    input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  btnRandom.addEventListener('click', () => {
+    // Use local closure reference 'charEditor'
+    charEditor.addTag('||');
+    input.focus();
+  });
+
+  container.appendChild(block);
+  charEditors[index] = charEditor;
+}
+
+function rebuildCharacterPromptsUI() {
+  const container = document.getElementById('char-list-container');
+  if (!container) return;
+  
+  // Clear existing
+  container.innerHTML = '';
+  charEditors = [];
+
+  // Re-render
+  characterPromptsData.forEach((charData, index) => {
+    createCharacterEditor(index, charData.posPrompt, charData.negPrompt);
+  });
+  
+  updateCharAddButton();
+}
+
 function initUI() {
   // Autocomplete
   autocomplete = new Autocomplete();
@@ -131,6 +349,62 @@ function initUI() {
 
   // Bind Autocomplete to Editor (for inline edit)
   editor.bindAutocomplete(autocomplete);
+
+  // Character Prompt Add Button
+  const btnAddChar = document.getElementById('btn-add-char');
+  if (btnAddChar) {
+    btnAddChar.addEventListener('click', () => {
+      if (characterPromptsData.length < maxCharacters) {
+        characterPromptsData.push({ 
+            posPrompt: '', posTags: [], 
+            negPrompt: '', negTags: [], 
+            gender: 'other' 
+        });
+        rebuildCharacterPromptsUI();
+        syncCharactersToPage();
+      }
+    });
+  }
+
+  // Resizer Logic
+  const resizer = document.getElementById('resizer');
+  const charSection = document.getElementById('character-prompts-section');
+  if (resizer && charSection) {
+    let startY = 0;
+    let startHeight = 0;
+
+    const onMouseMove = (e) => {
+      // Calculate delta relative to movement UPWARD
+      const dy = startY - e.clientY;
+      const newHeight = Math.max(80, startHeight + dy);
+      charSection.style.height = `${newHeight}px`;
+    };
+
+    const onMouseUp = () => {
+      document.body.style.cursor = '';
+      resizer.classList.remove('active');
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      // Save user preference
+      chrome.storage.local.set({ charSectionHeight: charSection.style.height });
+    };
+
+    resizer.addEventListener('mousedown', (e) => {
+      startY = e.clientY;
+      startHeight = charSection.getBoundingClientRect().height;
+      document.body.style.cursor = 'row-resize';
+      resizer.classList.add('active');
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+    
+    // Initialize saved height
+    chrome.storage.local.get(['charSectionHeight'], (data) => {
+        if(data.charSectionHeight) {
+            charSection.style.height = data.charSectionHeight;
+        }
+    });
+  }
 
   // Input Area
   const input = document.getElementById('quick-input');

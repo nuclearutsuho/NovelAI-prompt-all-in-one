@@ -583,16 +583,51 @@
 }
 
 /* Autocomplete (reused) */
-.autocomplete-dropdown {
+.autocomplete-wrapper {
     position: absolute;
     background: #2a2a3e;
     border: 1px solid #4a4a6a;
     border-radius: 4px;
-    max-height: 240px;
-    overflow-y: auto;
     z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     min-width: 200px;
+    /* Flex is applied dynamically in JS */
+}
+
+.autocomplete-dropdown {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    /* Max-height controlled by JS / Resizer */
+    max-height: 240px; 
+    overflow-y: auto;
+}
+
+.autocomplete-resizer {
+    height: 8px;
+    background: #3a3a55;
+    cursor: row-resize;
+    position: relative;
+    border-top: 1px solid #4a4a6a;
+    border-bottom: 1px dashed #4a4a6a;
+    flex-shrink: 0;
+}
+
+.autocomplete-resizer:hover {
+    background: #4a4a6a;
+}
+
+.autocomplete-resizer::after {
+    content: "===";
+    color: #888;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 8px;
+    letter-spacing: -1px;
+    pointer-events: none;
 }
 
 /* Newline tag specific styles */
@@ -739,4 +774,180 @@
 
 .hide-companion-drag {
     display: none !important;
+}
+
+/* ========================================================================= */
+/* Character Prompts & Resizer */
+/* ========================================================================= */
+
+#resizer {
+    height: 6px;
+    background: #2a2a3e;
+    border-top: 1px solid #4a4a6a;
+    border-bottom: 1px solid #4a4a6a;
+    cursor: row-resize;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 10;
+    transition: background 0.2s;
+}
+
+#resizer:hover, #resizer.active {
+    background: #4a4a6a;
+}
+
+#resizer::after {
+    content: "||";
+    color: #888;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(90deg);
+    font-size: 10px;
+    pointer-events: none;
+    letter-spacing: -1px;
+}
+
+#character-prompts-section {
+    background: #181825;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    /* Default height, can be overwritten by JS/inline style */
+    height: 200px;
+    min-height: 80px;
+}
+
+.char-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    flex-shrink: 0;
+}
+
+.char-title {
+    font-weight: bold;
+    color: #a78bfa;
+    font-size: 14px;
+}
+
+#char-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 8px 8px 8px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.char-prompt-block {
+    background: #181825;
+    border: 1px solid #4a4a6a;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    /* Allow to grow into empty space (1) but never shrink (0) below its text content */
+    flex: 1 0 auto;
+}
+
+.char-input-area {
+    padding: 4px 6px;
+    display: flex;
+    gap: 6px;
+    background: #2a2a3e;
+    border-bottom: 1px solid #4a4a6a;
+    align-items: center;
+}
+
+.char-index-label {
+    font-size: 11px;
+    font-weight: 800;
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.15);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 2px;
+    user-select: none;
+    font-family: monospace;
+}
+
+.char-pn-toggle {
+    display: flex;
+    background: #181825;
+    border-radius: 4px;
+    border: 1px solid #4a4a6a;
+    overflow: hidden;
+    height: 24px;
+}
+
+.char-pn-btn {
+    background: transparent;
+    border: none;
+    color: #888;
+    width: 20px;
+    cursor: pointer;
+    font-weight: 900;
+    font-size: 12px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.char-pn-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+}
+
+.char-tab-pos.active {
+    background: #4caf50;
+    color: #fff;
+}
+
+.char-tab-neg.active {
+    background: #ef4444;
+    color: #fff;
+}
+
+.char-delete {
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 2px;
+    border-radius: 4px;
+    transition: background 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+}
+
+.char-delete:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.char-editor-container {
+    padding: 4px;
+    background: #181825;
+    min-height: 48px;
+    /* Fill any remaining space within the char-prompt-block when it grows */
+    flex: 1 0 auto;
+    transition: background-color 0.2s;
+}
+
+/* Red tint when negative tab is active */
+.char-editor-container.negative-mode {
+    background: rgba(239, 68, 68, 0.05);
+}
+
+/* Adjust main editor container to allow scrolling properly with characters */
+#editor-container {
+    flex-shrink: 0;
+    min-height: 150px;
 }
