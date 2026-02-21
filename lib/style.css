@@ -253,6 +253,7 @@
 /* Suppress toolbars during drag or marquee selection */
 .tag-editor-container.is-dragging .tag-controls,
 .tag-editor-container.is-selecting .tag-controls,
+.sortable-chosen .tag-controls,
 .sortable-drag .tag-controls,
 .sortable-fallback .tag-controls,
 .sortable-ghost .tag-controls,

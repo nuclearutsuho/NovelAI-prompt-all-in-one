@@ -140,6 +140,7 @@ function initUI() {
   const btnQuickRandom = document.getElementById('btn-quick-random');
 
   if (btnQuickWildcard) {
+    btnQuickWildcard.addEventListener('mousedown', (e) => e.preventDefault());
     btnQuickWildcard.addEventListener('click', () => {
       input.value += '__';
       input.focus();
@@ -148,6 +149,7 @@ function initUI() {
   }
 
   if (btnQuickSeqWildcard) {
+    btnQuickSeqWildcard.addEventListener('mousedown', (e) => e.preventDefault());
     btnQuickSeqWildcard.addEventListener('click', () => {
       input.value += 's__';
       input.focus();
