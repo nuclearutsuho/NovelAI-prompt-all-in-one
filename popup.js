@@ -17,80 +17,133 @@ let maxCharacters = 6;
 // Language Support
 const translations = {
   en: {
-    tab_positive: "Prompt",
-    tab_negative: "Undesired Content",
+    tab_positive: "Positive Prompts",
+    tab_negative: "Negative Prompts",
     status_ready: "Ready",
     loading: "Connecting to NovelAI...",
-    input_placeholder: "Enter tags here...",
+    input_placeholder: "Enter tag...",
     btn_add: "Add",
     settings_title: "Settings",
-    setting_preserve: "Preserve Original img prompts on Enhance",
-    setting_preserve_desc: "Uncheck this to randomize enhance prompts.",
-    setting_alt_autocomplete: "Full Alternative Danbooru Autocomplete",
-    setting_alt_autocomplete_desc: "a1111 WebUI style Danbooru Autocomplete.",
-    setting_trigger_keys: "Trigger Keys:",
+    setting_preserve: "Keep Prompts Same on Enhance (img2img)",
+    setting_preserve_desc: "When checked, Enhance (img2img) temporarily disables wildcards, keeping prompts identical to the input image.",
+    setting_alt_autocomplete: "Enable Plugin Danbooru Autocomplete",
+    setting_alt_autocomplete_desc: "Use A1111 WebUI style autocomplete UI and logic.",
+    setting_trigger_keys: "Webpage Native Input Autocomplete Trigger Keys:",
     setting_space: "Space",
     setting_tab: "Tab",
-    status_linked: "Linked",
+    status_linked: "Connection Normal",
     btn_library: "Resource Center",
     btn_settings: "Settings",
-    tag_help_tooltip: "Left-click: Edit | Double-click: Toggle | Drag: Sort",
-    setting_render_newlines: "Render Real Newlines",
-    setting_render_newlines_desc: "Force actual line breaks in the UI at newline tags.",
-    btn_quick_wildcard: "Insert Wildcard",
-    btn_quick_random: "Insert Random",
+    tag_help_tooltip: "Left-Click: Edit | Double-Click: Disable/Enable | Drag: Reorder",
+    setting_render_newlines: "Render Newline Separators",
+    setting_render_newlines_desc: "Show a dividing line when newline tags are encountered in the UI.",
+    btn_quick_wildcard: "Random Draw",
+    btn_quick_seq_wildcard: "Sequential Draw",
+    btn_quick_random: "Dynamic Draw",
     btn_add_char: "+ Add Character",
-    char_title: "Character Prompts"
+    char_title: "Character Prompts",
+    btn_remove_char: "Remove Character",
+    dyn_min: "Min Picks",
+    dyn_max: "Max Picks",
+    dyn_sep: "Custom Separator",
+    btn_fav: "Favorite",
+    btn_copy: "Copy This Tag",
+    btn_dec_weight: "Decrease Weight",
+    btn_edit_weight: "Edit Weight",
+    btn_inc_weight: "Increase Weight",
+    btn_dec_dyn_weight: "Decrease Draw Probability",
+    btn_edit_dyn_weight: "Edit Draw Probability",
+    btn_inc_dyn_weight: "Increase Draw Probability",
+    btn_split: "Split into Independent Tags",
+    btn_merge: "Merge into Group",
+    btn_toggle: "Enable/Disable",
+    btn_del: "Delete"
   },
   zh: {
     tab_positive: "正向提示词",
-    tab_negative: "排除内容",
+    tab_negative: "负向提示词",
     status_ready: "就绪",
     loading: "正在连接 NovelAI...",
-    input_placeholder: "输入标签...",
+    input_placeholder: "输入tag...",
     btn_add: "添加",
     settings_title: "设置",
-    setting_preserve: "增强时保留原始提示词",
-    setting_preserve_desc: "取消勾选以随机化增强提示词。",
-    setting_alt_autocomplete: "完整 Danbooru 自动补全",
-    setting_alt_autocomplete_desc: "A1111 WebUI 风格的补全逻辑。",
-    setting_trigger_keys: "触发按键:",
+    setting_preserve: "图生图(Enhance)时使用相同提示词",
+    setting_preserve_desc: "勾选此选项时,图生图(Enhance)时暂时禁用通配符功能,通配符固定使用与输入图像相同的提示词。",
+    setting_alt_autocomplete: "开启插件 Danbooru 自动补全",
+    setting_alt_autocomplete_desc: "使用A1111 WebUI 风格的补全UI与逻辑。",
+    setting_trigger_keys: "网页原生输入框自动补全触发按键:",
     setting_space: "空格",
     setting_tab: "Tab 键",
     status_linked: "连接正常",
     btn_library: "资源中心",
     btn_settings: "设置",
     tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
-    setting_render_newlines: "渲染真实换行",
-    setting_render_newlines_desc: "在界面中遇到换行标签时强制换行显示。",
-    btn_quick_wildcard: "通配符",
-    btn_quick_random: "随机选择",
+    setting_render_newlines: "换行符渲染分隔线",
+    setting_render_newlines_desc: "在界面中遇到换行标签时显示分隔线。",
+    btn_quick_wildcard: "随机抽取",
+    btn_quick_seq_wildcard: "顺序抽取",
+    btn_quick_random: "动态抽取",
     btn_add_char: "+ 增加角色",
-    char_title: "角色提示词"
+    char_title: "角色提示词",
+    btn_remove_char: "删除角色",
+    dyn_min: "最小选取数",
+    dyn_max: "最大选取数",
+    dyn_sep: "自定义分隔符",
+    btn_fav: "收藏",
+    btn_copy: "复制此 Tag",
+    btn_dec_weight: "降低权重",
+    btn_edit_weight: "编辑权重",
+    btn_inc_weight: "增加权重",
+    btn_dec_dyn_weight: "降低被抽中概率",
+    btn_edit_dyn_weight: "编辑被抽中概率",
+    btn_inc_dyn_weight: "增加被抽中概率",
+    btn_split: "拆分为独立 Tag",
+    btn_merge: "合并为组合",
+    btn_toggle: "启用/禁用",
+    btn_del: "删除"
   },
   jp: {
-    tab_positive: "プロンプト",
-    tab_negative: "除外したい内容",
+    tab_positive: "ポジティブプロンプト",
+    tab_negative: "ネガティブプロンプト",
     status_ready: "準備完了",
     loading: "NovelAIに接続中...",
     input_placeholder: "タグを入力...",
     btn_add: "追加",
     settings_title: "設定",
-    setting_preserve: "強化時に元のプロンプトを保持",
-    setting_preserve_desc: "無効にすると強化時のプロンプトがランダム化されます。",
-    setting_alt_autocomplete: "Danbooru オートコンプリート",
-    setting_alt_autocomplete_desc: "A1111 WebUI スタイルのオートコンプリート。",
-    setting_trigger_keys: "トリガーキー:",
+    setting_preserve: "Enhance(img2img)時に同じプロンプトを使用",
+    setting_preserve_desc: "有効にすると、Enhance(img2img)時にワイルドカードを一時無効にし、入力画像と全く同じプロンプトを使用します。",
+    setting_alt_autocomplete: "プラグインのDanbooru自動補完を有効化",
+    setting_alt_autocomplete_desc: "A1111 WebUIスタイルの自動補完UIとロジックを使用します。",
+    setting_trigger_keys: "Webページネイティブ入力の自動補完トリガーキー:",
     setting_space: "スペース",
-    setting_tab: "タブ",
-    status_linked: "接続済み",
+    setting_tab: "Tabキー",
+    status_linked: "接続正常",
     btn_library: "リソースセンター",
     btn_settings: "設定",
     tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え",
-    btn_quick_wildcard: "ワイルドカード",
-    btn_quick_random: "ランダム選択",
+    setting_render_newlines: "改行セパレーターを表示",
+    setting_render_newlines_desc: "UIで改行タグが検出された際に区切り線を表示します。",
+    btn_quick_wildcard: "ランダム抽出",
+    btn_quick_seq_wildcard: "順次抽出",
+    btn_quick_random: "ダイナミック抽出",
     btn_add_char: "+ キャラクター追加",
-    char_title: "キャラクタープロンプト"
+    char_title: "キャラクタープロンプト",
+    btn_remove_char: "キャラクターを削除",
+    dyn_min: "最小抽出数",
+    dyn_max: "最大抽出数",
+    dyn_sep: "カスタム区切り文字",
+    btn_fav: "お気に入り",
+    btn_copy: "このタグをコピー",
+    btn_dec_weight: "重みを下げる",
+    btn_edit_weight: "重みを編集",
+    btn_inc_weight: "重みを上げる",
+    btn_dec_dyn_weight: "抽選確率を下げる",
+    btn_edit_dyn_weight: "抽選確率を編集",
+    btn_inc_dyn_weight: "抽選確率を上げる",
+    btn_split: "独立したタグに分割",
+    btn_merge: "グループとして結合",
+    btn_toggle: "有効化/無効化",
+    btn_del: "削除"
   }
 };
 
@@ -224,6 +277,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Set up Editor
   const charEditor = new TagEditor(editorContainer, {
+    dict: dict, // Pass localization dict down to TagEditor
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
       if (active === 'pos') {
@@ -241,6 +295,10 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   // Set up Pos/Neg Toggles
   const btnPos = clone.querySelector('.char-tab-pos');
   const btnNeg = clone.querySelector('.char-tab-neg');
+
+  if(btnPos && dict.tab_positive) btnPos.title = dict.tab_positive;
+  if(btnNeg && dict.tab_negative) btnNeg.title = dict.tab_negative;
+  if(deleteBtn && dict.btn_remove_char) deleteBtn.title = dict.btn_remove_char;
 
   const switchTab = (tab, fromUserClick = true) => {
     charEditors[index].activeTab = tab;
@@ -382,7 +440,9 @@ function initUI() {
 
   // Editor
   const container = document.getElementById('editor-container');
+  const dict = translations[currentLang] || translations.en;
   editor = new TagEditor(container, {
+    dict: dict,
     onChange: (tags) => {
       updateTagsFromEditor(tags);
       syncToPage();
@@ -569,10 +629,21 @@ function initUI() {
       if (dict[key]) el.title = dict[key];
     });
 
-    if (editor && dict.tag_help_tooltip) {
-      editor.options.helpTooltip = dict.tag_help_tooltip;
+    if (editor) {
+      if (dict.tag_help_tooltip) {
+        editor.options.helpTooltip = dict.tag_help_tooltip;
+      }
+      editor.options.dict = dict;
       editor.render();
     }
+    
+    // Also update all character editors
+    charEditors.forEach(charEditorObj => {
+        if (charEditorObj.editor) {
+            charEditorObj.editor.options.dict = dict;
+            charEditorObj.editor.render();
+        }
+    });
 
     // Handle button active state
     ['btn-en', 'btn-jp', 'btn-zh'].forEach(id => {
