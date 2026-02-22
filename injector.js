@@ -568,12 +568,42 @@
     const seen = new WeakSet();
     const mo = new MutationObserver(scan);
     mo.observe(document, { childList: true, subtree: true });
-    scan();
+    
+    let lastCharCount = -1;
 
     function scan() {
+      // 1. Hook any new ProseMirror editors
       document.querySelectorAll('div.ProseMirror[contenteditable="true"]')
         .forEach(el => { if (!seen.has(el)) hook(el); });
+
+      // 2. Diff the character count to notify structural changes
+      const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
+      const currentCharCount = Array.from(settingsPanel.querySelectorAll('.character-prompt-input')).filter(el => el.className.match(/character-prompt-input-\d+/)).length;
+      
+      if (lastCharCount !== -1 && currentCharCount !== lastCharCount) {
+         notifyPromptUpdate();
+      }
+      lastCharCount = currentCharCount;
     }
+
+    // Globalized to allow both editor structural changes and text updates to trigger a sync
+    function notifyPromptUpdate() {
+      if (isSyncingFromPopup) return; // Prevent infinite loop when Popup is sending to Page
+
+      const { positive, negative, characters } = getCurrentPrompts();
+      window.postMessage({
+        type: '__RETURN_PROMPT__',
+        data: { positive, negative }
+      }, '*');
+      
+      // Broadcast the characters array as well
+      window.postMessage({
+        type: '__RETURN_CHARACTER_PROMPTS__',
+        data: characters
+      }, '*');
+    }
+
+    scan();
 
     function hook(editor) {
       seen.add(editor);
@@ -582,9 +612,6 @@
       list.className = 'wildcard-suggest';
       list.style.display = 'none';
       document.body.appendChild(list);
-
-      let selIdx = -1;
-
       // Autocomplete update
       editor.addEventListener('input', update);
       // Real-time sync: Page -> Popup
@@ -599,16 +626,7 @@
 
       editor.addEventListener('keydown', nav);
       editor.addEventListener('blur', hide, true);
-
-      function notifyPromptUpdate() {
-        if (typeof window.__getCurrentPrompts_PM === 'function') {
-          const { positive, negative } = window.__getCurrentPrompts_PM();
-          window.postMessage({
-            type: '__RETURN_PROMPT__',
-            data: { positive, negative }
-          }, '*');
-        }
-      }
+      editor.addEventListener('blur', hide, true);
 
       function textBeforeCaret() {
         const sel = window.getSelection();
@@ -900,23 +918,87 @@
    * 4. Bridge Communication for Popup Editor
    * ------------------------------------------------- */
 
+  // Helper functions for DOM manipulation
+  const findBaseEditor = (selectors, excludeSelector) => {
+    const els = document.querySelectorAll(selectors);
+    for (let el of els) {
+      if (excludeSelector && el.closest(excludeSelector)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return el; // Must be visible
+    }
+    return null;
+  };
+
+  const setEditorContent = (editor, text) => {
+    if (!editor || typeof text !== 'string') return;
+
+    // Visibility check: Avoid hidden editors (inactive tabs)
+    const rect = editor.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    sel.addRange(range);
+
+    if (text) {
+      document.execCommand('insertText', false, text);
+    } else {
+      document.execCommand('delete');
+    }
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
   function getCurrentPrompts() {
-    // NovelAI unmounts the inactive tab's editor. 
-    // If we're on the 'Prompt' tab, the 'Undesired Content' editor is gone from the DOM.
-    // So we use strict selectors. If it's missing, we return undefined so the popup knows it wasn't seen.
+
+    // Use specific base prompt class first, fallback to generic prompt box (excluding characters)
+    let posEl = findBaseEditor('.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror', '.character-prompt-input');
     
-    let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-prompt .ProseMirror') ||
-                document.querySelector('.prompt-input-box-prompt .ProseMirror'); // Fallback if main wrap changes
-                
-    let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') ||
-                document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
+    // Undesired usually has this class
+    let negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
 
     const getVal = el => el ? (el.innerText || el.textContent || '').trim() : undefined;
 
-    return {
+    const result = {
       positive: getVal(posEl),
       negative: getVal(negEl)
     };
+
+    // Extract Character Prompts
+    const charPrompts = [];
+    // Prefer desktop panel, but search mobile tray if necessary
+    const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
+    
+    const charContainers = Array.from(settingsPanel.querySelectorAll('.character-prompt-input'));
+    
+    charContainers.forEach(charContainer => {
+      const rect = charContainer.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+
+      const pm = charContainer.querySelector('.ProseMirror');
+      // Find active tab to know whether this ProseMirror is positive or negative
+      const btns = Array.from(charContainer.querySelectorAll('button'));
+      const activeBtn = btns.find(btn => 
+        (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired')) 
+        && btn.parentElement 
+        && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9
+      );
+      const isUndesired = activeBtn && activeBtn.textContent.includes('Undesired');
+
+      charPrompts.push({
+        positive: isUndesired ? undefined : getVal(pm),
+        negative: isUndesired ? getVal(pm) : undefined,
+        gender: 'other', // We no longer strictly sync gender to UI, placeholder
+        activeTab: isUndesired ? 'negative' : 'positive'
+      });
+    });
+    result.characters = charPrompts;
+
+    console.log('[Phase 3 Debug] Found base prompt DOM positive:', !!posEl, 'negative:', !!negEl);
+    console.log('[Phase 3 Debug] Found', charPrompts.length, 'Character Prompts');
+    console.log('[Phase 3 Debug] Returning to Popup:', result);
+    return result;
   }
 
   window.addEventListener('message', e => {
@@ -924,10 +1006,14 @@
     const { type, data } = e.data || {};
 
     if (type === '__GET_PROMPT__') {
-      const { positive, negative } = getCurrentPrompts();
+      const { positive, negative, characters } = getCurrentPrompts();
       window.postMessage({
         type: '__RETURN_PROMPT__',
         data: { positive, negative }
+      }, '*');
+      window.postMessage({
+        type: '__RETURN_CHARACTER_PROMPTS__',
+        data: characters
       }, '*');
     }
 
@@ -936,32 +1022,9 @@
       try {
         const { positive, negative } = data || {};
         
-        let posEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-prompt .ProseMirror') || 
-                    document.querySelector('.prompt-input-box-prompt .ProseMirror');
-                    
-        let negEl = document.querySelector('.image-gen-prompt-main .prompt-input-box-undesired-content .ProseMirror') || 
-                    document.querySelector('.prompt-input-box-undesired-content .ProseMirror');
-
-        const setEditorContent = (editor, text) => {
-          if (!editor || typeof text !== 'string') return;
-
-          // Visibility check: Avoid hidden editors (inactive tabs)
-          const rect = editor.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return;
-
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          const range = document.createRange();
-          range.selectNodeContents(editor);
-          sel.addRange(range);
-
-          if (text) {
-            document.execCommand('insertText', false, text);
-          } else {
-            document.execCommand('delete');
-          }
-          editor.dispatchEvent(new Event('input', { bubbles: true }));
-        };
+        let posEl = findBaseEditor('.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror', '.character-prompt-input');
+        
+        let negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
 
         if (positive !== undefined && posEl) setEditorContent(posEl, positive);
         if (negative !== undefined && negEl) setEditorContent(negEl, negative);
@@ -971,35 +1034,254 @@
       }
     }
 
+    // --- STAGE 6: GLOBAL SYNC TRACKER ---
+    // Stores the last known state of each character to avoid redundant clicks/focus-stealing
+    if (typeof window.lastSyncCharactersState === 'undefined') {
+        window.lastSyncCharactersState = [];
+    }
+
+    if (type === '__SET_CHARACTER_PROMPTS__') {
+      isSyncingFromPopup = true;
+      try {
+        const charDataList = data || [];
+        const syncCharactersDOM = async (charList) => {
+          if (!Array.isArray(charList)) return;
+          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
+          
+          let getCharContainers = () => Array.from(settingsPanel.querySelectorAll('.character-prompt-input')).filter(el => el.className.match(/character-prompt-input-\d+/));
+          let charContainers = getCharContainers();
+          // 1. Add missing characters
+          while (charContainers.length < charList.length) {
+              const addBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Add Character') || b.textContent.includes('添加角色') || b.textContent.includes('キャラの追加'));
+              if (addBtn) {
+                  addBtn.click();
+                  await wait(100); 
+                  
+                  // Auto-click "Other" if gender popup appears
+                  const otherBtn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent === 'Other' && window.getComputedStyle(el).cursor === 'pointer');
+                  if(otherBtn) {
+                      otherBtn.click();
+                      await wait(100);
+                  }
+                  charContainers = getCharContainers();
+              } else {
+                  console.warn('[Phase 4] React "Add Character" btn not found');
+                  break;
+              }
+          }
+          
+          // 2. Remove excess characters
+          while (charContainers.length > charList.length) {
+              const lastChar = charContainers[charContainers.length - 1];
+              
+              // Searching for X button.
+              // NovelAI uses CSS mask-image for icons, not direct SVGs!
+              const delBtn = Array.from(lastChar.querySelectorAll('button')).find(btn => {
+                  const iconDiv = btn.querySelector('div');
+                  if (!iconDiv) return false;
+                  const style = window.getComputedStyle(iconDiv);
+                  const mask = style.maskImage || style.webkitMaskImage || style.getPropertyValue('-webkit-mask-image') || '';
+                  return mask.includes('trash');
+              }) || lastChar.querySelector('button.dcscxb'); // Fallback
+                   
+              if (delBtn) {
+                  delBtn.click();
+                  await wait(100);
+                  charContainers = getCharContainers();
+              } else {
+                  console.warn('[Phase 4] React Delete character btn not found');
+                  break; 
+              }
+          }
+          
+          // 3. Inject text data into active ProseMirror for each character
+           for (let i = 0; i < charList.length; i++) {
+               if (i >= charContainers.length) break;
+               const container = charContainers[i];
+               const charData = charList[i];
+               
+               // --- STAGE 6: DIFF CHECK ---
+               const lastState = window.lastSyncCharactersState[i] || {};
+               const isSame = lastState.positive === charData.positive &&
+                              lastState.negative === charData.negative &&
+                              lastState.activeTab === charData.activeTab;
+
+               if (isSame) continue; // Skip identical to save focus
+
+               // Helper: Find or Wake up ProseMirror (Localized inside loop for context)
+               const getOrWakeEditor = async () => {
+                   let pm = container.querySelector('.ProseMirror');
+                   if (pm && pm.getBoundingClientRect().height > 0) return pm;
+                   const inputBox = container.querySelector('[class*="prompt-input-box-character-prompts-"]') ||
+                                    container.querySelector('div[role="textbox"]') || 
+                                    (pm ? pm.parentElement : container); 
+                   if (inputBox) inputBox.click();
+                   for(let waitIdx=0; waitIdx<6; waitIdx++) {
+                       await wait(50);
+                       pm = container.querySelector('.ProseMirror');
+                       if (pm && pm.getBoundingClientRect().height > 0) return pm;
+                   }
+                   return null;
+               };
+
+               const pm = await getOrWakeEditor();
+               if (!pm) continue;
+
+               const targetTab = charData.activeTab; 
+               const btns = Array.from(container.querySelectorAll('button'));
+               const activeBtn = btns.find(btn => 
+                 (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired')) 
+                 && btn.parentElement 
+                 && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9
+               );
+               const currentWebTab = activeBtn && activeBtn.textContent.includes('Undesired') ? 'negative' : 'positive';
+
+               if (targetTab && currentWebTab !== targetTab) {
+                   const targetTexts = targetTab === 'negative' ? ['Undesired Content'] : ['Prompt', 'Base Prompt'];
+                   const switchBtn = btns.find(btn => targetTexts.includes(btn.textContent.trim()));
+                   if (switchBtn) {
+                       switchBtn.click();
+                       await wait(150);
+                   }
+               }
+
+               const currentPm = container.querySelector('.ProseMirror');
+               const currentText = currentPm ? (currentPm.innerText || currentPm.textContent || '').trim() : '';
+               const targetText = targetTab === 'negative' ? charData.negative : charData.positive;
+               const targetStr = (targetText || '').trim();
+
+               if (currentText !== targetStr && targetText !== undefined && currentPm) {
+                   setEditorContent(currentPm, targetText);
+               }
+
+               // Update the Ledger
+               window.lastSyncCharactersState[i] = {
+                   positive: charData.positive,
+                   negative: charData.negative,
+                   activeTab: charData.activeTab
+               };
+           }
+        };
+
+        syncCharactersDOM(charDataList).finally(() => {
+            setTimeout(() => { isSyncingFromPopup = false; }, 100);
+        });
+      } catch (err) {
+        console.error('[Phase 4] Sync char err:', err);
+        isSyncingFromPopup = false;
+      }
+    }
+
     if (type === '__SWITCH_TAB__') {
-      const targetText = data === 'positive' ? 'Prompt' : 'Undesired Content';
-      const btn = Array.from(document.querySelectorAll('button'))
-        .find(el => el.textContent.trim() === targetText);
-      if (btn) btn.click();
+      const { tab, index } = data;
+      const isNegative = tab === 'negative';
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      
+      const processSwitch = async () => {
+        let containerContext = document;
+        let targetTexts = isNegative ? ['Undesired Content'] : ['Prompt'];
+
+        if (index !== undefined && index >= 0) {
+            // NovelAI character containers are sometimes non-sequential in class names, 
+            // but we now use a more robust way to find the nth visible .character-prompt-input
+            const allChars = Array.from(document.querySelectorAll('.character-prompt-input'));
+            const container = allChars[index];
+            if (!container) return;
+            
+            containerContext = container;
+
+            // --- THE "WAKE UP" LOGIC ---
+            // If the character is collapsed, the buttons/ProseMirror might be height 0 or non-existent
+            let pm = container.querySelector('.ProseMirror');
+            if (!pm || pm.getBoundingClientRect().height === 0) {
+                const trigger = container.querySelector('[class*="prompt-input-box-character-prompts-"]') ||
+                                container.querySelector('div[role="textbox"]') || 
+                                (pm ? pm.parentElement : container);
+                if (trigger) trigger.click();
+                
+                // Wait for it to expand
+                for(let w=0; w<6; w++) {
+                    await wait(50);
+                    pm = container.querySelector('.ProseMirror');
+                    if (pm && pm.getBoundingClientRect().height > 0) break;
+                }
+            }
+        } else {
+            const baseContainer = document.querySelector('.image-gen-prompt-main');
+            if (baseContainer) containerContext = baseContainer;
+            if (!isNegative) targetTexts = ['Base Prompt', 'Prompt'];
+        }
+
+        const btn = Array.from(containerContext.querySelectorAll('button'))
+          .find(el => {
+              const text = el.textContent.trim();
+              return targetTexts.includes(text);
+          });
+          
+        if (btn) btn.click();
+      };
+      
+      processSwitch();
     }
   });
 
-  // Poll for active tab changes to sync back to popup
-  let lastActiveTab = null;
+  // Poll for active tab changes of Base and Character Prompts to sync back to popup
+  let lastActiveTabs = { base: null, chars: [] };
   setInterval(() => {
-    const isPromptActive = (() => {
-      const btn = Array.from(document.querySelectorAll('button'))
-        .find(el => el.textContent.trim() === 'Prompt');
-      return !!(btn && window.getComputedStyle(btn.parentElement).opacity === '1');
+    // 1. Process Base Prompt
+    const baseContainer = document.querySelector('.image-gen-prompt-main') || document;
+
+    const isBasePromptActive = (() => {
+      const btn = Array.from(baseContainer.querySelectorAll('button'))
+        .find(el => {
+            const t = el.textContent.trim();
+            return t === 'Prompt' || t === 'Base Prompt';
+        });
+      return !!(btn && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9);
     })();
-    const isUndesiredActive = (() => {
-      const btn = Array.from(document.querySelectorAll('button'))
+
+    const isBaseUndesiredActive = (() => {
+      const btn = Array.from(baseContainer.querySelectorAll('button'))
         .find(el => el.textContent.trim() === 'Undesired Content');
-      return !!(btn && window.getComputedStyle(btn.parentElement).opacity === '1');
+      return !!(btn && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9);
     })();
 
-    let currentTab = null;
-    if (isPromptActive) currentTab = 'positive';
-    else if (isUndesiredActive) currentTab = 'negative';
+    let currentBaseTab = null;
+    if (isBasePromptActive) currentBaseTab = 'positive';
+    else if (isBaseUndesiredActive) currentBaseTab = 'negative';
 
-    if (currentTab && currentTab !== lastActiveTab) {
-      lastActiveTab = currentTab;
-      window.postMessage({ type: '__SYNC_TAB__', data: currentTab }, '*');
+    if (currentBaseTab && currentBaseTab !== lastActiveTabs.base) {
+      lastActiveTabs.base = currentBaseTab;
+      window.postMessage({ type: '__SYNC_TAB__', data: { tab: currentBaseTab, index: -1 } }, '*');
+    }
+    
+    // 2. Process Character Prompts
+    const currentCharTabs = [];
+    const charContainers = Array.from(document.querySelectorAll('.character-prompt-input'));
+    
+    charContainers.forEach((container, idx) => {
+       const isPos = Array.from(container.querySelectorAll('button')).find(el => (el.textContent.includes('Prompt') || el.textContent.includes('Base Prompt')) && !el.textContent.includes('Undesired') && el.parentElement && parseFloat(window.getComputedStyle(el.parentElement).opacity) > 0.9);
+       const isNeg = Array.from(container.querySelectorAll('button')).find(el => el.textContent.includes('Undesired') && el.parentElement && parseFloat(window.getComputedStyle(el.parentElement).opacity) > 0.9);
+       
+       const tabStatus = isPos ? 'positive' : (isNeg ? 'negative' : null);
+       if (tabStatus) {
+           currentCharTabs[idx] = tabStatus;
+       }
+    });
+
+    for (let i = 0; i < currentCharTabs.length; i++) {
+       const currentTab = currentCharTabs[i];
+       if (currentTab && currentTab !== lastActiveTabs.chars[i]) {
+          lastActiveTabs.chars[i] = currentTab;
+          // Send 0-indexed back to popup
+          window.postMessage({ type: '__SYNC_TAB__', data: { tab: currentTab, index: i } }, '*');
+       }
+    }
+    
+    // Cleanup removed characters from memory
+    if (lastActiveTabs.chars.length > currentCharTabs.length) {
+        lastActiveTabs.chars.length = currentCharTabs.length;
     }
   }, 500);
 

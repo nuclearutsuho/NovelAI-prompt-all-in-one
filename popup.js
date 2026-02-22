@@ -127,11 +127,33 @@ function updateCharAddButton() {
 }
 
 function syncCharactersToPage() {
-  // Phase 1 Mock Sync: 只在本地做日志，不发送跨组件消息
-  console.log('[Phase 1] Local sync triggered. Current Data:\n', JSON.parse(JSON.stringify(characterPromptsData)));
+  if (chrome.tabs) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        // Prepare the payload 
+        // Our characterPromptsData contains { posPrompt, posTags, negPrompt, negTags, gender }
+        // We only need to send prompts to the page injection layer
+        const payload = characterPromptsData.map(char => ({
+            positive: char.posPrompt,
+            negative: char.negPrompt,
+            gender: char.gender,
+            activeTab: char.activeTab
+        }));
+
+        lastSentCharacterPrompts = payload; // save for echo debounce
+        console.log('[Phase 2] Syncing Characters to Page =>', payload);
+        chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'SET_CHARACTER_PROMPTS',
+          data: payload
+        });
+      }
+    });
+  } else {
+    console.log('[Phase 1 fallback] Local sync triggered. Current Data:\n', JSON.parse(JSON.stringify(characterPromptsData)));
+  }
 }
 
-function createCharacterEditor(index, initialPos = '', initialNeg = '') {
+function createCharacterEditor(index, initialPos = '', initialNeg = '', initialTab = 'pos') {
   const template = document.getElementById('char-prompt-template');
   const container = document.getElementById('char-list-container');
   
@@ -179,11 +201,13 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '') {
         posTags: parsePromptToTags(initialPos), 
         negPrompt: initialNeg,
         negTags: parsePromptToTags(initialNeg),
-        gender: 'other' 
+        gender: "other",
+        activeTab: initialTab === 'neg' ? 'negative' : 'positive'
     };
   } else {
-    // Force 'other' explicitly
+    // Sync the internal state tracking and force 'other' explicitly
     characterPromptsData[index].gender = 'other';
+    characterPromptsData[index].activeTab = initialTab === 'neg' ? 'negative' : 'positive';
   }
 
   // Set up Delete
@@ -213,15 +237,16 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '') {
     }
   });
 
-  // Track the state wrapper
-  charEditors[index] = { editor: charEditor, activeTab: 'pos' };
 
   // Set up Pos/Neg Toggles
   const btnPos = clone.querySelector('.char-tab-pos');
   const btnNeg = clone.querySelector('.char-tab-neg');
 
-  const switchTab = (tab) => {
+  const switchTab = (tab, fromUserClick = true) => {
     charEditors[index].activeTab = tab;
+    // Sync to data model so syncCharactersToPage() sends the correct Tab state
+    characterPromptsData[index].activeTab = tab === 'neg' ? 'negative' : 'positive';
+    
     // Update active UI classes
     if (tab === 'pos') {
         btnPos.classList.add('active');
@@ -236,7 +261,25 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '') {
         // Load neg tags
         charEditor.setTags(characterPromptsData[index].negTags || []);
     }
+    
+    // Sync the tab switch to the injecting page so it switches the active view there
+    if (fromUserClick && chrome.tabs) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: 'SWITCH_TAB',
+            data: {
+                tab: tab === 'pos' ? 'positive' : 'negative',
+                index: index
+            }
+          });
+        }
+      });
+    }
   };
+  
+  // Track the state wrapper and expose switchTab
+  charEditors[index] = { editor: charEditor, activeTab: 'pos', switchTab };
 
   btnPos.addEventListener('click', () => switchTab('pos'));
   btnNeg.addEventListener('click', () => switchTab('neg'));
@@ -246,8 +289,8 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '') {
     charEditor.bindAutocomplete(autocomplete);
   }
 
-  // Initial load
-  switchTab('pos');
+  // Initial load, explicitly do NOT broadcast to page
+  switchTab(initialTab, false);
 
   // Bind autocomplete to this new input
   autocomplete.attach(input, (val) => {
@@ -307,7 +350,6 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '') {
   });
 
   container.appendChild(block);
-  charEditors[index] = charEditor;
 }
 
 function rebuildCharacterPromptsUI() {
@@ -320,7 +362,7 @@ function rebuildCharacterPromptsUI() {
 
   // Re-render
   characterPromptsData.forEach((charData, index) => {
-    createCharacterEditor(index, charData.posPrompt, charData.negPrompt);
+    createCharacterEditor(index, charData.posPrompt, charData.negPrompt, charData.activeTab === 'negative' ? 'neg' : 'pos');
   });
   
   updateCharAddButton();
@@ -620,7 +662,10 @@ function switchTab(mode, fromUserClick = false) {
       if (tabs[0]) {
         chrome.tabs.sendMessage(tabs[0].id, {
           type: 'SWITCH_TAB',
-          data: mode
+          data: {
+              tab: mode,
+              index: -1 // -1 indicates Base Prompt
+          }
         });
       }
     });
@@ -774,6 +819,7 @@ function parsePromptToTags(promptText) {
 // Track last sent prompt to avoid echo loops destroying focus
 let lastSentPositive = null;
 let lastSentNegative = null;
+let lastSentCharacterPrompts = [];
 
 /* Communication */
 
@@ -787,6 +833,7 @@ function normalizePrompt(str) {
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'RETURN_PROMPT') {
+      hasReceivedInitialData = true;
       const { positive, negative } = msg.data;
 
       // Skip echo: if this matches what we just sent, ignore
@@ -800,49 +847,119 @@ function initCommunication() {
       const currentPosStr = tagsToString(positiveTags);
       const currentNegStr = tagsToString(negativeTags);
 
-      if (normalizePrompt(positive) === normalizePrompt(currentPosStr) &&
-        normalizePrompt(negative) === normalizePrompt(currentNegStr)) {
-        // Just update raw strings, no need to re-parse / re-render
-        rawPositive = positive;
-        rawNegative = negative;
-        return;
+      // Only update if the incoming data is genuinely different from our current state
+      // AND it's not undefined (meaning it wasn't hidden on the page)
+      let shouldUpdatePos = positive !== undefined && normalizePrompt(positive) !== normalizePrompt(currentPosStr);
+      let shouldUpdateNeg = negative !== undefined && normalizePrompt(negative) !== normalizePrompt(currentNegStr);
+
+      if (!shouldUpdatePos && !shouldUpdateNeg) {
+         // Nothing new to apply or everything is hidden
+         return;
       }
 
       // Apply external change
       // logic: If we are receiving a TRUE update from the page, we want to
       // PRESERVE the currently disabled tags in the popup.
       // Because the page doesn't know about disabled tags (it only sees active ones).
-
       const disabledPos = positiveTags.filter(t => t.disabled);
       const disabledNeg = negativeTags.filter(t => t.disabled);
 
-      rawPositive = positive || '';
-      rawNegative = negative || '';
+      if (shouldUpdatePos) {
+          rawPositive = positive || '';
+          const newPosTags = parsePromptToTags(rawPositive);
+          disabledPos.forEach(d => newPosTags.push(d));
+          positiveTags = newPosTags;
+      }
 
-      // Parse new tags
-      const newPosTags = parsePromptToTags(rawPositive);
-      const newNegTags = parsePromptToTags(rawNegative);
+      if (shouldUpdateNeg) {
+          rawNegative = negative || '';
+          const newNegTags = parsePromptToTags(rawNegative);
+          disabledNeg.forEach(d => newNegTags.push(d));
+          negativeTags = newNegTags;
+      }
 
-      // Append saved disabled tags
-      // (We append them because we don't know where they belong in the new text structure)
-      disabledPos.forEach(d => {
-        newPosTags.push(d);
+      // Update UI if we are on the relevant tab
+      if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
+      if (currentMode === 'negative' && shouldUpdateNeg) editor.setTags(negativeTags);
+      
+    } else if (msg.type === 'RETURN_CHARACTER_PROMPTS') {
+      const charPrompts = msg.data || [];
+      
+      let uiNeedsRebuild = false;
+      if (characterPromptsData.length !== charPrompts.length) {
+          uiNeedsRebuild = true;
+          // Trim removed characters from memory instantly
+          if (characterPromptsData.length > charPrompts.length) {
+              characterPromptsData.length = charPrompts.length;
+              charEditors.length = charPrompts.length;
+          }
+      }
+
+      let changesApplied = false;
+
+      charPrompts.forEach((c, i) => {
+          const charObj = characterPromptsData[i] || { posTags: [], negTags: [], posPrompt: '', negPrompt: '', gender: 'other' };
+          
+          const currentPosStr = normalizePrompt(charObj.posPrompt || '');
+          const currentNegStr = normalizePrompt(charObj.negPrompt || '');
+          // If the webpage gives us undefined, it means that tab wasn't active. Ignore those in comparison.
+          const incomingPosStr = c.positive !== undefined ? normalizePrompt(c.positive) : currentPosStr;
+          const incomingNegStr = c.negative !== undefined ? normalizePrompt(c.negative) : currentNegStr;
+
+          let shouldUpdatePos = c.positive !== undefined && incomingPosStr !== currentPosStr;
+          let shouldUpdateNeg = c.negative !== undefined && incomingNegStr !== currentNegStr;
+
+          if (!shouldUpdatePos && !shouldUpdateNeg && i < characterPromptsData.length) {
+              return; // Skip if identical (Debounce echo naturally)
+          }
+
+          changesApplied = true;
+
+          const disabledPos = (charObj.posTags || []).filter(t => t.disabled);
+          const disabledNeg = (charObj.negTags || []).filter(t => t.disabled);
+
+          let newPosTags = charObj.posTags || [];
+          let newNegTags = charObj.negTags || [];
+          
+          if (shouldUpdatePos || charObj.posPrompt === undefined) {
+              newPosTags = parsePromptToTags(c.positive || '');
+              disabledPos.forEach(d => newPosTags.push(d));
+              charObj.posPrompt = c.positive || '';
+              charObj.posTags = newPosTags;
+          }
+
+          if (shouldUpdateNeg || charObj.negPrompt === undefined) {
+              newNegTags = parsePromptToTags(c.negative || '');
+              disabledNeg.forEach(d => newNegTags.push(d));
+              charObj.negPrompt = c.negative || '';
+              charObj.negTags = newNegTags;
+          }
+
+          charObj.gender = c.gender !== undefined ? c.gender : (charObj.gender || 'other');
+          charObj.activeTab = c.activeTab !== undefined ? c.activeTab : (charObj.activeTab || 'pos');
+          
+          // Apply changes to array
+          characterPromptsData[i] = charObj;
+
+          // Inline update of TagEditor if UI doesn't need full rebuild to protect current input focus
+          if (!uiNeedsRebuild && charEditors[i] && charEditors[i].editor) {
+              const activeTab = charEditors[i].activeTab;
+              if (activeTab === 'pos' && shouldUpdatePos) {
+                  charEditors[i].editor.setTags(newPosTags);
+              } else if (activeTab === 'neg' && shouldUpdateNeg) {
+                  charEditors[i].editor.setTags(newNegTags);
+              }
+          }
       });
 
-      disabledNeg.forEach(d => {
-        newNegTags.push(d);
-      });
+      if (uiNeedsRebuild || (changesApplied && characterPromptsData.length === 0)) {
+          console.log('[Phase 2] Found structural changes, rebuilding UI...');
+          rebuildCharacterPromptsUI();
+      }
+    } // End of RETURN_CHARACTER_PROMPTS
 
-      positiveTags = newPosTags;
-      negativeTags = newNegTags;
-
-      hasReceivedInitialData = true;
-
-      editor.setTags(currentMode === 'positive' ? positiveTags : negativeTags);
-
-      lastSentPositive = tagsToString(positiveTags);
-      lastSentNegative = tagsToString(negativeTags);
-
+    // The following block runs for RETURN_PROMPT
+    if (msg.type === 'RETURN_PROMPT') {
       // Update visual status
       const statusEl = document.getElementById('sync-status');
       if (statusEl) {
@@ -850,6 +967,9 @@ function initCommunication() {
         statusEl.textContent = dict.status_linked || 'Linked';
         statusEl.style.color = '#4caf50';
       }
+
+      lastSentPositive = tagsToString(positiveTags);
+      lastSentNegative = tagsToString(negativeTags);
     }
 
     if (msg.type === '__CLEAN_NUMERIC_PREFIXES__') {
@@ -880,9 +1000,25 @@ function initCommunication() {
     }
 
     if (msg.type === 'SYNC_TAB') {
-      if (currentMode !== msg.data) {
-        // Trigger tab switch without firing back (false for fromUserClick)
-        switchTab(msg.data, false);
+      const payload = msg.data;
+      if (typeof payload === 'string') {
+        // Backwards compatibility or direct base tab switch
+        if (currentMode !== payload) {
+          switchTab(payload, false);
+        }
+      } else if (payload && payload.tab) {
+        const { tab, index } = payload;
+        if (index === -1) {
+          if (currentMode !== tab) {
+            switchTab(tab, false);
+          }
+        } else if (index >= 0 && index < charEditors.length) {
+          const charEd = charEditors[index];
+          const innerTab = tab === 'positive' ? 'pos' : 'neg';
+          if (charEd && charEd.activeTab !== innerTab && charEd.switchTab) {
+            charEd.switchTab(innerTab, false);
+          }
+        }
       }
     }
   });

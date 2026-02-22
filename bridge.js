@@ -354,6 +354,14 @@
         data: e.data.data
       });
     }
+
+    if (e.data?.type === '__RETURN_CHARACTER_PROMPTS__') {
+      console.log('[Bridge] Received __RETURN_CHARACTER_PROMPTS__, relaying to popup');
+      chrome.runtime.sendMessage({
+        type: 'RETURN_CHARACTER_PROMPTS',
+        data: e.data.data
+      });
+    }
     
     if (e.data?.type === '__SYNC_TAB__') {
       chrome.runtime.sendMessage({
@@ -374,6 +382,13 @@
       console.log('[Bridge] Broadcasting __SET_PROMPT__ to window');
       window.postMessage({
         type: '__SET_PROMPT__',
+        data: request.data
+      }, '*');
+    }
+    if (request.type === 'SET_CHARACTER_PROMPTS') {
+      console.log('[Bridge] Broadcasting __SET_CHARACTER_PROMPTS__ to window');
+      window.postMessage({
+        type: '__SET_CHARACTER_PROMPTS__',
         data: request.data
       }, '*');
     }
