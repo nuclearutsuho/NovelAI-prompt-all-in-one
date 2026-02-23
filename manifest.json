@@ -4,7 +4,8 @@
   "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
   "version": "3.0.5",
   "permissions": [
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://image.novelai.net/*"
@@ -32,7 +33,8 @@
         "sync.js",
         "codemirror-bundle.js",
         "manager-panel.css",
-        "worker.js"
+        "worker.js",
+        "default_wildcards/*"
       ],
       "matches": [
         "<all_urls>"
