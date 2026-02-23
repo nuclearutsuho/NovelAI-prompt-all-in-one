@@ -4,6 +4,7 @@
 
   const curlyPattern = /{(?:[^|{}]+\|)+[^|{}]+}/;
   const doublePipePattern = /\|\|(?:[^|]+\|)+[^|]+\|\|/;
+  const LOG_PREFIX = '[NAI-Prompt-All-In-One]';
   const simpleWildcardPattern = /([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/;
 
   function containsWildcardSyntax(text) {
@@ -747,7 +748,7 @@
         });
         resizeObserver.observe(displayGrid);
 
-        console.log('[Wildcard] History aspect-ratio fixer v5 started (Event-driven).');
+        console.log('[NAI-Prompt-All-In-One] History aspect-ratio fixer v5 started (Event-driven).');
       } else {
         // 容器还没渲染出来，稍候重试
         setTimeout(attachObservers, 1000);

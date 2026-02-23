@@ -55,7 +55,8 @@
     // 创建触发按钮
     const toggleBtn = document.createElement('button');
     toggleBtn.id = 'wildcard-manager-toggle';
-    toggleBtn.title = 'Wildcard Manager';
+    const LOG_PREFIX = '[NAI-Prompt-All-In-One]';
+    toggleBtn.title = LOG_PREFIX;
     toggleBtn.innerHTML = `
       <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
@@ -68,7 +69,7 @@
     container.id = 'wildcard-manager-container';
     container.innerHTML = `
       <div id="wildcard-manager-header">
-        <span class="title">🎴 Wildcard Manager</span>
+        <span class="title">🎴 NovelAI-prompt-all-in-one</span>
         <div class="controls">
           <button class="min-btn" title="Minimize">_</button>
           <button class="close-btn" title="Close">×</button>

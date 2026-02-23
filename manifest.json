@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Wildcards and Danbooru Autocomplete for NovelAI Diffusion",
-  "description": "swap __wildcards__ prompts to .txt file content + Alternative prompt autocomplete",
+  "name": "NovelAI-prompt-all-in-one",
+  "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
   "version": "3.0.5",
   "permissions": [
     "storage"

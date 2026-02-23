@@ -282,7 +282,7 @@ function syncCharactersToPage() {
         }));
 
         lastSentCharacterPrompts = payload; // save for echo debounce
-        console.log('[Phase 2] Syncing Characters to Page =>', payload);
+        console.log('[NAI-Prompt-All-In-One] Syncing Characters to Page =>', payload);
         chrome.tabs.sendMessage(tabs[0].id, {
           type: 'SET_CHARACTER_PROMPTS',
           data: payload
