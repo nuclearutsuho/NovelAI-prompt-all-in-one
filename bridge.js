@@ -8,8 +8,9 @@
     alternativeDanbooruAutocomplete = true,
     triggerTab = false,
     triggerSpace = true,
-    sequentialCounters = {}
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters']);
+    sequentialCounters = {},
+    multiResConfig = null
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig']);
 
   // 2) inject script to page
   const s = document.createElement('script');
@@ -23,7 +24,8 @@
       alternativeDanbooruAutocomplete,
       triggerTab,
       triggerSpace,
-      sequentialCounters
+      sequentialCounters,
+      multiResConfig
     }, '*');
     s.remove();
   };
@@ -225,7 +227,8 @@
       changes.preservePrompt ||
       changes.alternativeDanbooruAutocomplete ||
       changes.triggerTab ||
-      changes.triggerSpace) {
+      changes.triggerSpace ||
+      changes.multiResConfig) {
 
       wildcards = changes.wildcards
         ? changes.wildcards.newValue
@@ -245,6 +248,9 @@
       triggerSpace = changes.triggerSpace
         ? changes.triggerSpace.newValue
         : triggerSpace;
+      multiResConfig = changes.multiResConfig
+        ? changes.multiResConfig.newValue
+        : multiResConfig;
 
       window.postMessage({
         type: '__WILDCARD_UPDATE__',
@@ -255,6 +261,7 @@
         triggerTab,
         triggerSpace,
         sequentialCounters,
+        multiResConfig
       }, '*');
     }
   });
@@ -395,6 +402,12 @@
     if (request.type === 'SWITCH_TAB') {
       window.postMessage({
         type: '__SWITCH_TAB__',
+        data: request.data
+      }, '*');
+    }
+    if (request.type === 'SET_RESOLUTION') {
+      window.postMessage({
+        type: '__SET_RESOLUTION__',
         data: request.data
       }, '*');
     }

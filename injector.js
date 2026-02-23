@@ -438,7 +438,30 @@
           /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */      // <<< NEW
           if (preservePrompt) await applyImg2ImgMetadata(json);            // <<< NEW
 
-          /* ③ cosmetic: base_caption = input */
+          /* ③ Multi-Resolution 动态替换 (多选分辨率注入) */
+          if (window.__multiResConfig && window.__multiResConfig.active && window.__multiResConfig.active.length > 1) {
+            const multiResActive = window.__multiResConfig.active;
+            const multiResMode = window.__multiResConfig.mode || 'seq';
+            window.__multiResIndex = window.__multiResIndex || 0;
+            
+            let res;
+            if (multiResMode === 'seq') {
+              res = multiResActive[window.__multiResIndex % multiResActive.length];
+              window.__multiResIndex++;
+            } else {
+              res = multiResActive[Math.floor(rng() * multiResActive.length)];
+            }
+            if (res && res.includes('x') && json.parameters) {
+              const [w, h] = res.split('x').map(Number);
+              if (!isNaN(w) && !isNaN(h)) {
+                json.parameters.width = w;
+                json.parameters.height = h;
+                console.log(`[Wildcard] Dynamic Resolution Applied: ${w}x${h} (Mode: ${multiResMode})`);
+              }
+            }
+          }
+
+          /* ④ cosmetic: base_caption = input */
           if (json?.parameters?.v4_prompt?.caption &&
             typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
             typeof json.input === 'string') {
@@ -484,7 +507,30 @@
           setTimeout(cleanNumericPrefixesFromUI, 100);
         }
 
-        /* ② cosmetic: base_caption = input */
+        /* ② Multi-Resolution 动态替换 (多选分辨率注入) */
+        if (window.__multiResConfig && window.__multiResConfig.active && window.__multiResConfig.active.length > 1) {
+          const multiResActive = window.__multiResConfig.active;
+          const multiResMode = window.__multiResConfig.mode || 'seq';
+          window.__multiResIndex = window.__multiResIndex || 0;
+          
+          let res;
+          if (multiResMode === 'seq') {
+            res = multiResActive[window.__multiResIndex % multiResActive.length];
+            window.__multiResIndex++;
+          } else {
+            res = multiResActive[Math.floor(rng() * multiResActive.length)];
+          }
+          if (res && res.includes('x') && json.parameters) {
+            const [w, h] = res.split('x').map(Number);
+            if (!isNaN(w) && !isNaN(h)) {
+              json.parameters.width = w;
+              json.parameters.height = h;
+              console.log(`[Wildcard] Dynamic Resolution Applied: ${w}x${h} (Mode: ${multiResMode})`);
+            }
+          }
+        }
+
+        /* ③ cosmetic: base_caption = input */
         if (json?.parameters?.v4_prompt?.caption &&
           typeof json.parameters.v4_prompt.caption.base_caption !== 'undefined' &&
           typeof json.input === 'string') {
@@ -504,6 +550,40 @@
     if (e.source !== window) return;
     const { type, map, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
 
+  function setWebpageResolution(width, height) {
+    const resInputs = Array.from(document.querySelectorAll('input[type="number"][step="64"][min="64"]'));
+    if (resInputs.length >= 2) {
+      const wInput = resInputs[0];
+      const hInput = resInputs[1];
+      
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      let changed = false;
+      
+      if (wInput.value != width) {
+        nativeInputValueSetter.call(wInput, width);
+        wInput.dispatchEvent(new Event('input', { bubbles: true }));
+        wInput.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+      }
+      
+      if (hInput.value != height) {
+        nativeInputValueSetter.call(hInput, height);
+        hInput.dispatchEvent(new Event('input', { bubbles: true }));
+        hInput.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+      }
+      
+      if (changed) console.log(`[Wildcard] Successfully set webpage resolution to ${width}x${height}`);
+    } else {
+      console.log('[Wildcard] Could not find resolution inputs on the page.');
+    }
+  }
+
+    if (type === '__SET_RESOLUTION__') {
+      setWebpageResolution(data.width, data.height);
+      return;
+    }
+
     // 옵션 초기화 및 업데이트 처리 (选项初始化及更新处理)
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
@@ -513,6 +593,10 @@
       triggerSpace = !!newSpace;
       if (e.data.sequentialCounters) {
         sequentialCounters = e.data.sequentialCounters;
+      }
+
+      if (e.data.multiResConfig !== undefined) {
+        window.__multiResConfig = e.data.multiResConfig;
       }
 
       // alternativeDanbooruAutocomplete 토글 즉시 반영 (立即反映 alternativeDanbooruAutocomplete 切换)
@@ -546,6 +630,135 @@
   function init() {
     // Autocomplete Init
     initWildcardAutocomplete_PM();
+    // 修正历史预览卡片的 aspect-ratio，避免全部被强制为当前设置分辨率的比例
+    initHistoryAspectRatioFixer();
+  }
+
+  /**
+   * 使用周期扫描策略修正历史预览卡片的比例。
+   * 复现 NovelAI 的 fit-to-box 算法：
+   *   scale = min(availW / imageW, availH / imageH)
+   * availW/availH 来自祖先容器 `.display-grid-images` 的实时 clientRect，
+   * 确保每张图片在可用空间内以正确比例完整显示。
+   */
+  function initHistoryAspectRatioFixer() {
+    console.log('[Wildcard] History aspect-ratio fixer v4 starting...');
+
+    /**
+     * 向上查找包含 .display-grid-images class 的祖先容器。
+     * 该容器是 NovelAI 用于计算图片卡片尺寸的边界盒。
+     * 如果找不到则退而求其次使用较近的有尺寸的祖先。
+     */
+    function getAvailableBox(el) {
+      let cur = el.parentElement;
+      while (cur && cur !== document.body) {
+        if (cur.classList && cur.classList.contains('display-grid-images')) {
+          return { w: cur.clientWidth, h: cur.clientHeight, el: cur };
+        }
+        cur = cur.parentElement;
+      }
+      // 未找到 .display-grid-images，退而使用图片容器父元素的父元素
+      const grandparent = el.parentElement?.parentElement;
+      if (grandparent) {
+        const rect = grandparent.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 10) {
+          return { w: rect.width, h: rect.height, el: grandparent };
+        }
+      }
+      return null;
+    }
+
+    function fixContainer(container, trueW, trueH) {
+      const box = getAvailableBox(container);
+      if (!box || !box.w || !box.h) return;
+
+      // NovelAI 的 fit-to-box 算法：等比缩放图片使其完整适配可用区域
+      const scale = Math.min(box.w / trueW, box.h / trueH);
+      const newW = trueW * scale;
+      const newH = trueH * scale;
+
+      const cw = parseFloat(container.style.width)  || 0;
+      const ch = parseFloat(container.style.height) || 0;
+
+      // 误差小于 0.5px 则视为正确，跳过避免抖动
+      if (Math.abs(cw - newW) < 0.5 && Math.abs(ch - newH) < 0.5) return;
+
+      container.style.width  = `${newW}px`;
+      container.style.height = `${newH}px`;
+      console.log(`[Wildcard] Card fixed: ${newW.toFixed(0)}×${newH.toFixed(0)} (image=${trueW}x${trueH}, box=${box.w.toFixed(0)}x${box.h.toFixed(0)})`);
+    }
+
+    function scanAll() {
+      const imgs = document.querySelectorAll('img.image-grid-image');
+      imgs.forEach(img => {
+        const iw = img.naturalWidth;
+        const ih = img.naturalHeight;
+        if (!iw || !ih) return; // 图片未加载完成，跳过
+
+        // 向上 8 层找到有内联 width+height px 的容器（React 写入的尺寸容器）
+        let el = img.parentElement;
+        for (let i = 0; i < 8 && el; i++) {
+          const sw = parseFloat(el.style.width);
+          const sh = parseFloat(el.style.height);
+          if (sw > 0 && sh > 0) {
+            fixContainer(el, iw, ih);
+            break;
+          }
+          el = el.parentElement;
+        }
+      });
+    }
+
+    // 事件驱动触发机制
+    // 1. 监听图片的加载完成（处理新生成的图片或首次加载）
+    document.addEventListener('load', (e) => {
+      if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('image-grid-image')) {
+        scanAll();
+      }
+    }, true); // 捕获阶段
+
+    // 2. 监听 DOM 变化（捕获新图片节点被插入到页面）
+    const domObserver = new MutationObserver(mutations => {
+      let shouldScan = false;
+      for (const m of mutations) {
+        if (m.addedNodes.length > 0) {
+          shouldScan = true;
+          break;
+        }
+      }
+      if (shouldScan) {
+        // 使用 setTimeout debounce，避免 React 批量插入引发频繁计算
+        clearTimeout(window.__arFixerTimer);
+        window.__arFixerTimer = setTimeout(scanAll, 100);
+      }
+    });
+
+    // 寻找 .display-grid-images 容器挂载观察器
+    function attachObservers() {
+      const displayGrid = document.querySelector('.display-grid-images');
+      if (displayGrid) {
+        // 监听子节点变动（新图插入）
+        domObserver.observe(displayGrid, { childList: true, subtree: true });
+
+        // 3. 监听容器尺寸调整（处理浏览器窗口变化、侧边栏展开折叠等）
+        const resizeObserver = new ResizeObserver(() => {
+          clearTimeout(window.__arFixerTimer);
+          window.__arFixerTimer = setTimeout(scanAll, 50);
+        });
+        resizeObserver.observe(displayGrid);
+
+        console.log('[Wildcard] History aspect-ratio fixer v5 started (Event-driven).');
+      } else {
+        // 容器还没渲染出来，稍候重试
+        setTimeout(attachObservers, 1000);
+      }
+    }
+
+    // 初始启动
+    setTimeout(() => {
+      scanAll();
+      attachObservers();
+    }, 800);
   }
 
   /******* 3. Autocomplete ********/

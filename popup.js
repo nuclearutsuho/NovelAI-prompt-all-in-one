@@ -13,12 +13,15 @@ let negativeTags = [];
 let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", negTags: [], gender: "other" }]
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
 let maxCharacters = 6;
+let isShortMode = false;
 
 // Language Support
 const translations = {
   en: {
     tab_positive: "Positive Prompts",
+    tab_positive_short: "Pos",
     tab_negative: "Negative Prompts",
+    tab_negative_short: "Neg",
     status_ready: "Ready",
     loading: "Connecting to NovelAI...",
     input_placeholder: "Enter tag...",
@@ -38,10 +41,15 @@ const translations = {
     setting_render_newlines: "Render Newline Separators",
     setting_render_newlines_desc: "Show a dividing line when newline tags are encountered in the UI.",
     btn_quick_wildcard: "Random Draw",
+    btn_quick_wildcard_short: "Rnd",
     btn_quick_seq_wildcard: "Sequential Draw",
+    btn_quick_seq_wildcard_short: "Seq",
     btn_quick_random: "Dynamic Draw",
+    btn_quick_random_short: "Dyn",
     btn_add_char: "+ Add Character",
+    btn_add_char_short: "+ Char",
     char_title: "Character Prompts",
+    char_title_short: "Characters",
     btn_remove_char: "Remove Character",
     dyn_min: "Min Picks",
     dyn_max: "Max Picks",
@@ -57,11 +65,35 @@ const translations = {
     btn_split: "Split into Independent Tags",
     btn_merge: "Merge into Group",
     btn_toggle: "Enable/Disable",
-    btn_del: "Delete"
+    btn_del: "Delete",
+    res_sp: "Small Portrait",
+    res_sl: "Small Landscape",
+    res_ss: "Small Square",
+    res_np: "Normal Portrait",
+    res_nl: "Normal Landscape",
+    res_ns: "Normal Square",
+    res_lp: "Large Portrait",
+    res_ll: "Large Landscape",
+    res_ls: "Large Square",
+    res_custom: "Custom",
+    res_presets: "Presets",
+    res_seq: "Sequential",
+    res_rnd: "Random",
+    res_add_preset: "Add Preset",
+    res_selected_none: "None",
+    res_selected_none_short: "0",
+    res_selected_count: "[{n} Selected]",
+    res_selected_count_short: "[ {n} ]",
+    res_multi_trigger: "Multi-Resolution Settings",
+    btn_swap_res: "Swap Width/Height",
+    res_w: "W",
+    res_h: "H"
   },
   zh: {
     tab_positive: "正向提示词",
+    tab_positive_short: "正",
     tab_negative: "负向提示词",
+    tab_negative_short: "负",
     status_ready: "就绪",
     loading: "正在连接 NovelAI...",
     input_placeholder: "输入tag...",
@@ -81,10 +113,15 @@ const translations = {
     setting_render_newlines: "换行符渲染分隔线",
     setting_render_newlines_desc: "在界面中遇到换行标签时显示分隔线。",
     btn_quick_wildcard: "随机抽取",
+    btn_quick_wildcard_short: "随机",
     btn_quick_seq_wildcard: "顺序抽取",
+    btn_quick_seq_wildcard_short: "顺序",
     btn_quick_random: "动态抽取",
+    btn_quick_random_short: "动态",
     btn_add_char: "+ 增加角色",
+    btn_add_char_short: "+ 角色",
     char_title: "角色提示词",
+    char_title_short: "角色",
     btn_remove_char: "删除角色",
     dyn_min: "最小选取数",
     dyn_max: "最大选取数",
@@ -100,11 +137,35 @@ const translations = {
     btn_split: "拆分为独立 Tag",
     btn_merge: "合并为组合",
     btn_toggle: "启用/禁用",
-    btn_del: "删除"
+    btn_del: "删除",
+    res_sp: "小型尺寸 (竖)",
+    res_sl: "小型尺寸 (横)",
+    res_ss: "小型尺寸 (方)",
+    res_np: "标准尺寸 (竖)",
+    res_nl: "标准尺寸 (横)",
+    res_ns: "标准尺寸 (方)",
+    res_lp: "大型尺寸 (竖)",
+    res_ll: "大型尺寸 (横)",
+    res_ls: "大型尺寸 (方)",
+    res_custom: "自定义",
+    res_presets: "预设分辨率",
+    res_seq: "顺序切换",
+    res_rnd: "随机切换",
+    res_add_preset: "添加预设",
+    res_selected_none: "未选择",
+    res_selected_none_short: "0",
+    res_selected_count: "[已选 {n} 项]",
+    res_selected_count_short: "[ {n} ]",
+    res_multi_trigger: "多选分辨率设置",
+    btn_swap_res: "交换宽高",
+    res_w: "宽",
+    res_h: "高"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
+    tab_positive_short: "ポジ",
     tab_negative: "ネガティブプロンプト",
+    tab_negative_short: "ネガ",
     status_ready: "準備完了",
     loading: "NovelAIに接続中...",
     input_placeholder: "タグを入力...",
@@ -124,10 +185,15 @@ const translations = {
     setting_render_newlines: "改行セパレーターを表示",
     setting_render_newlines_desc: "UIで改行タグが検出された際に区切り線を表示します。",
     btn_quick_wildcard: "ランダム抽出",
+    btn_quick_wildcard_short: "乱",
     btn_quick_seq_wildcard: "順次抽出",
+    btn_quick_seq_wildcard_short: "順",
     btn_quick_random: "ダイナミック抽出",
+    btn_quick_random_short: "動",
     btn_add_char: "+ キャラクター追加",
+    btn_add_char_short: "+ キャラ",
     char_title: "キャラクタープロンプト",
+    char_title_short: "キャラ",
     btn_remove_char: "キャラクターを削除",
     dyn_min: "最小抽出数",
     dyn_max: "最大抽出数",
@@ -143,7 +209,29 @@ const translations = {
     btn_split: "独立したタグに分割",
     btn_merge: "グループとして結合",
     btn_toggle: "有効化/無効化",
-    btn_del: "削除"
+    btn_del: "削除",
+    res_sp: "スモール (縦)",
+    res_sl: "スモール (横)",
+    res_ss: "スモール (正方形)",
+    res_np: "ノーマル (縦)",
+    res_nl: "ノーマル (横)",
+    res_ns: "ノーマル (正方形)",
+    res_lp: "ラージ (縦)",
+    res_ll: "ラージ (横)",
+    res_ls: "ラージ (正方形)",
+    res_custom: "カスタム",
+    res_presets: "プリセット",
+    res_seq: "順次",
+    res_rnd: "ランダム",
+    res_add_preset: "プリセットを追加",
+    res_selected_none: "未選択",
+    res_selected_none_short: "0",
+    res_selected_count: "[{n}件 選択中]",
+    res_selected_count_short: "[ {n} ]",
+    res_multi_trigger: "多解像度設定",
+    btn_swap_res: "幅と高さを入れ替え",
+    res_w: "幅",
+    res_h: "高"
   }
 };
 
@@ -232,19 +320,21 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Apply translations directly to the new clone components
   const dict = translations[currentLang] || translations.en;
-  if(btnAdd && dict.btn_add) btnAdd.textContent = dict.btn_add;
+  const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
+
+  if(btnAdd && dict[getKey('btn_add')]) btnAdd.textContent = dict[getKey('btn_add')];
   if(input && dict.input_placeholder) input.placeholder = dict.input_placeholder;
-  if(btnWildcard && dict.btn_quick_wildcard) {
-      btnWildcard.title = dict.btn_quick_wildcard;
-      btnWildcard.textContent = dict.btn_quick_wildcard;
+  if(btnWildcard && dict[getKey('btn_quick_wildcard')]) {
+      btnWildcard.title = dict.btn_quick_wildcard; // Tooltip aalways uses long text
+      btnWildcard.textContent = dict[getKey('btn_quick_wildcard')];
   }
-  if(btnSeqWildcard && dict.btn_quick_seq_wildcard) {
+  if(btnSeqWildcard && dict[getKey('btn_quick_seq_wildcard')]) {
       btnSeqWildcard.title = dict.btn_quick_seq_wildcard;
-      btnSeqWildcard.textContent = dict.btn_quick_seq_wildcard;
+      btnSeqWildcard.textContent = dict[getKey('btn_quick_seq_wildcard')];
   }
-  if(btnRandom && dict.btn_quick_random) {
+  if(btnRandom && dict[getKey('btn_quick_random')]) {
       btnRandom.title = dict.btn_quick_random;
-      btnRandom.textContent = dict.btn_quick_random;
+      btnRandom.textContent = dict[getKey('btn_quick_random')];
   }
 
   // Initialize data if not fully set
@@ -431,6 +521,209 @@ function initUI() {
   autocomplete = new Autocomplete();
   autocomplete.load();
 
+  // Resolution controls
+  const resWidth = document.getElementById('res-width');
+  const resHeight = document.getElementById('res-height');
+  const resSwapBtn = document.getElementById('res-swap-btn');
+  
+  // Custom Dropdown UI
+  const resTrigger = document.getElementById('res-multi-trigger');
+  const resPanel = document.getElementById('res-dropdown-panel');
+  const resModeSeq = document.getElementById('res-mode-seq');
+  const resModeRnd = document.getElementById('res-mode-rnd');
+  const resListContainer = document.getElementById('res-list-container');
+  const resBtnAdd = document.getElementById('res-btn-add');
+  const resAddW = document.getElementById('res-add-w');
+  const resAddH = document.getElementById('res-add-h');
+
+  let defaultPresets = [
+    '512x768', '768x512', '640x640', '832x1216', '1216x832', 
+    '1024x1024', '1024x1536', '1536x1024', '1472x1472'
+  ];
+  let multiResAll = [...defaultPresets];
+  let multiResActive = ['832x1216'];
+  let multiResMode = 'seq';
+
+  function sendResolutionUpdate(w, h) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'SET_RESOLUTION',
+          data: { width: w, height: h }
+        });
+      }
+    });
+    chrome.storage.local.set({ lastResolution: { width: w, height: h } });
+  }
+
+  function syncMultiResStorage() {
+    const config = { all: multiResAll, active: multiResActive, mode: multiResMode };
+    // 只保存配置，供 injector.js 在生成请求拦截时使用
+    // 注意：此处不发 SET_RESOLUTION 消息，不修改网页 UI 输入框。
+    // 原因：NovelAI 网页将输入框的值通过 CSS aspect-ratio 全局绑定到所有预览卡片。
+    // 若修改网页输入框，所有已生成的预览图都会被强制拉伸到新比例，导致视觉错乱。
+    // 多选模式下通过 fetch/XHR 拦截层静默改写请求参数，与网页 UI 完全解耦。
+    chrome.storage.local.set({ multiResConfig: config });
+    
+    // 更新触发按钮的文本
+    const dict = translations[currentLang] || translations.en;
+    const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
+
+    if (multiResActive.length === 0) {
+      resTrigger.textContent = (dict[getKey('res_selected_none')] || 'None') + ' ⏷';
+    } else if (multiResActive.length === 1) {
+      resTrigger.textContent = multiResActive[0].replace('x', ' × ') + ' ⏷';
+      // 单选时：同步网页 UI（用户预期看到该比例）
+      const [w, h] = multiResActive[0].split('x');
+      resWidth.value = w; resHeight.value = h;
+      sendResolutionUpdate(parseInt(w), parseInt(h));
+    } else {
+      // 多选时：仅更新按钮文字，不触碰网页 UI
+      const t = dict[getKey('res_selected_count')] || '[{n} Selected]';
+      resTrigger.textContent = t.replace('{n}', multiResActive.length) + ' ⏷';
+    }
+  }
+
+  function renderResList() {
+    resListContainer.innerHTML = '';
+    multiResAll.forEach(res => {
+      const item = document.createElement('div');
+      item.className = 'res-list-item';
+      
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = multiResActive.includes(res);
+      cb.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          if (!multiResActive.includes(res)) multiResActive.push(res);
+        } else {
+          multiResActive = multiResActive.filter(r => r !== res);
+        }
+        syncMultiResStorage();
+      });
+
+      const text = document.createElement('div');
+      text.className = 'res-list-text';
+      text.textContent = res.replace('x', ' × ');
+      // click text toggles checkbox
+      text.addEventListener('click', () => {
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+      });
+
+      item.appendChild(cb);
+      item.appendChild(text);
+
+      if (!defaultPresets.includes(res)) {
+        const delBtn = document.createElement('button');
+        delBtn.className = 'res-list-del';
+        delBtn.textContent = '×';
+        delBtn.title = 'Delete';
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          multiResAll = multiResAll.filter(r => r !== res);
+          multiResActive = multiResActive.filter(r => r !== res);
+          renderResList();
+          syncMultiResStorage();
+        });
+        item.appendChild(delBtn);
+      }
+      resListContainer.appendChild(item);
+    });
+  }
+
+  resTrigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resPanel.style.display = resPanel.style.display === 'none' ? 'flex' : 'none';
+  });
+
+  // Close panel on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.res-multi-select-container')) {
+      resPanel.style.display = 'none';
+    }
+  });
+
+  resPanel.addEventListener('click', (e) => e.stopPropagation());
+
+  const setResMode = (mode) => {
+    multiResMode = mode;
+    if (mode === 'seq') {
+      resModeSeq.classList.add('active');
+      resModeRnd.classList.remove('active');
+    } else {
+      resModeRnd.classList.add('active');
+      resModeSeq.classList.remove('active');
+    }
+    syncMultiResStorage();
+  };
+
+  resModeSeq.addEventListener('click', () => setResMode('seq'));
+  resModeRnd.addEventListener('click', () => setResMode('rnd'));
+
+  resBtnAdd.addEventListener('click', () => {
+    let w = parseInt(resAddW.value, 10);
+    let h = parseInt(resAddH.value, 10);
+    if (!w || !h) return;
+    w = Math.max(64, Math.round(w / 64) * 64);
+    h = Math.max(64, Math.round(h / 64) * 64);
+    const newRes = `${w}x${h}`;
+    if (!multiResAll.includes(newRes)) {
+      multiResAll.push(newRes);
+    }
+    if (!multiResActive.includes(newRes)) {
+      multiResActive.push(newRes);
+    }
+    resAddW.value = '';
+    resAddH.value = '';
+    renderResList();
+    syncMultiResStorage();
+  });
+
+  const onDimensionChange = () => {
+    let w = parseInt(resWidth.value, 10) || 832;
+    let h = parseInt(resHeight.value, 10) || 1216;
+    w = Math.max(64, Math.round(w / 64) * 64);
+    h = Math.max(64, Math.round(h / 64) * 64);
+    resWidth.value = w;
+    resHeight.value = h;
+    sendResolutionUpdate(w, h);
+  };
+
+  resWidth.addEventListener('change', onDimensionChange);
+  resHeight.addEventListener('change', onDimensionChange);
+
+  resSwapBtn.addEventListener('click', () => {
+    const temp = resWidth.value;
+    resWidth.value = resHeight.value;
+    resHeight.value = temp;
+    sendResolutionUpdate(parseInt(resWidth.value, 10), parseInt(resHeight.value, 10));
+  });
+
+  chrome.storage.local.get(['lastResolution', 'multiResConfig'], (data) => {
+    if (data.multiResConfig) {
+      multiResAll = data.multiResConfig.all || multiResAll;
+      multiResActive = data.multiResConfig.active || [];
+      setResMode(data.multiResConfig.mode || 'seq');
+    } else {
+      syncMultiResStorage();
+    }
+    renderResList();
+
+    if (data.lastResolution) {
+      resWidth.value = data.lastResolution.width;
+      resHeight.value = data.lastResolution.height;
+    } else if (multiResActive.length === 1) {
+      const [w, h] = multiResActive[0].split('x');
+      resWidth.value = w; resHeight.value = h;
+    }
+    
+    // Ensure properly synced state for trigger visual
+    if (multiResActive.length === 0) resTrigger.textContent = 'None ⏷';
+    else if (multiResActive.length === 1) resTrigger.textContent = multiResActive[0].replace('x', ' × ') + ' ⏷';
+    else resTrigger.textContent = `[${multiResActive.length} Selected] ⏷`;
+  });
+
   // Tabs
   const tabPositive = document.getElementById('tab-positive');
   const tabNegative = document.getElementById('tab-negative');
@@ -603,7 +896,9 @@ function initUI() {
     currentLang = lang;
     const dict = translations[lang] || translations.en;
     document.querySelectorAll('[data-i18n]').forEach(el => {
-      const key = el.getAttribute('data-i18n');
+      const baseKey = el.getAttribute('data-i18n');
+      const key = (isShortMode && dict[baseKey + '_short']) ? baseKey + '_short' : baseKey;
+      
       if (dict[key]) {
         // If element has children (like Settings title with close button), preserve them
         if (el.children.length === 0) {
@@ -650,6 +945,9 @@ function initUI() {
       const btn = document.getElementById(id);
       if (btn) btn.classList.toggle('active', id === `btn-${lang}`);
     });
+
+    // 刷新多选分辨率按钮文字
+    if (typeof syncMultiResStorage === 'function') syncMultiResStorage();
   };
 
   const setLanguage = (lang) => {
@@ -673,6 +971,18 @@ function initUI() {
   chrome.storage.local.get('language', (data) => {
     if (data.language) applyTranslations(data.language);
   });
+
+  // Observe width for responsive short-text mode
+  const resizeObserver = new ResizeObserver(entries => {
+    for (let entry of entries) {
+      const isNarrow = entry.contentRect.width < 540;
+      if (isShortMode !== isNarrow) {
+        isShortMode = isNarrow;
+        applyTranslations(currentLang);
+      }
+    }
+  });
+  resizeObserver.observe(document.body);
 
   // Settings Persistence
   const settings = [
