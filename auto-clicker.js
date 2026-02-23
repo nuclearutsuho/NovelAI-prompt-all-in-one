@@ -54,12 +54,57 @@
   function startImageObserver() {
     // 用 Set 记录已统计的 blob URL，防止同一张图被重复计入
     const seenUrls = new Set();
+    
+    // 初始化：立即将当前页面已存在的生成的图片（尤其是刷新后加载的首屏历史图片）加入黑名单，防止误算
+    document.querySelectorAll('img').forEach(img => {
+      const src = img.src || '';
+      if (src && isNaiGeneratedImg(img)) {
+        seenUrls.add(src);
+      }
+    });
+
+    // --- 历史记录交互屏蔽机制 ---
+    // 为了防止当图库数量超过30张时引发的“虚拟列表动态渲染导致旧图被当作全新图片”的 bug，
+    // 我们设定：在用户主动触发历史区滚轮或点击等操作后的 1000ms 内，所有新出现的图均当作历史图。
+    let historyMaskTimeout = null;
+    function maskHistory() {
+      clearTimeout(historyMaskTimeout);
+      historyMaskTimeout = setTimeout(() => { historyMaskTimeout = null; }, 200);
+    }
+
+    // 监听历史记录操作：点击右侧、在右侧滚动、或键盘方向键切换
+    document.addEventListener('mousedown', (e) => {
+      // 目标是具体的历史缩略图，或者发生在屏幕右侧 25% 区域内的点击
+      if (e.target.closest('[aria-label="choose image"]') || e.clientX > window.innerWidth * 0.75) {
+        maskHistory();
+      }
+    }, { capture: true }); // 用 capture 提前捕获
+
+    document.addEventListener('wheel', (e) => {
+      if (e.clientX > window.innerWidth * 0.75) {
+        maskHistory();
+      }
+    }, { passive: true, capture: true });
+
+    document.addEventListener('keydown', (e) => {
+      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+      if (!isInput && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        maskHistory();
+      }
+    }, { capture: true });
 
     function checkImg(img) {
       const src = img.src || '';
       if (!src || seenUrls.has(src)) return;
       if (isNaiGeneratedImg(img)) {
-        seenUrls.add(src);
+        seenUrls.add(src); // 无论如何先加入拉黑名单
+        
+        if (historyMaskTimeout !== null) {
+          // 处在历史操作屏蔽期内，仅拉黑而不计入真实生成数
+          console.log('[AutoClicker] （历史屏蔽期）加载旧图，不计数:', src.substring(0, 50));
+          return;
+        }
+
         imageCount++;
         if (imgCounterEl) imgCounterEl.textContent = `📷 ${imageCount}`;
         console.log('[AutoClicker] 检测到新生成图片:', src.substring(0, 60));
