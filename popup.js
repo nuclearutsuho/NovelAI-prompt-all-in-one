@@ -998,7 +998,18 @@ function initUI() {
     settings.forEach(key => {
       const el = document.getElementById(key);
       if (el) {
-        el.checked = !!data[key];
+        let val = data[key];
+        if (val === undefined) {
+          // 默认开启的选项
+          if (key === 'alternativeDanbooruAutocomplete' || key === 'renderNewlines') {
+            val = true;
+          } else {
+            val = false;
+          }
+          // 在首次初始化时立刻存储默认值，确保整个应用能够同步
+          chrome.storage.local.set({ [key]: val });
+        }
+        el.checked = !!val;
 
         // Initial state for editor
         if (key === 'renderNewlines') {
