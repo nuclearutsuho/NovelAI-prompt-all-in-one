@@ -250,9 +250,10 @@
     transform: translateX(-50%) translateY(0) scale(1);
 }
 
-/* Suppress toolbars during drag or marquee selection */
+/* Suppress toolbars during drag, marquee selection, or keyboard multi-select (Ctrl/Shift) */
 .tag-editor-container.is-dragging .tag-controls,
 .tag-editor-container.is-selecting .tag-controls,
+.tag-editor-container.is-key-selecting .tag-controls,
 .sortable-chosen .tag-controls,
 .sortable-drag .tag-controls,
 .sortable-fallback .tag-controls,
