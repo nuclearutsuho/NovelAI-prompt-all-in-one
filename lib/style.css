@@ -681,8 +681,18 @@
     /* Newlines don't need translations */
 }
 
-/* Force Newline mode - KEPT FOR REFERENCE, no longer inserted into DOM */
-/* .tag-newline-separator { flex-basis: 100%; ... } */
+/* 强制将换行符标签的后置内容挤入下一行的不可见占位元素 */
+.tag-newline-separator { 
+    flex-basis: 100%; 
+    height: 0; 
+    margin: 0; 
+    padding: 0; 
+}
+
+/* 当启用了换行符分割线渲染时，因为换行符标签本身已经撑满了全行，所以该占位符元素应当隐藏 */
+.render-newlines .tag-newline-separator { 
+    display: none; 
+}
 
 .autocomplete-item {
     padding: 6px 10px;
