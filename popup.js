@@ -249,11 +249,21 @@ async function initData() {
     editor.setSequentialCounters(data.sequentialCounters);
   }
 
-  // Listen for storage changes to keep counters in sync
+  // Listen for storage changes to keep counters in sync and hot-reload dictionary
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.sequentialCounters) {
-      if (editor) {
-        editor.setSequentialCounters(changes.sequentialCounters.newValue);
+    if (area === 'local') {
+      if (changes.sequentialCounters) {
+        if (editor) editor.setSequentialCounters(changes.sequentialCounters.newValue);
+      }
+      if ((changes.dictOverlay || changes.wildcards) && autocomplete) {
+        // Hot-reload dictionary and wildcards
+        autocomplete.loaded = false;
+        autocomplete.load().then(() => {
+          if (editor) editor.render();
+          charEditors.forEach(c => {
+            if (c.editor) c.editor.render();
+          });
+        });
       }
     }
   });
