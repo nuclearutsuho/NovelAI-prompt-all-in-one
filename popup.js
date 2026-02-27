@@ -1232,6 +1232,38 @@ function normalizePrompt(str) {
   return str.replace(/[\s\r\n,]/g, '');
 }
 
+function mergeTagsPreservingDisabled(oldTags, newTags) {
+  const merged = [];
+  let newIdx = 0;
+  for (let i = 0; i < oldTags.length; i++) {
+    const old = oldTags[i];
+    if (old.disabled) {
+      merged.push(old);
+    } else {
+      let foundIdx = -1;
+      for (let k = newIdx; k < newTags.length; k++) {
+        if (newTags[k].value === old.value) {
+          foundIdx = k;
+          break;
+        }
+      }
+      if (foundIdx !== -1) {
+        // Output any new active tags that were inserted *before* this match
+        while (newIdx <= foundIdx) {
+          merged.push(newTags[newIdx]);
+          newIdx++;
+        }
+      }
+    }
+  }
+  // Flush remaining new active tags
+  while (newIdx < newTags.length) {
+    merged.push(newTags[newIdx]);
+    newIdx++;
+  }
+  return merged;
+}
+
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'RETURN_PROMPT') {
@@ -1260,24 +1292,16 @@ function initCommunication() {
       }
 
       // Apply external change
-      // logic: If we are receiving a TRUE update from the page, we want to
-      // PRESERVE the currently disabled tags in the popup.
-      // Because the page doesn't know about disabled tags (it only sees active ones).
-      const disabledPos = positiveTags.filter(t => t.disabled);
-      const disabledNeg = negativeTags.filter(t => t.disabled);
-
       if (shouldUpdatePos) {
           rawPositive = positive || '';
-          const newPosTags = parsePromptToTags(rawPositive);
-          disabledPos.forEach(d => newPosTags.push(d));
-          positiveTags = newPosTags;
+          const parsedPosTags = parsePromptToTags(rawPositive);
+          positiveTags = mergeTagsPreservingDisabled(positiveTags, parsedPosTags);
       }
 
       if (shouldUpdateNeg) {
           rawNegative = negative || '';
-          const newNegTags = parsePromptToTags(rawNegative);
-          disabledNeg.forEach(d => newNegTags.push(d));
-          negativeTags = newNegTags;
+          const parsedNegTags = parsePromptToTags(rawNegative);
+          negativeTags = mergeTagsPreservingDisabled(negativeTags, parsedNegTags);
       }
 
       // Update UI if we are on the relevant tab
@@ -1317,22 +1341,19 @@ function initCommunication() {
 
           changesApplied = true;
 
-          const disabledPos = (charObj.posTags || []).filter(t => t.disabled);
-          const disabledNeg = (charObj.negTags || []).filter(t => t.disabled);
-
           let newPosTags = charObj.posTags || [];
           let newNegTags = charObj.negTags || [];
           
           if (shouldUpdatePos || charObj.posPrompt === undefined) {
-              newPosTags = parsePromptToTags(c.positive || '');
-              disabledPos.forEach(d => newPosTags.push(d));
+              const parsedPosTags = parsePromptToTags(c.positive || '');
+              newPosTags = mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags);
               charObj.posPrompt = c.positive || '';
               charObj.posTags = newPosTags;
           }
 
           if (shouldUpdateNeg || charObj.negPrompt === undefined) {
-              newNegTags = parsePromptToTags(c.negative || '');
-              disabledNeg.forEach(d => newNegTags.push(d));
+              const parsedNegTags = parsePromptToTags(c.negative || '');
+              newNegTags = mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags);
               charObj.negPrompt = c.negative || '';
               charObj.negTags = newNegTags;
           }
