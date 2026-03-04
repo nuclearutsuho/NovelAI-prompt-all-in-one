@@ -87,7 +87,9 @@ const translations = {
     res_multi_trigger: "Multi-Resolution Settings",
     btn_swap_res: "Swap Width/Height",
     res_w: "W",
-    res_h: "H"
+    res_h: "H",
+    setting_hide_autoclicker: "Hide Count Bar",
+    setting_hide_autoclicker_desc: "Hide the auto-clicker status bar at the bottom."
   },
   zh: {
     tab_positive: "正向提示词",
@@ -159,7 +161,9 @@ const translations = {
     res_multi_trigger: "多选分辨率设置",
     btn_swap_res: "交换宽高",
     res_w: "宽",
-    res_h: "高"
+    res_h: "高",
+    setting_hide_autoclicker: "隐藏整个计数条",
+    setting_hide_autoclicker_desc: "隐藏页面底部的连点器状态条。"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -231,7 +235,9 @@ const translations = {
     res_multi_trigger: "多解像度設定",
     btn_swap_res: "幅と高さを入れ替え",
     res_w: "幅",
-    res_h: "高"
+    res_h: "高",
+    setting_hide_autoclicker: "カウントバーを隠す",
+    setting_hide_autoclicker_desc: "ページ下部のオートクリッカーバーを非表示にします。"
   }
 };
 
@@ -1000,7 +1006,8 @@ function initUI() {
     'alternativeDanbooruAutocomplete',
     'triggerSpace',
     'triggerTab',
-    'renderNewlines'
+    'renderNewlines',
+    'hideAutoClicker'
   ];
 
   // Load Settings

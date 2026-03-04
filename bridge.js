@@ -9,8 +9,9 @@
     triggerTab = false,
     triggerSpace = true,
     sequentialCounters = {},
-    multiResConfig = null
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig']);
+    multiResConfig = null,
+    hideAutoClicker = false
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker']);
 
   // 2) inject script to page
   const s = document.createElement('script');
@@ -25,7 +26,8 @@
       triggerTab,
       triggerSpace,
       sequentialCounters,
-      multiResConfig
+      multiResConfig,
+      hideAutoClicker
     }, '*');
     s.remove();
   };
@@ -229,7 +231,8 @@
       changes.alternativeDanbooruAutocomplete ||
       changes.triggerTab ||
       changes.triggerSpace ||
-      changes.multiResConfig) {
+      changes.multiResConfig ||
+      changes.hideAutoClicker) {
 
       wildcards = changes.wildcards
         ? changes.wildcards.newValue
@@ -252,6 +255,9 @@
       multiResConfig = changes.multiResConfig
         ? changes.multiResConfig.newValue
         : multiResConfig;
+      hideAutoClicker = changes.hideAutoClicker
+        ? changes.hideAutoClicker.newValue
+        : hideAutoClicker;
 
       window.postMessage({
         type: '__WILDCARD_UPDATE__',
@@ -262,7 +268,8 @@
         triggerTab,
         triggerSpace,
         sequentialCounters,
-        multiResConfig
+        multiResConfig,
+        hideAutoClicker
       }, '*');
     }
   });

@@ -718,12 +718,37 @@
 
   // ─── 等待生成按钮出现后初始化 ────────────────────────────────
 
+  /** 控制工具栏显示/隐藏 */
+  function updateVisibility(hidden) {
+    const container = document.getElementById('nai-auto-clicker');
+    if (container) {
+      container.style.display = hidden ? 'none' : 'flex';
+      console.log(`[AutoClicker] 工具栏已${hidden ? '隐藏' : '显示'}`);
+    }
+  }
+
+  let latestHideAutoClicker = false;
+
+  // 监听来自 bridge.js 的配置信息
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    const { type, hideAutoClicker } = e.data || {};
+    if ((type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') && typeof hideAutoClicker !== 'undefined') {
+      latestHideAutoClicker = hideAutoClicker;
+      updateVisibility(hideAutoClicker);
+    }
+  });
+
   const initTimer = setInterval(() => {
     const btn = xpathNode(XPATH_GENERATE);
     if (btn) {
       clearInterval(initTimer);
       console.log('[AutoClicker] 检测到生成按钮，初始化浮窗');
       createComponent();
+      
+      // 关键修复：组件创建后立即同步一次最新状态
+      // 避免 __WILDCARD_INIT__ 消息在组件创建前到达导致失效
+      updateVisibility(latestHideAutoClicker);
     } else {
       console.log('[AutoClicker] 等待生成按钮...');
     }
