@@ -20,7 +20,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'openSyncPage') {
-        chrome.tabs.create({ url: chrome.runtime.getURL('sync.html') });
+        chrome.tabs.create({ url: chrome.runtime.getURL('pages/sync.html') });
         sendResponse({ success: true });
         return false;
     }

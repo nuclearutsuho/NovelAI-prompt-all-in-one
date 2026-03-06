@@ -24,16 +24,16 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "history-favorites-panel.js",
+        "modules/history-favorites-panel.js",
         "injector.js",
-        "auto-clicker.js",
-        "dictionary.csv",
-        "popup.html",
-        "popup.js",
-        "sync.html",
-        "sync.js",
-        "codemirror-bundle.js",
-        "manager-panel.css",
+        "modules/auto-clicker.js",
+        "data/dictionary.csv",
+        "pages/popup.html",
+        "pages/popup.js",
+        "pages/sync.html",
+        "pages/sync.js",
+        "lib/codemirror-bundle.js",
+        "styles/manager-panel.css",
         "worker.js",
         "default_wildcards/*"
       ],
@@ -46,6 +46,6 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "pages/popup.html"
   }
 }

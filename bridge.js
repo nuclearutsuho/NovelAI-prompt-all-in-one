@@ -15,7 +15,7 @@
 
   // 1.5) inject history/favorites panel
   const hp = document.createElement('script');
-  hp.src = chrome.runtime.getURL('history-favorites-panel.js');
+  hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
   hp.onload = () => hp.remove();
   (document.head || document.documentElement).appendChild(hp);
 
@@ -41,7 +41,7 @@
 
   // 2.5) inject auto-clicker to page context
   const ac = document.createElement('script');
-  ac.src = chrome.runtime.getURL('auto-clicker.js');
+  ac.src = chrome.runtime.getURL('modules/auto-clicker.js');
   ac.onload = () => ac.remove();
   (document.head || document.documentElement).appendChild(ac);
 
@@ -51,8 +51,8 @@
     if (document.getElementById('wildcard-manager-container')) return;
 
     const STORAGE_KEY = 'wildcardPanelState';
-    const popupUrl = chrome.runtime.getURL('popup.html');
-    const cssUrl = chrome.runtime.getURL('manager-panel.css');
+    const popupUrl = chrome.runtime.getURL('pages/popup.html');
+    const cssUrl = chrome.runtime.getURL('styles/manager-panel.css');
 
     // Inject CSS
     const link = document.createElement('link');
@@ -294,7 +294,7 @@
     }
   });
 
-  const csvUrl = chrome.runtime.getURL('dictionary.csv');
+  const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
   const res = await fetch(csvUrl);
   const text = await res.text();
 

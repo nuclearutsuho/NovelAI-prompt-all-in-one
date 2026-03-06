@@ -1238,7 +1238,7 @@ function saveCurrentFile() {
 // ============================
 async function loadDictionary() {
     try {
-        const csvUrl = chrome.runtime.getURL('dictionary.csv');
+        const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
         const res = await fetch(csvUrl);
         const text = await res.text();
         autocompleteDict = text.split(/\r?\n/).filter(Boolean).map(line => {
@@ -1561,7 +1561,7 @@ async function loadDictForEditor() {
     if (dictLoaded) return;
     const t0 = performance.now();
     try {
-        const resp = await fetch(chrome.runtime.getURL('dictionary.csv'));
+        const resp = await fetch(chrome.runtime.getURL('data/dictionary.csv'));
         const text = await resp.text();
         const lines = text.split('\n');
         dictBaseData = [];

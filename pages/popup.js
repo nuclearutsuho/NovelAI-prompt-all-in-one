@@ -1,6 +1,6 @@
-import TagEditor from './lib/TagEditor.js';
-import common from './lib/common.js';
-import Autocomplete from './lib/Autocomplete.js';
+import TagEditor from '../lib/TagEditor.js';
+import common from '../lib/common.js';
+import Autocomplete from '../lib/Autocomplete.js';
 
 let editor;
 let autocomplete;
@@ -951,7 +951,7 @@ function initUI() {
 
   // Library & Settings
   document.getElementById('btn-library').addEventListener('click', () => {
-    chrome.tabs.create({ url: 'sync.html' });
+    chrome.tabs.create({ url: chrome.runtime.getURL('pages/sync.html') });
   });
 
   // Language Support translations now at top level
