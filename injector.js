@@ -546,6 +546,7 @@
   };
 
   let autocompleteDict = [];
+  let autocompleteMap = null;
   let isSyncingFromPopup = false;
   window.addEventListener('message', e => {
     if (e.source !== window) return;
@@ -616,6 +617,31 @@
     else if (type === '__AUTOCOMPLETE_DICT__') {
       if (alternativeDanbooruAutocomplete) {
         autocompleteDict = data || [];
+        // [性能优化] 构建 Map 索引实现 O(1) 查询
+        // colorCode → CSS 颜色名映射（与 Autocomplete.getColor 完全一致）
+        const colorCodeMap = { '0':'lightblue','1':'indianred','3':'violet','4':'lightgreen','5':'orange','6':'red','7':'lightblue','8':'gold','9':'gold','10':'violet','11':'lightgreen','12':'tomato','14':'whitesmoke','15':'seagreen' };
+        autocompleteMap = new Map();
+        autocompleteDict.forEach(entry => {
+          if (entry && entry.word) {
+            // 转换为与 Autocomplete.js 一致的标准化格式
+            const normalized = {
+              text: entry.word,
+              color: colorCodeMap[entry.colorCode] || 'lightblue',
+              pop: entry.popCount || 0,
+              zh: entry.zhCN || '',
+              zhCN: entry.zhCN || '',
+              aliases: entry.aliases || []
+            };
+            // 存入多种格式的键，增加匹配容错
+            const lowerTag = entry.word.toLowerCase();
+            if (!autocompleteMap.has(lowerTag)) autocompleteMap.set(lowerTag, normalized);
+            const clean = entry.word.replace(/_/g, ' ').trim().toLowerCase();
+            if (!autocompleteMap.has(clean)) autocompleteMap.set(clean, normalized);
+          }
+        });
+        // 同步给 window 供其他组件使用
+        window.__autocompleteDict__ = data;
+        window.__autocompleteMap__ = autocompleteMap;
       }
     }
   });
@@ -1164,34 +1190,61 @@
     editor.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  function getCurrentPrompts() {
+  // 查找基础编辑器（允许隐藏元素，用于读取不可见标签页的内容）
+  const findBaseEditorAny = (selectors, excludeSelector) => {
+    const els = document.querySelectorAll(selectors);
+    for (let el of els) {
+      if (excludeSelector && el.closest(excludeSelector)) continue;
+      return el; // 不检查可见性，直接返回第一个匹配
+    }
+    return null;
+  };
 
-    // Use specific base prompt class first, fallback to generic prompt box (excluding characters)
+  // 从元素中读取文本（优先用 textContent，因为 innerText 对隐藏元素返回空串）
+  const getTextFromEl = el => {
+    if (!el) return undefined;
+    // textContent 不受 CSS visibility 影响，对隐藏元素也能正确读取
+    const text = (el.textContent || '').trim();
+    return text || undefined; // 空字符串返回 undefined，以便区分"没有"和"为空"
+  };
+
+  // 缓存最后已知的 negative 值
+  let _cachedNegative = undefined;
+  let _cachedCharPrompts = {};
+
+  function getCurrentPrompts() {
     let posEl = findBaseEditor('.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror', '.character-prompt-input');
     
-    // Undesired usually has this class
+    // 先找可见的 negative 编辑器，再找隐藏的
     let negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
+    if (!negEl) {
+      negEl = findBaseEditorAny('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
+    }
 
     const getVal = el => el ? (el.innerText || el.textContent || '').trim() : undefined;
 
+    // 对 negative 使用 textContent 优先（隐藏元素友好）
+    const negValue = negEl ? getTextFromEl(negEl) : undefined;
+    // 更新缓存：仅当成功读取到非空内容时更新
+    if (negValue !== undefined) {
+      _cachedNegative = negValue;
+    }
+
     const result = {
       positive: getVal(posEl),
-      negative: getVal(negEl)
+      negative: negValue !== undefined ? negValue : (_cachedNegative !== undefined ? _cachedNegative : undefined)
     };
 
     // Extract Character Prompts
     const charPrompts = [];
-    // Prefer desktop panel, but search mobile tray if necessary
     const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
-    
     const charContainers = Array.from(settingsPanel.querySelectorAll('.character-prompt-input'));
     
-    charContainers.forEach(charContainer => {
+    charContainers.forEach((charContainer, idx) => {
       const rect = charContainer.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
 
       const pm = charContainer.querySelector('.ProseMirror');
-      // Find active tab to know whether this ProseMirror is positive or negative
       const btns = Array.from(charContainer.querySelectorAll('button'));
       const activeBtn = btns.find(btn => 
         (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired')) 
@@ -1200,20 +1253,135 @@
       );
       const isUndesired = activeBtn && activeBtn.textContent.includes('Undesired');
 
+      const currentVal = getVal(pm);
+
+      if (!_cachedCharPrompts[idx]) _cachedCharPrompts[idx] = {};
+      if (isUndesired) {
+        _cachedCharPrompts[idx].negative = currentVal;
+      } else {
+        _cachedCharPrompts[idx].positive = currentVal;
+      }
+
       charPrompts.push({
-        positive: isUndesired ? undefined : getVal(pm),
-        negative: isUndesired ? getVal(pm) : undefined,
-        gender: 'other', // We no longer strictly sync gender to UI, placeholder
+        positive: isUndesired ? _cachedCharPrompts[idx].positive : currentVal,
+        negative: isUndesired ? currentVal : _cachedCharPrompts[idx].negative,
+        gender: 'other',
         activeTab: isUndesired ? 'negative' : 'positive'
       });
     });
     result.characters = charPrompts;
 
-    console.log('[Phase 3 Debug] Found base prompt DOM positive:', !!posEl, 'negative:', !!negEl);
-    console.log('[Phase 3 Debug] Found', charPrompts.length, 'Character Prompts');
-    console.log('[Phase 3 Debug] Returning to Popup:', result);
     return result;
   }
+
+  /**
+   * 启动预热：复用 __SWITCH_TAB__ 的按钮查找逻辑，
+   * 快速切到 Undesired Content 读取内容后切回。
+   * 在页面加载后延迟执行，确保 DOM 已就绪。
+   */
+  let _warmupDone = false;
+
+  async function warmupNegativePrompt() {
+    if (_warmupDone) return;
+    _warmupDone = true;
+
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+    // === 主提示词区域 ===
+    const baseContainer = document.querySelector('.image-gen-prompt-main') || document;
+    const baseBtns = Array.from(baseContainer.querySelectorAll('button'));
+
+    const undesiredBtn = baseBtns.find(el => el.textContent.trim() === 'Undesired Content');
+    const promptBtn = baseBtns.find(el => {
+      const t = el.textContent.trim();
+      return t === 'Base Prompt' || t === 'Prompt';
+    });
+
+    if (undesiredBtn && promptBtn) {
+      console.log('[Wildcard] Warmup: switching to Undesired Content...');
+      undesiredBtn.click();
+      await wait(200);
+
+      // 读取 negative 编辑器内容
+      const negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input')
+                 || findBaseEditorAny('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
+      if (negEl) {
+        const text = (negEl.innerText || negEl.textContent || '').trim();
+        _cachedNegative = text;
+        console.log('[Wildcard] Warmup: negative prompt cached (' + text.length + ' chars)');
+      }
+
+      // 切回 positive
+      promptBtn.click();
+      await wait(50);
+      console.log('[Wildcard] Warmup: switched back to Prompt');
+    } else {
+      console.log('[Wildcard] Warmup: buttons not found. undesired:', !!undesiredBtn, 'prompt:', !!promptBtn);
+    }
+
+    // === 角色提示词区域 ===
+    const charContainers = Array.from(document.querySelectorAll('.character-prompt-input'));
+    for (let idx = 0; idx < charContainers.length; idx++) {
+      const container = charContainers[idx];
+      const btns = Array.from(container.querySelectorAll('button'));
+      const charUndesiredBtn = btns.find(el => el.textContent.trim() === 'Undesired Content');
+      const charPromptBtn = btns.find(el => {
+        const t = el.textContent.trim();
+        return t === 'Base Prompt' || t === 'Prompt';
+      });
+
+      if (charUndesiredBtn && charPromptBtn) {
+        charUndesiredBtn.click();
+        await wait(200);
+        const pm = container.querySelector('.ProseMirror');
+        if (pm) {
+          if (!_cachedCharPrompts[idx]) _cachedCharPrompts[idx] = {};
+          _cachedCharPrompts[idx].negative = (pm.innerText || pm.textContent || '').trim();
+        }
+        charPromptBtn.click();
+        await wait(50);
+      }
+    }
+  }
+
+  // 智能预热启动器：等待 DOM 就绪且用户未在输入时启动预热
+  function initWarmup() {
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      if (_warmupDone || attempts > 120) { // 60 秒后放弃尝试
+        clearInterval(interval);
+        return;
+      }
+
+      // 等待主生成区域加载
+      const baseContainer = document.querySelector('.image-gen-prompt-main');
+      if (!baseContainer) return;
+
+      // 确保相关标签切换按钮已渲染
+      const btns = Array.from(baseContainer.querySelectorAll('button'));
+      const undesiredBtn = btns.find(el => el.textContent.trim() === 'Undesired Content');
+      if (!undesiredBtn) return;
+
+      // 检查用户是否正在与界面交互，如果是则推迟预热，防止打断输入
+      const activeEl = document.activeElement;
+      if (activeEl && (
+        activeEl.tagName === 'INPUT' || 
+        activeEl.tagName === 'TEXTAREA' || 
+        activeEl.isContentEditable || 
+        activeEl.closest('.ProseMirror')
+      )) {
+        return;
+      }
+
+      // 条件满足，开始预热
+      clearInterval(interval);
+      warmupNegativePrompt();
+    }, 500);
+  }
+
+  // 启动智能预热监听
+  initWarmup();
 
   window.addEventListener('message', e => {
     if (e.source !== window) return;
@@ -1503,7 +1671,1276 @@
   window.__getCurrentPrompts_PM = getCurrentPrompts;
 
   console.log('[Wildcard] injector ready');
+  console.log('[Wildcard] History Modal module loaded');
+
+  // ═══════════════════════════════════════════════════════════════
+  //  历史与收藏面板 (Injected History & Favorites Modal)
+  // ═══════════════════════════════════════════════════════════════
+
+  (function initHistoryModal() {
+    const MODAL_ID = 'nai-history-modal';
+
+    // ───── CSS 样式 ─────────────────────────────────────────────
+    const STYLE = `
+      #nai-history-backdrop {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.65);
+        backdrop-filter: blur(4px);
+        z-index: 2147483650; /* 必须大于 manager-panel 的 2147483645 */
+        align-items: center;
+        justify-content: center;
+      }
+      #nai-history-backdrop.visible { display: flex; }
+
+      #${MODAL_ID} {
+        width: 85vw; max-width: 1100px;
+        height: 82vh;
+        background: #1a1a2e;
+        border: 1px solid #3a3a5c;
+        border-radius: 14px;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.85);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #e0e0f0;
+      }
+
+      .nhm-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 18px;
+        background: #22223a;
+        border-bottom: 1px solid #3a3a5c;
+        flex-shrink: 0;
+      }
+      .nhm-title { font-size: 16px; font-weight: 600; color: #c5c5ef; letter-spacing: 0.5px; }
+      .nhm-close-btn {
+        background: transparent; border: none; color: #888; font-size: 20px;
+        cursor: pointer; padding: 2px 8px; border-radius: 4px; line-height: 1;
+      }
+      .nhm-close-btn:hover { background: #3a3a5c; color: #fff; }
+
+      .nhm-body {
+        display: flex; flex: 1; overflow: hidden;
+      }
+
+      /* ── 左侧边栏 ── */
+      .nhm-sidebar {
+        width: 300px; min-width: 240px; max-width: 340px;
+        background: #16162a;
+        border-right: 1px solid #2e2e50;
+        display: flex; flex-direction: column;
+        flex-shrink: 0;
+      }
+
+      .nhm-tabs {
+        display: flex;
+        border-bottom: 1px solid #2e2e50;
+        flex-shrink: 0;
+      }
+      .nhm-tab {
+        flex: 1; padding: 9px 4px; text-align: center;
+        font-size: 12px; color: #888; cursor: pointer;
+        border: none; background: transparent; border-bottom: 2px solid transparent;
+        transition: all 0.15s;
+      }
+      .nhm-tab.active { color: #818cf8; border-bottom-color: #818cf8; }
+      .nhm-tab:hover:not(.active) { color: #ccc; }
+
+      .nhm-list {
+        flex: 1; overflow-y: auto; padding: 4px 0;
+      }
+      .nhm-list::-webkit-scrollbar { width: 4px; }
+      .nhm-list::-webkit-scrollbar-thumb { background: #3a3a5c; border-radius: 2px; }
+
+      .nhm-item {
+        display: flex; align-items: flex-start;
+        padding: 8px 12px; gap: 8px;
+        cursor: pointer; border-left: 3px solid transparent;
+        transition: background 0.1s;
+      }
+      .nhm-item:hover { background: #22223a; }
+      .nhm-item.selected { background: #22223a; border-left-color: #818cf8; }
+
+      .nhm-item-main { flex: 1; min-width: 0; }
+      .nhm-item-time { font-size: 11px; color: #818cf8; margin-bottom: 3px; }
+      .nhm-item-preview { font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      
+      /* Diff 摘要容器与微型胶囊样式 */
+      .nhm-item-diff-container {
+        display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+      }
+      .nhm-diff-tag {
+        display: inline-flex; align-items: center; font-size: 10px; padding: 1px 4px; border-radius: 3px;
+        white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+      }
+      .nhm-diff-tag .diff-op { font-weight: bold; margin-right: 3px; font-size: 11px; }
+      .nhm-diff-tag.diff-add { background: rgba(46, 204, 113, 0.15); border: 1px solid rgba(46, 204, 113, 0.3); color: #4ade80; }
+      .nhm-diff-tag.diff-remove { background: rgba(231, 76, 60, 0.15); border: 1px solid rgba(231, 76, 60, 0.3); color: #f87171; text-decoration: line-through; }
+      .nhm-diff-tag.diff-change { background: rgba(167, 139, 250, 0.15); border: 1px solid rgba(167, 139, 250, 0.3); color: #c084fc; }
+      .nhm-diff-tag.diff-enable { background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }
+      .nhm-diff-tag.diff-disable { background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.3); color: #9ca3af; }
+      .nhm-diff-tag.diff-ghost { background: rgba(75, 85, 99, 0.1); border: 1px dashed rgba(107, 114, 128, 0.3); color: #6b7280; text-decoration: line-through; }
+      .nhm-diff-expand-capsule {
+        background: transparent; border: 1px dashed #666; color: #888; 
+        font-style: italic; letter-spacing: 1px; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+      }
+      .nhm-diff-expand-capsule:hover { color: #fff; border-color: #888; }
+
+      .nhm-item-name {
+        font-size: 12px; color: #c5c5ef; font-weight: 500; margin-bottom: 2px;
+        cursor: pointer; padding: 1px 3px; border-radius: 3px;
+      }
+      .nhm-item-name:hover { background: #3a3a5c; }
+
+      .nhm-star-btn {
+        background: transparent; border: none; cursor: pointer;
+        font-size: 16px; line-height: 1; color: #555; flex-shrink: 0;
+        padding: 0 2px; transition: color 0.15s; align-self: center;
+      }
+      .nhm-star-btn.starred { color: #f59e0b; }
+      .nhm-star-btn:hover { color: #f59e0b; }
+
+      .nhm-delete-btn {
+        background: transparent; border: none; cursor: pointer;
+        font-size: 13px; color: #555; flex-shrink: 0; padding: 0 2px;
+        align-self: center; transition: color 0.15s;
+      }
+      .nhm-delete-btn:hover { color: #ef4444; }
+
+      .nhm-footer {
+        padding: 10px 12px;
+        border-top: 1px solid #2e2e50;
+        flex-shrink: 0;
+        font-size: 11px; color: #666;
+      }
+      .nhm-footer-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+      .nhm-limit-input {
+        width: 52px; background: #2a2a40; border: 1px solid #3a3a5c;
+        color: #ccc; border-radius: 4px; padding: 2px 4px; font-size: 12px;
+        text-align: center;
+      }
+      .nhm-clear-btn {
+        margin-left: auto; background: transparent; border: 1px solid #3a3a5c;
+        color: #888; padding: 3px 8px; border-radius: 4px; font-size: 11px;
+        cursor: pointer;
+      }
+      .nhm-clear-btn:hover { background: #3a3a5c; color: #fff; }
+
+      /* ── 右侧详情 ── */
+      .nhm-detail {
+        flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      }
+
+      .nhm-detail-placeholder {
+        flex: 1; display: flex; align-items: center; justify-content: center;
+        color: #444; font-size: 14px;
+      }
+
+      .nhm-detail-content {
+        flex: 1; overflow-y: auto;
+        padding: 16px 20px;
+      }
+      
+      /* 美化的空状态面板 */
+      @keyframes nhmFadeInUp {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .nhm-empty-state {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        margin: 20px 12px; padding: 40px 20px;
+        background: rgba(42, 42, 64, 0.4); border: 1px dashed rgba(255, 255, 255, 0.08);
+        border-radius: 8px; text-align: center;
+        animation: nhmFadeInUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .nhm-empty-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.8; }
+      .nhm-empty-title { color: #e2e8f0; font-size: 14px; font-weight: 600; margin-bottom: 6px; letter-spacing: 0.5px; }
+      .nhm-empty-desc { color: #94a3b8; font-size: 12px; line-height: 1.5; }
+
+      /* Diff 详情查阅弹窗 */
+      .nhm-diff-modal {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(15, 15, 26, 0.85); backdrop-filter: blur(8px);
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        z-index: 999999; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+      }
+      .nhm-diff-modal.visible { opacity: 1; pointer-events: auto; }
+      .nhm-diff-modal-content {
+        background: #1e1e2d; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+        width: 80%; max-width: 800px; max-height: 80%; display: flex; flex-direction: column;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+      }
+      .nhm-diff-modal-header {
+        padding: 12px 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      .nhm-diff-modal-title { font-size: 14px; color: #fff; font-weight: bold; }
+      .nhm-diff-modal-close { background: transparent; border: none; font-size: 20px; color: #888; cursor: pointer; }
+      .nhm-diff-modal-close:hover { color: #fff; }
+      .nhm-diff-modal-body {
+        padding: 16px; overflow-y: auto; flex: 1;
+      }
+      .nhm-diff-modal-body .nhm-item-diff-container { display: flex; flex-wrap: wrap; gap: 6px; }
+      .nhm-diff-modal-body .nhm-diff-tag { font-size: 11px; padding: 3px 6px; max-width: none; }
+
+      .nhm-detail-content::-webkit-scrollbar { width: 5px; }
+      .nhm-detail-content::-webkit-scrollbar-thumb { background: #3a3a5c; border-radius: 3px; }
+
+      .nhm-section { margin-bottom: 18px; }
+      .nhm-section-title {
+        font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+        color: #555; padding-bottom: 6px; margin-bottom: 8px;
+        border-bottom: 1px solid #2e2e50;
+      }
+      .nhm-section-title.pos { color: #4ade80; border-bottom-color: #4ade8040; }
+      .nhm-section-title.neg { color: #f87171; border-bottom-color: #f8717140; }
+      .nhm-section-title.char { color: #60a5fa; border-bottom-color: #60a5fa40; }
+
+      .nhm-tag-cloud { display: flex; flex-wrap: wrap; gap: 5px; }
+      .nhm-tag.pos { background: #14321a; border-color: #4ade8050; color: #86efac; }
+      .nhm-tag.neg { background: #32141a; border-color: #f8717150; color: #fca5a5; }
+      .nhm-tag.char { background: #14243c; border-color: #60a5fa50; color: #93c5fd; }
+
+      .nhm-detail-actions {
+        padding: 12px 18px;
+        border-top: 1px solid #2e2e50;
+        display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+        flex-shrink: 0;
+        background: #16162a;
+      }
+      .nhm-detail-meta { font-size: 11px; color: #555; flex: 1; }
+
+      .nhm-restore-btn {
+        padding: 8px 22px;
+        background: linear-gradient(135deg, #6366f1, #818cf8);
+        border: none; border-radius: 8px;
+        color: #fff; font-size: 14px; font-weight: 600;
+        cursor: pointer; transition: opacity 0.2s, transform 0.1s;
+        box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+      }
+      /* ==========================================================
+         完全参照 TagEditor 的样式体系
+         ========================================================== */
+      .nhm-tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-content: flex-start;
+      }
+      .nhm-tag-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      .nhm-tag-capsule {
+        display: flex;
+        align-items: center;
+        background: #3b3b4f;
+        border: 1px solid #4a4a6a;
+        border-radius: 6px;
+        padding: 2px 8px;
+        color: #eee;
+        font-size: 13px;
+        min-height: 28px;
+        box-sizing: border-box;
+        transition: all 0.2s;
+      }
+      .nhm-tag-zh-row {
+        font-size: 11px;
+        color: #888;
+        line-height: 1.2;
+        text-align: center;
+        white-space: normal;
+        word-break: break-all;
+        overflow-wrap: break-word;
+        min-height: 1.2em;
+      }
+      .nhm-tag-primary {
+        display: flex;
+        align-items: center;
+      }
+      .nhm-tag-weight-badge {
+        font-size: 0.85em;
+        padding: 0 4px;
+        border-radius: 4px;
+        line-height: 1.2;
+        font-weight: bold;
+        margin-right: 4px;
+      }
+      .nhm-tag-weight-badge.w-pos {
+        background: rgba(46, 204, 113, 0.2);
+        color: #2ecc71;
+      }
+      .nhm-tag-weight-badge.w-neg {
+        background: rgba(231, 76, 60, 0.2);
+        color: #e74c3c;
+      }
+      /* 分组/特殊样式补充 */
+      .nhm-tag-capsule.gh {
+        background: rgba(129, 140, 248, 0.15);
+        border: 1px solid rgba(129, 140, 248, 0.3);
+        border-radius: 12px 2px 2px 12px;
+        border-right: none;
+        padding-left: 6px;
+        border-left-width: 3px;
+        border-left-color: #818cf8;
+        min-width: 24px;
+        margin-right: -4px;
+      }
+      .nhm-tag-capsule.gf {
+        background: rgba(129, 140, 248, 0.15);
+        border: 1px solid rgba(129, 140, 248, 0.3);
+        border-radius: 2px 12px 12px 2px;
+        border-left: none;
+        padding-right: 6px;
+        border-right-width: 3px;
+        border-right-color: #818cf8;
+        min-width: 14px;
+        justify-content: center;
+      }
+      .nhm-tag-capsule.dh {
+        background: rgba(167, 139, 250, 0.15);
+        border: 1px solid rgba(167, 139, 250, 0.4);
+        border-radius: 12px 2px 2px 12px;
+        border-right: none;
+        padding-left: 8px;
+        border-left-width: 3px;
+        border-left-color: #a78bfa;
+        min-width: 24px;
+        margin-right: -4px;
+      }
+      .nhm-tag-capsule.dh::before { content: "||"; font-weight: bold; color: #a78bfa; margin: 0 2px; }
+      .nhm-tag-capsule.df {
+        background: rgba(167, 139, 250, 0.15);
+        border: 1px solid rgba(167, 139, 250, 0.4);
+        border-radius: 2px 12px 12px 2px;
+        border-left: none;
+        padding-right: 8px;
+        border-right-width: 3px;
+        border-right-color: #a78bfa;
+        min-width: 14px;
+        justify-content: center;
+      }
+      .nhm-tag-capsule.df::after { content: "||"; font-weight: bold; color: #a78bfa; margin: 0 2px; }
+      .nhm-tag-capsule.dyn-member { background: rgba(167, 139, 250, 0.05); border-color: rgba(167, 139, 250, 0.2); }
+      .nhm-tag-dyn-badge { background: #a78bfa; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; font-weight: bold; margin-right: 4px; }
+      .nhm-tag-dyn-weight { background: #a78bfa; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; font-weight: bold; margin-left: 4px; }
+
+      /* 禁用状态 (与 TagEditor 的 .tag-capsule.disabled 一致) */
+      .nhm-tag-capsule.disabled {
+        background: #2a2a2e;
+        border-color: #333;
+      }
+      .nhm-tag-capsule.disabled .nhm-tag-primary {
+        opacity: 0.5;
+      }
+      .nhm-tag-capsule.disabled .nhm-tag-text {
+        text-decoration: line-through;
+      }
+
+      /* 换行标签 (作为普通胶囊显示，与 Popup 中未开启"渲染换行符"的样式一致) */
+      .nhm-tag-newline .nhm-tag-capsule {
+        background: rgba(255, 255, 255, 0.05) !important;
+        border-style: dashed;
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        min-width: 32px;
+        justify-content: center;
+      }
+      .nhm-tag-newline .nhm-tag-text {
+        font-size: 14px;
+        color: #888;
+      }
+      
+      /* 换行标签分隔符（强制后面元素换行） */
+      .nhm-tag-newline-separator {
+        flex-basis: 100%;
+        height: 0;
+        margin: 0;
+        padding: 0;
+      }
+    `;
+
+    function injectStyle() {
+      if (document.getElementById('nai-history-modal-style')) return;
+      const el = document.createElement('style');
+      el.id = 'nai-history-modal-style';
+      el.textContent = STYLE;
+      document.head.appendChild(el);
+    }
+
+    // ───── 工具函数 ─────────────────────────────────────────────
+    function formatTime(ts) {
+      const d = new Date(ts);
+      const date = `${d.getMonth()+1}/${d.getDate()}`;
+      const time = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+      return `${date} ${time}`;
+    }
+
+    function tagsPreview(str) {
+      if (!str) return '(空)';
+      const tags = str.split(',').map(t => t.trim()).filter(Boolean);
+      if (tags.length === 0) return '(空)';
+      const preview = tags.slice(0, 5).join(', ');
+      return tags.length > 5 ? preview + ` ...+${tags.length - 5}` : preview;
+    }
+
+    /**
+     * 计算两个提示词快照数组之间的按词差异（忽略顺序，支持 disabled 状态追踪）
+     * @param {Array|string} current 现在的状态 (优先取 tag 对象数组)
+     * @param {Array|string} previous 过去的状态
+     * @returns {Object} 包含了 6 种动作状态的分类词典
+     */
+    function computePromptDiff(current, previous) {
+      const parseToMap = (input) => {
+        const map = new Map();
+        if (!input) return map;
+        
+        // 兼容处理：统一转为规范的高维 tag object 数组
+        let tagsArray = [];
+        if (typeof input === 'string') {
+          tagsArray = input.split(',').map(t => ({ value: t.trim(), disabled: false })).filter(t => t.value);
+        } else if (Array.isArray(input)) {
+          tagsArray = input;
+        }
+
+        tagsArray.forEach(tag => {
+          const text = tag.value;
+          if (!text || text === '\\n' || text === '||' || text.startsWith('||') || text === '\n') return;
+          
+          let weightVal = tag.dynWeight || 1.0;
+          let cleanText = text;
+
+          // 仿照 renderTagCloud 内部的经典正则提取纯文本与强制指定权重
+          const blockMatch = text.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+          const headerMatch = text.match(/^([-?\d\.]+)::$/);
+          
+          if (blockMatch) {
+            weightVal = parseFloat(blockMatch[1]);
+            cleanText = blockMatch[2];
+          } else if (headerMatch) {
+            weightVal = parseFloat(headerMatch[1]);
+            cleanText = headerMatch[1] + '::';
+          } else if (text === ' ::') {
+             cleanText = ')';  // 特殊组尾处理
+          } else {
+            let inc = 0, dec = 0, str = text;
+            if (str.startsWith('{') || str.startsWith('[')) {
+              while (str.startsWith('{') && str.endsWith('}')) { inc++; str = str.slice(1, -1); }
+              if (inc === 0) while (str.startsWith('[') && str.endsWith(']')) { dec++; str = str.slice(1, -1); }
+              if (inc > 0) weightVal = 1 + (inc * 0.1);
+              else if (dec > 0) weightVal = 1 - (dec * 0.1);
+              cleanText = str;
+            }
+          }
+
+          if (cleanText) {
+             const lowerKey = cleanText.toLowerCase();
+             // 如果输入框写了多个相同的词，只比对第一个（通常不推荐写重复tag）
+             if (!map.has(lowerKey)) {
+                map.set(lowerKey, { 
+                  original: text, 
+                  cleanText, 
+                  weightVal, 
+                  disabled: !!tag.disabled 
+                });
+             }
+          }
+        });
+        return map;
+      };
+
+      const currMap = parseToMap(current);
+      const prevMap = parseToMap(previous);
+
+      const diff = { added: [], removed: [], changed: [], disabled: [], enabled: [], ghost_deleted: [] };
+
+      // 阶段 1：找出现存的（新增、变动、禁用、启用）
+      for (const [key, currData] of currMap.entries()) {
+        if (!prevMap.has(key)) {
+          if (currData.disabled) {
+             diff.disabled.push(currData); // 刚加进来就被禁用了（不常见，但逻辑上完备）
+          } else {
+             diff.added.push(currData);
+          }
+        } else {
+          const prevData = prevMap.get(key);
+          
+          if (!prevData.disabled && currData.disabled) {
+             diff.disabled.push(currData);
+          } else if (prevData.disabled && !currData.disabled) {
+             diff.enabled.push(currData);
+          } else if (prevData.disabled === currData.disabled) {
+             // 只有生存状态没变的情况下，才去计算权重或拼写的变动
+             if (Math.abs(currData.weightVal - prevData.weightVal) > 0.01) {
+               diff.changed.push({
+                 cleanText: currData.cleanText,
+                 oldWeight: prevData.weightVal,
+                 newWeight: currData.weightVal,
+                 disabled: currData.disabled // 记录它是不是在禁用的状态下被悄悄改了权重
+               });
+             }
+          }
+        }
+      }
+
+      // 阶段 2：找出消失的（被删的活跃词、被清扫的幽灵废弃词）
+      for (const [key, prevData] of prevMap.entries()) {
+        if (!currMap.has(key)) {
+          if (prevData.disabled) {
+             diff.ghost_deleted.push(prevData);
+          } else {
+             diff.removed.push(prevData);
+          }
+        }
+      }
+
+      return diff;
+    }
+
+    /**
+     * 渲染 6-State Diff 内容为 HTML，生成微型变动胶囊
+     */
+    function generateDiffHTML(currSnapshot, prevSnapshot) {
+      if (!prevSnapshot) {
+         const previewTags = currSnapshot.positiveTags ? currSnapshot.positiveTags.map(t=>t.value).join(', ') : currSnapshot.positive;
+         return `<div class="nhm-item-preview">${tagsPreview(previewTags)}</div>`;
+      }
+
+      // 优先提取精确的 tags 数组（如果版本太旧就退化到处理普通字符串）
+      const currTarget = currSnapshot.positiveTags || currSnapshot.positive;
+      const prevTarget = prevSnapshot.positiveTags || prevSnapshot.positive;
+
+      const diff = computePromptDiff(currTarget, prevTarget);
+      
+      const allDiffs = [
+        ...diff.added.map(item => `<span class="nhm-diff-tag diff-add"><span class="diff-op">+</span> ${item.cleanText}</span>`),
+        ...diff.removed.map(item => `<span class="nhm-diff-tag diff-remove"><span class="diff-op">-</span> ${item.cleanText}</span>`),
+        ...diff.changed.map(item => `<span class="nhm-diff-tag diff-change" ${item.disabled ? 'style="opacity:0.6"' : ''}><span class="diff-op">~</span> ${item.cleanText}: ${item.oldWeight.toFixed(2)} → ${item.newWeight.toFixed(2)}</span>`),
+        ...diff.enabled.map(item => `<span class="nhm-diff-tag diff-enable"><span class="diff-op">👁️</span> ${item.cleanText}</span>`),
+        ...diff.disabled.map(item => `<span class="nhm-diff-tag diff-disable"><span class="diff-op">🚫</span> ${item.cleanText}</span>`),
+        ...diff.ghost_deleted.map(item => `<span class="nhm-diff-tag diff-ghost"><span class="diff-op">×</span> ${item.cleanText}</span>`)
+      ];
+
+      if (allDiffs.length === 0) {
+        return `<div class="nhm-item-preview" style="color:#666; font-style:italic;">仅顺序或位置变动</div>`;
+      }
+
+      const MAX_PREVIEW_TAGS = 25; 
+      let html = '';
+      
+      if (allDiffs.length > MAX_PREVIEW_TAGS) {
+        const fullHTML = allDiffs.join('').replace(/"/g, '&quot;');
+        html = allDiffs.slice(0, MAX_PREVIEW_TAGS).join('') + 
+               `<span class="nhm-diff-tag nhm-diff-expand-capsule" title="点击查看所有变动" data-fulldiff="${fullHTML}">... +${allDiffs.length - MAX_PREVIEW_TAGS}</span>`;
+      } else {
+        html = allDiffs.join('');
+      }
+
+      return `<div class="nhm-item-diff-container">${html}</div>`;
+    }
+
+    /**
+     * 解析单个 tag 的权重信息，返回 { weightVal, cleanText }
+     * 支持 NAI 格式：weight::tag :: 和 {{{brackets}}} 样式
+     */
+    function parseTagWeight(text) {
+      let weightVal = 1.0;
+      let cleanText = text;
+
+      // NAI 式“weight::tag ::”单片语法
+      const blockMatch = text.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+      // NAI 式“weight::”组头
+      const headerMatch = text.match(/^([-?\d\.]+)::$/);
+
+      if (blockMatch) {
+        weightVal = parseFloat(blockMatch[1]);
+        cleanText = blockMatch[2];
+      } else if (headerMatch) {
+        weightVal = parseFloat(headerMatch[1]);
+        cleanText = headerMatch[1] + '::';
+      } else {
+        // 旧式括号语法
+        let inc = 0, dec = 0, str = text;
+        if (text.startsWith('{') || text.startsWith('[')) {
+          while (str.startsWith('{') && str.endsWith('}')) { inc++; str = str.slice(1, -1); }
+          if (inc === 0) while (str.startsWith('[') && str.endsWith(']')) { dec++; str = str.slice(1, -1); }
+          if (inc > 0) weightVal = 1 + (inc * 0.1);
+          else if (dec > 0) weightVal = 1 - (dec * 0.1);
+          cleanText = str;
+        }
+      }
+      return { weightVal, cleanText };
+    }
+
+    /**
+     * 移植自 Autocomplete.getTagInfo 的完整 tag 信息查询
+     * 支持前缀剥离（artist:, character: 等）和类型颜色映射
+     * 使用 Map 索引实现 O(1) 查询
+     */
+    function getTagInfo(text) {
+      if (!text) return null;
+      let query = text.trim().toLowerCase();
+
+      // 0. 去除权重后缀 (e.g., tag:20)
+      const weightSuffixMatch = query.match(/^(.*?)\s*:\s*\d+(\.\d+)?\s*$/);
+      if (weightSuffixMatch) query = weightSuffixMatch[1].trim();
+
+      // 0.1 去除尾部逗号
+      if (query.endsWith(',')) query = query.slice(0, -1).trim();
+
+      // 1. 检查类别前缀(artist:, character:, copyright:, meta:, general:)
+      const prefixMatch = query.match(/^(artist|character|copyright|meta|general):(.*)$/);
+      let prefix = null;
+      let baseTag = query;
+      if (prefixMatch) {
+        prefix = prefixMatch[1];
+        baseTag = prefixMatch[2].trim();
+      }
+
+      // 2. 从 Map 中查找 (尝试多种格式匹配)
+      let match = null;
+      if (autocompleteMap) {
+        match = autocompleteMap.get(baseTag);
+        // 尝试下划线替换为空格
+        if (!match) match = autocompleteMap.get(baseTag.replace(/_/g, ' '));
+        // 尝试空格替换为下划线
+        if (!match) match = autocompleteMap.get(baseTag.replace(/ /g, '_'));
+      }
+
+      const prefixColorMap = {
+        artist: 'indianred',
+        character: 'lightgreen',
+        copyright: 'violet',
+        meta: 'orange',
+        general: 'lightblue'
+      };
+
+      if (match) {
+        if (prefix) return { ...match, color: prefixColorMap[prefix] || match.color };
+        return match;
+      }
+      if (prefix) return { text: baseTag, zhCN: '', pop: 0, color: prefixColorMap[prefix] };
+      return null;
+    }
+
+    /**
+     * 渲染 tag 云 — 完全复刻 TagEditor 的视觉效果
+     * @param {HTMLElement} container - 容器元素
+     * @param {Array|string} tagsOrStr - tag 对象数组（v2 快照）或逗号分隔字符串（v1 快照兼容）
+     */
+    function renderTagCloud(container, tagsOrStr) {
+      container.className = 'nhm-tag-list';
+      container.innerHTML = '';
+
+      // 兼容旧快照：如果传入的是字符串，用简易解析构造 tag 对象
+      let tags;
+      if (typeof tagsOrStr === 'string') {
+        if (!tagsOrStr || !tagsOrStr.trim()) {
+          container.innerHTML = '<span style="color:#444; font-size:13px;">（无内容）</span>';
+          return;
+        }
+        tags = tagsOrStr.split(',').map(t => ({ value: t.trim(), disabled: false })).filter(t => t.value);
+      } else if (Array.isArray(tagsOrStr)) {
+        tags = tagsOrStr;
+      } else {
+        container.innerHTML = '<span style="color:#444; font-size:13px;">（无内容）</span>';
+        return;
+      }
+
+      if (tags.length === 0) {
+        container.innerHTML = '<span style="color:#444; font-size:13px;">（无内容）</span>';
+        return;
+      }
+
+      let inDynGroup = false;
+
+      tags.forEach((tag, index) => {
+        const text = tag.value;
+        if (!text && text !== '\n') return;
+
+        let weightVal = 1.0;
+        let cleanText = text;
+        const isDynHeader = text.startsWith('||') && (text !== '||' || tag.isStart);
+        const isDynFooter = text === '||' && !tag.isStart;
+        let isCompHeader = false;
+        let isCompFooter = text === ' ::';
+        const isNewline = text === '\n';
+        const isDynMember = inDynGroup && !isDynHeader && !isDynFooter;
+
+        if (isDynHeader) inDynGroup = true;
+
+        // 解析权重
+        const blockMatch = text.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+        const headerMatch = text.match(/^([-?\d\.]+)::$/);
+
+        if (blockMatch) {
+          weightVal = parseFloat(blockMatch[1]);
+          cleanText = blockMatch[2];
+        } else if (headerMatch) {
+          weightVal = parseFloat(headerMatch[1]);
+          cleanText = headerMatch[1] + '::';
+          isCompHeader = true;
+        } else if (isCompFooter) {
+          cleanText = ')';
+          // 回溯查找组头的权重
+          for (let j = index - 1; j >= 0; j--) {
+            const m = tags[j].value.match(/^([-?\d\.]+)::$/);
+            if (m) { weightVal = parseFloat(m[1]); break; }
+          }
+        } else if (!isNewline && !isDynHeader && !isDynFooter) {
+          // 旧式括号语法
+          let inc = 0, dec = 0, str = text;
+          if (text.startsWith('{') || text.startsWith('[')) {
+            while (str.startsWith('{') && str.endsWith('}')) { inc++; str = str.slice(1, -1); }
+            if (inc === 0) while (str.startsWith('[') && str.endsWith(']')) { dec++; str = str.slice(1, -1); }
+            if (inc > 0) weightVal = 1 + (inc * 0.1);
+            else if (dec > 0) weightVal = 1 - (dec * 0.1);
+            cleanText = str;
+          }
+        }
+
+        // 动态选择徽章
+        let pickBadge = '';
+        if (isDynHeader) {
+          let config = text.slice(2);
+          if (config.endsWith('$$')) config = config.slice(0, -2);
+          if (config) {
+            let displayCount = config.replace('-', '~');
+            pickBadge = `<span class="nhm-tag-dyn-badge">x${displayCount}</span>`;
+          }
+        }
+
+        // 动态选择权重徽章
+        let dynWeightBadge = '';
+        if (isDynMember && tag.dynWeight && tag.dynWeight !== 1) {
+          const formatted = (tag.dynWeight % 1 === 0) ? tag.dynWeight : tag.dynWeight.toFixed(1);
+          dynWeightBadge = `<span class="nhm-tag-dyn-weight">${formatted}</span>`;
+        }
+
+        // 显示文本
+        let displayTagName = isNewline ? '↵' : cleanText;
+        if (isCompHeader || isCompFooter || isDynHeader || isDynFooter) displayTagName = '';
+
+        // 查找标签信息（翻译+颜色）
+        let info = null;
+        if (!isCompHeader && !isCompFooter && !isDynHeader && !isDynFooter && !isNewline) {
+          if (blockMatch) {
+            // 复合 tag：分割子标签并聚合翻译
+            const parts = cleanText.split(',').map(s => s.trim()).filter(Boolean);
+            const translationParts = [];
+            let firstColor = null;
+            parts.forEach(part => {
+              const partInfo = getTagInfo(part);
+              if (partInfo) {
+                if (partInfo.zhCN) translationParts.push(partInfo.zhCN);
+                if (!firstColor && partInfo.color) firstColor = partInfo.color;
+              }
+            });
+            if (translationParts.length > 0 || firstColor) {
+              info = { zhCN: translationParts.join(', '), color: firstColor };
+            }
+          } else {
+            info = getTagInfo(cleanText);
+          }
+        }
+
+        // === 构建 DOM ===
+        const itemNode = document.createElement('div');
+        itemNode.className = 'nhm-tag-item';
+        if (isNewline) itemNode.classList.add('nhm-tag-newline');
+
+        const capClasses = ['nhm-tag-capsule'];
+        if (isCompHeader) capClasses.push('gh');
+        if (isCompFooter) capClasses.push('gf');
+        if (isDynHeader) capClasses.push('dh');
+        if (isDynFooter) capClasses.push('df');
+        if (isDynMember) capClasses.push('dyn-member');
+        if (tag.disabled) capClasses.push('disabled');
+
+        const capsule = document.createElement('div');
+        capsule.className = capClasses.join(' ');
+
+        // 应用字典颜色
+        if (info && info.color) {
+          capsule.style.borderColor = info.color;
+          capsule.style.borderWidth = '1.5px';
+          capsule.style.background = `linear-gradient(135deg, #3b3b4f 0%, ${info.color}15 100%)`;
+        }
+
+        const primary = document.createElement('div');
+        primary.className = 'nhm-tag-primary';
+
+        // 权重/选择徽章
+        if (isDynHeader) {
+          primary.innerHTML = pickBadge;
+        } else if ((Math.abs(weightVal - 1.0) > 0.001 || isCompHeader || isCompFooter) && !isNewline) {
+          const badge = document.createElement('span');
+          badge.className = `nhm-tag-weight-badge ${weightVal > 1.0 ? 'w-pos' : (weightVal < 1.0 ? 'w-neg' : '')}`;
+          badge.textContent = weightVal.toFixed(1);
+          primary.appendChild(badge);
+        }
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'nhm-tag-text';
+        textSpan.textContent = displayTagName;
+        primary.appendChild(textSpan);
+
+        if (dynWeightBadge) {
+          primary.innerHTML += dynWeightBadge;
+        }
+
+        capsule.appendChild(primary);
+        itemNode.appendChild(capsule);
+
+        // 翻译行
+        if (!isNewline) {
+          const zhRow = document.createElement('div');
+          zhRow.className = 'nhm-tag-zh-row';
+          zhRow.textContent = (info && info.zhCN) || '\u00A0';
+          itemNode.appendChild(zhRow);
+        }
+
+        container.appendChild(itemNode);
+
+        // 如果是换行标签，向其后追加一个不可见的换行分隔元素强制换行
+        if (isNewline) {
+          const separatorDiv = document.createElement('div');
+          separatorDiv.className = 'nhm-tag-newline-separator';
+          container.appendChild(separatorDiv);
+        }
+
+        if (isDynFooter) inDynGroup = false;
+      });
+    }
+
+    // ───── 从 chrome.storage 读写 ────────────────────────────────
+    // injector 运行在页面脚本上下文，不能直接访问 chrome.storage
+    // 需要通过 postMessage → bridge 中转来读写数据
+    // 因此我们在此使用一个简单的消息协议
+    let pendingStorageReads = {};
+
+    window.addEventListener('message', e => {
+      if (e.source !== window) return;
+      if (e.data?.type === '__HISTORY_DATA__') {
+        const { reqId, data } = e.data;
+        if (pendingStorageReads[reqId]) {
+          pendingStorageReads[reqId](data);
+          delete pendingStorageReads[reqId];
+        }
+      }
+    });
+
+    function getHistoryData() {
+      return new Promise(resolve => {
+        const reqId = Date.now() + Math.random();
+        pendingStorageReads[reqId] = resolve;
+        window.postMessage({ type: '__REQUEST_HISTORY_DATA__', reqId }, '*');
+      });
+    }
+
+    function saveHistoryData(history) {
+      window.postMessage({ type: '__SAVE_HISTORY_DATA__', history }, '*');
+    }
+
+    function saveLimitData(limit) {
+      window.postMessage({ type: '__SAVE_HISTORY_LIMIT__', limit }, '*');
+    }
+
+    // ───── Modal 主体 ──────────────────────────────────────────
+    let currentTab = 'history'; // 'history' | 'favorites'
+    let selectedSnapshot = null;
+    let historyData = [];
+    let historyLimit = 100;
+
+    function createModal() {
+      if (document.getElementById('nai-history-backdrop')) return;
+
+      const backdrop = document.createElement('div');
+      backdrop.id = 'nai-history-backdrop';
+
+      const container = document.createElement('div');
+      container.id = MODAL_ID;
+      
+      // === 构建核心骨架 ===
+      container.innerHTML = `
+        <div class="nhm-header">
+          <div class="nhm-title-area">
+            <span class="nhm-title">📚 提示词记录</span>
+            <span class="nhm-subtitle" id="nhm-stats"></span>
+          </div>
+          <button class="nhm-close-btn" id="nhm-close" title="关闭 (Esc)">×</button>
+        </div>
+        
+        <div class="nhm-body">
+          <div class="nhm-sidebar">
+            <div class="nhm-tabs">
+              <button class="nhm-tab active" data-tab="history">🕒 历史记录</button>
+              <button class="nhm-tab" data-tab="favorites">⭐️ 我的收藏</button>
+            </div>
+            <div class="nhm-list" id="nhm-list"></div>
+            <div class="nhm-footer">
+              <div class="nhm-footer-row">
+                <span>历史上限:</span>
+                <input class="nhm-limit-input" id="nhm-limit-input" type="number" min="10" max="1000" value="100">
+                <button class="nhm-clear-btn" id="nhm-clear-btn">清除历史</button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="nhm-detail">
+            <div class="nhm-detail-placeholder" id="nhm-placeholder">← 从左侧选择一条记录进行预览</div>
+            <div class="nhm-detail-content" id="nhm-detail-content" style="display:none;"></div>
+            <div class="nhm-detail-actions" id="nhm-actions" style="display:none;">
+              <div class="nhm-detail-meta" id="nhm-detail-meta"></div>
+              <button class="nhm-restore-btn" id="nhm-restore-btn">⏮️ 恢复至此状态</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 差异详情独立弹窗 -->
+        <div class="nhm-diff-modal" id="nhm-diff-modal">
+          <div class="nhm-diff-modal-content">
+            <div class="nhm-diff-modal-header">
+              <span class="nhm-diff-modal-title">完整变动详情 (Diff)</span>
+              <button class="nhm-diff-modal-close" id="nhm-diff-modal-close">×</button>
+            </div>
+            <div class="nhm-diff-modal-body" id="nhm-diff-modal-body"></div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(container);
+
+      // Diff Modal 事件绑定
+      const diffModal = document.getElementById('nhm-diff-modal');
+      document.getElementById('nhm-diff-modal-close').addEventListener('click', () => {
+        diffModal.classList.remove('visible');
+      });
+      diffModal.addEventListener('click', (e) => {
+        if (e.target === diffModal) diffModal.classList.remove('visible');
+      });
+
+      backdrop.appendChild(container);
+      document.body.appendChild(backdrop);
+
+      // 关闭
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+      document.getElementById('nhm-close').addEventListener('click', closeModal);
+
+      // Tab 切换
+      container.querySelectorAll('.nhm-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          container.querySelectorAll('.nhm-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          currentTab = tab.dataset.tab;
+          renderList();
+        });
+      });
+
+      // 历史上限输入
+      document.getElementById('nhm-limit-input').addEventListener('change', (e) => {
+        const val = Math.max(10, Math.min(1000, parseInt(e.target.value) || 100));
+        e.target.value = val;
+        historyLimit = val;
+        saveLimitData(val);
+      });
+
+      // 清除历史 (使用内联二次确认，避免原生 confirm 被浏览器屏蔽)
+      let clearConfirmTimeout;
+      const clearBtn = document.getElementById('nhm-clear-btn');
+      clearBtn.addEventListener('click', () => {
+        if (clearBtn.dataset.confirming !== 'true') {
+          // 第一次点击：进入确认状态
+          clearBtn.dataset.confirming = 'true';
+          const originalText = clearBtn.textContent;
+          clearBtn.textContent = '确定清除?';
+          clearBtn.style.backgroundColor = '#e74c3c';
+          clearBtn.style.color = '#fff';
+          
+          clearConfirmTimeout = setTimeout(() => {
+            clearBtn.dataset.confirming = 'false';
+            clearBtn.textContent = originalText;
+            clearBtn.style.backgroundColor = '';
+            clearBtn.style.color = '';
+          }, 3000);
+          return;
+        }
+
+        // 第二次点击：执行清除
+        clearTimeout(clearConfirmTimeout);
+        clearBtn.dataset.confirming = 'false';
+        clearBtn.textContent = '清除历史';
+        clearBtn.style.backgroundColor = '';
+        clearBtn.style.color = '';
+
+        const favOnly = historyData.filter(s => s.isFavorite);
+        historyData = favOnly;
+        saveHistoryData(historyData); // 统一使用这个接口，无需专门的 __CLEAR_HISTORY__
+        
+        if (selectedSnapshot && !selectedSnapshot.isFavorite) {
+          selectedSnapshot = null;
+          showPlaceholder();
+        }
+        renderList();
+      });
+
+      // ESC 关闭
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('nai-history-backdrop')?.classList.contains('visible')) {
+          closeModal();
+        }
+      });
+    }
+
+    function closeModal() {
+      const backdrop = document.getElementById('nai-history-backdrop');
+      if (backdrop) backdrop.classList.remove('visible');
+    }
+
+    function showPlaceholder() {
+      document.getElementById('nhm-placeholder').style.display = 'flex';
+      document.getElementById('nhm-detail-content').style.display = 'none';
+      document.getElementById('nhm-actions').style.display = 'none';
+    }
+
+    function renderList() {
+      const list = document.getElementById('nhm-list');
+      if (!list) return;
+
+      const filtered = currentTab === 'favorites'
+        ? historyData.filter(s => s.isFavorite)
+        : historyData.filter(s => !s.isFavorite);
+
+      // 统计信息
+      const normalCount = historyData.filter(s => !s.isFavorite).length;
+      const favCount = historyData.filter(s => s.isFavorite).length;
+      const stats = document.getElementById('nhm-stats');
+      if (stats) stats.textContent = `普通: ${normalCount} 条 · 收藏: ${favCount} 项`;
+
+      if (filtered.length === 0) {
+        list.innerHTML = `
+          <div class="nhm-empty-state">
+            <div class="nhm-empty-icon">${currentTab === 'favorites' ? '⭐' : '🕰️'}</div>
+            <div class="nhm-empty-title">${currentTab === 'favorites' ? '暂无收藏' : '暂无历史记录'}</div>
+            <div class="nhm-empty-desc">${currentTab === 'favorites' ? '点击列表中的 ☆ 图标即可收藏您喜欢的提示词状态' : '生成图片时，您的提示词记录会自动保存在这里'}</div>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = '';
+      filtered.forEach((snapshot, ObjectIndex) => {
+        const item = document.createElement('div');
+        item.className = 'nhm-item' + (selectedSnapshot?.id === snapshot.id ? ' selected' : '');
+        item.dataset.id = snapshot.id;
+
+        const nameOrTime = snapshot.isFavorite && snapshot.name
+          ? `<div class="nhm-item-name" title="双击重命名">${snapshot.name}</div>`
+          : '';
+          
+        let previewHTML = '';
+        if (currentTab === 'history') {
+          previewHTML = generateDiffHTML(snapshot, filtered[ObjectIndex + 1]);
+        } else {
+          previewHTML = `<div class="nhm-item-preview">${tagsPreview(snapshot.positive)}</div>`;
+        }
+
+        item.innerHTML = `
+          <div class="nhm-item-main">
+            ${nameOrTime}
+            <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
+            ${previewHTML}
+          </div>
+          <button class="nhm-star-btn ${snapshot.isFavorite ? 'starred' : ''}" title="${snapshot.isFavorite ? '取消收藏' : '收藏'}">
+            ${snapshot.isFavorite ? '★' : '☆'}
+          </button>
+          <button class="nhm-delete-btn" title="删除此条">🗑</button>
+        `;
+
+        // 点击选中
+        item.addEventListener('click', (e) => {
+          if (e.target.closest('.nhm-star-btn') || e.target.closest('.nhm-delete-btn')) return;
+          selectedSnapshot = snapshot;
+          list.querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
+          item.classList.add('selected');
+          renderDetail(snapshot);
+        });
+
+        // 点击名称双击重命名
+        const nameEl = item.querySelector('.nhm-item-name');
+        if (nameEl) {
+          nameEl.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            const input = document.createElement('input');
+            input.value = snapshot.name || '';
+            input.style.cssText = 'background:#2a2a40;border:1px solid #3a3a5c;color:#ccc;border-radius:3px;padding:1px 4px;font-size:12px;width:90%;';
+            nameEl.replaceWith(input);
+            input.focus();
+            const save = () => {
+              snapshot.name = input.value.trim() || formatTime(snapshot.timestamp);
+              const idx = historyData.findIndex(s => s.id === snapshot.id);
+              if (idx !== -1) historyData[idx] = snapshot;
+              saveHistoryData(historyData);
+              renderList();
+            };
+            input.addEventListener('blur', save);
+            input.addEventListener('keydown', e => { if (e.key === 'Enter') { save(); e.preventDefault(); } });
+          });
+        }
+
+        // 收藏切换
+        item.querySelector('.nhm-star-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          snapshot.isFavorite = !snapshot.isFavorite;
+          const idx = historyData.findIndex(s => s.id === snapshot.id);
+          if (idx !== -1) historyData[idx] = snapshot;
+          saveHistoryData(historyData);
+          renderList();
+          if (selectedSnapshot?.id === snapshot.id) renderDetail(snapshot);
+        });
+
+        // 删除
+        item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          historyData = historyData.filter(s => s.id !== snapshot.id);
+          saveHistoryData(historyData);
+          if (selectedSnapshot?.id === snapshot.id) {
+            selectedSnapshot = null;
+            showPlaceholder();
+          }
+          renderList();
+        });
+
+        // 弹窗展开胶囊点击事件
+    const expandCapsule = item.querySelector('.nhm-diff-expand-capsule');
+    if (expandCapsule) {
+      expandCapsule.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const diffModal = document.getElementById('nhm-diff-modal');
+        const diffBody = document.getElementById('nhm-diff-modal-body');
+        if (diffModal && diffBody) {
+          diffBody.innerHTML = `<div class="nhm-item-diff-container">${expandCapsule.dataset.fulldiff}</div>`;
+          diffModal.classList.add('visible');
+        }
+      });
+    }
+
+    list.appendChild(item);
+      });
+    }
+
+    function renderDetail(snapshot) {
+      const content = document.getElementById('nhm-detail-content');
+      const meta = document.getElementById('nhm-detail-meta');
+      if (!content || !meta) return;
+
+      content.style.display = 'block';
+      document.getElementById('nhm-placeholder').style.display = 'none';
+      document.getElementById('nhm-actions').style.display = 'flex';
+
+      content.innerHTML = '';
+
+      const charCount = (snapshot.characters || []).filter(c => c.posPrompt || c.negPrompt).length;
+      meta.textContent = `记录于 ${formatTime(snapshot.timestamp)} · ${charCount} 个角色`;
+
+      // 正向
+      const posSection = document.createElement('div');
+      posSection.className = 'nhm-section';
+      posSection.innerHTML = `<div class="nhm-section-title pos">✅ 正向提示词 (Positive)</div>`;
+      const posCloud = document.createElement('div');
+      posCloud.className = 'nhm-tag-cloud';
+      renderTagCloud(posCloud, snapshot.positiveTags || snapshot.positive);
+      posSection.appendChild(posCloud);
+      content.appendChild(posSection);
+
+      // 负向
+      const negSection = document.createElement('div');
+      negSection.className = 'nhm-section';
+      negSection.innerHTML = `<div class="nhm-section-title neg">🚫 负向提示词 (Negative)</div>`;
+      const negCloud = document.createElement('div');
+      negCloud.className = 'nhm-tag-cloud';
+      renderTagCloud(negCloud, snapshot.negativeTags || snapshot.negative);
+      negSection.appendChild(negCloud);
+      content.appendChild(negSection);
+
+      // 角色
+      if (snapshot.characters && snapshot.characters.length > 0) {
+        snapshot.characters.forEach((char, idx) => {
+          if (!char.posPrompt && !char.negPrompt) return;
+          const charSection = document.createElement('div');
+          charSection.className = 'nhm-section';
+          charSection.innerHTML = `<div class="nhm-section-title char">👤 角色 #${idx + 1}</div>`;
+          if (char.posPrompt) {
+            const p = document.createElement('div');
+            p.style.marginBottom = '6px';
+            p.innerHTML = '<span style="font-size:10px;color:#555;">正向:</span>';
+            const cloud = document.createElement('div');
+            cloud.className = 'nhm-tag-cloud';
+            cloud.style.marginTop = '4px';
+            renderTagCloud(cloud, char.posTags || char.posPrompt);
+            charSection.appendChild(p);
+            charSection.appendChild(cloud);
+          }
+          if (char.negPrompt) {
+            const p = document.createElement('div');
+            p.style.marginTop = '8px';
+            p.innerHTML = '<span style="font-size:10px;color:#555;">负向:</span>';
+            const cloud = document.createElement('div');
+            cloud.className = 'nhm-tag-cloud';
+            cloud.style.marginTop = '4px';
+            renderTagCloud(cloud, char.negTags || char.negPrompt);
+            charSection.appendChild(p);
+            charSection.appendChild(cloud);
+          }
+          content.appendChild(charSection);
+        });
+      }
+
+      // 恢复按钮
+      const restoreBtn = document.getElementById('nhm-restore-btn');
+      restoreBtn.onclick = () => {
+        if (!selectedSnapshot) return;
+        window.postMessage({ type: '__RESTORE_HISTORY__', snapshot: selectedSnapshot }, '*');
+        closeModal();
+      };
+    }
+
+    async function openModal() {
+      injectStyle();
+      if (!document.getElementById('nai-history-backdrop')) createModal();
+
+      // 从 storage 读取新数据
+      const data = await getHistoryData();
+      historyData = (data.history || []).sort((a, b) => b.timestamp - a.timestamp);
+      historyLimit = data.limit || 100;
+      const limitInput = document.getElementById('nhm-limit-input');
+      if (limitInput) limitInput.value = historyLimit;
+
+      selectedSnapshot = null;
+      renderList();
+      document.getElementById('nai-history-backdrop').classList.add('visible');
+
+      // 自动选中第一条历史记录
+      if (historyData.length > 0) {
+        const firstItem = document.querySelector('#nhm-list .nhm-item');
+        if (firstItem) firstItem.click();
+      }
+    }
+
+    // ───── 监听打开指令 ─────────────────────────────────────────
+    window.addEventListener('message', e => {
+      if (e.source !== window) return;
+      if (e.data?.type === '__OPEN_HISTORY_MODAL__') {
+        openModal();
+      }
+    });
+
+    console.log('[Wildcard] History Modal module initialized');
+  })();
+
 })();
-
-
-

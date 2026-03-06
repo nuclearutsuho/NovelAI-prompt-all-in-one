@@ -89,7 +89,8 @@ const translations = {
     res_w: "W",
     res_h: "H",
     setting_hide_autoclicker: "Hide Count Bar",
-    setting_hide_autoclicker_desc: "Hide the auto-clicker status bar at the bottom."
+    setting_hide_autoclicker_desc: "Hide the auto-clicker status bar at the bottom.",
+    btn_history: "History & Favorites"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -163,7 +164,8 @@ const translations = {
     res_w: "宽",
     res_h: "高",
     setting_hide_autoclicker: "隐藏整个计数条",
-    setting_hide_autoclicker_desc: "隐藏页面底部的连点器状态条。"
+    setting_hide_autoclicker_desc: "隐藏页面底部的连点器状态条。",
+    btn_history: "历史与收藏"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -237,11 +239,25 @@ const translations = {
     res_w: "幅",
     res_h: "高",
     setting_hide_autoclicker: "カウントバーを隠す",
-    setting_hide_autoclicker_desc: "ページ下部のオートクリッカーバーを非表示にします。"
+    setting_hide_autoclicker_desc: "ページ下部のオートクリッカーバーを非表示にします。",
+    btn_history: "履歴とお気に入り"
   }
 };
 
 let currentLang = 'en';
+
+let hasReceivedInitialChars = false;
+
+function computeStateFingerprint(posT, negT, charD) {
+  const posF = JSON.stringify((posT || []).map(t => [t.value, !!t.disabled]));
+  const negF = JSON.stringify((negT || []).map(t => [t.value, !!t.disabled]));
+  const charsStr = JSON.stringify((charD || []).map(c => ({
+    p: c.posPrompt || '', n: c.negPrompt || '',
+    pd: (c.posTags || []).map(t => [t.value, !!t.disabled]),
+    nd: (c.negTags || []).map(t => [t.value, !!t.disabled])
+  })));
+  return posF + negF + charsStr;
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   initUI();
@@ -250,7 +266,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function initData() {
-  const data = await chrome.storage.local.get('sequentialCounters');
+  const data = await chrome.storage.local.get(['sequentialCounters', 'promptHistory']);
+  if (data.promptHistory && data.promptHistory.length > 0) {
+    const s = data.promptHistory[0];
+    
+    // 初始化防抖指纹，避免由于空初始导致的 F5 刷新重复记录历史
+    _lastRecordedFingerprint = computeStateFingerprint(s.positiveTags, s.negativeTags, s.characters);
+
+    // 将最近一次历史中的 Tag（即包含被禁用属性的数组）在启动时优先缝合进入常驻内存
+    if (!hasReceivedInitialData) {
+      positiveTags = s.positiveTags ? JSON.parse(JSON.stringify(s.positiveTags)) : [];
+      negativeTags = s.negativeTags ? JSON.parse(JSON.stringify(s.negativeTags)) : [];
+      rawPositive = tagsToString(positiveTags);
+      rawNegative = tagsToString(negativeTags);
+    }
+    
+    if (!hasReceivedInitialChars && s.characters && s.characters.length > 0) {
+      characterPromptsData = s.characters.map(c => ({
+        posPrompt: tagsToString(c.posTags || []),
+        posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : [],
+        negPrompt: tagsToString(c.negTags || []),
+        negTags: c.negTags ? JSON.parse(JSON.stringify(c.negTags)) : [],
+        gender: c.gender || 'other',
+        activeTab: c.activeTab || 'positive'
+      }));
+    }
+  }
+
   if (editor && data.sequentialCounters) {
     editor.setSequentialCounters(data.sequentialCounters);
   }
@@ -283,13 +325,10 @@ function updateCharAddButton() {
   }
 }
 
-function syncCharactersToPage() {
+function syncCharactersToPage(source) {
   if (chrome.tabs) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        // Prepare the payload 
-        // Our characterPromptsData contains { posPrompt, posTags, negPrompt, negTags, gender }
-        // We only need to send prompts to the page injection layer
         const payload = characterPromptsData.map(char => ({
             positive: char.posPrompt,
             negative: char.negPrompt,
@@ -297,7 +336,7 @@ function syncCharactersToPage() {
             activeTab: char.activeTab
         }));
 
-        lastSentCharacterPrompts = payload; // save for echo debounce
+        lastSentCharacterPrompts = payload;
         console.log('[NAI-Prompt-All-In-One] Syncing Characters to Page =>', payload);
         chrome.tabs.sendMessage(tabs[0].id, {
           type: 'SET_CHARACTER_PROMPTS',
@@ -308,6 +347,9 @@ function syncCharactersToPage() {
   } else {
     console.log('[Phase 1 fallback] Local sync triggered. Current Data:\n', JSON.parse(JSON.stringify(characterPromptsData)));
   }
+
+  // 角色编辑器变更后，记录历史快照
+  recordHistory(source || 'immediate');
 }
 
 function createCharacterEditor(index, initialPos = '', initialNeg = '', initialTab = 'pos') {
@@ -386,6 +428,9 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     dict: dict, // Pass localization dict down to TagEditor
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
+      // 检测是否为结构性变更（tag 数量变化）
+      const prevCharTags = active === 'pos' ? characterPromptsData[index].posTags : characterPromptsData[index].negTags;
+      const isStructural = tags.length !== (prevCharTags || []).length;
       if (active === 'pos') {
           characterPromptsData[index].posTags = tags;
           characterPromptsData[index].posPrompt = tagsToString(tags);
@@ -393,7 +438,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
           characterPromptsData[index].negTags = tags;
           characterPromptsData[index].negPrompt = tagsToString(tags);
       }
-      syncCharactersToPage();
+      syncCharactersToPage(isStructural ? 'immediate' : 'popup');
     }
   });
 
@@ -753,8 +798,11 @@ function initUI() {
   editor = new TagEditor(container, {
     dict: dict,
     onChange: (tags) => {
+      // 检测是否为结构性变更（tag 数量变化 = 增删操作）
+      const prevTags = currentMode === 'positive' ? positiveTags : negativeTags;
+      const isStructural = tags.length !== prevTags.length;
       updateTagsFromEditor(tags);
-      syncToPage();
+      syncToPage(isStructural ? 'immediate' : 'popup');
     }
   });
 
@@ -1051,6 +1099,21 @@ function initUI() {
 
   btnSettings.addEventListener('click', () => { modal.style.display = 'flex'; });
   closeSettings.addEventListener('click', () => { modal.style.display = 'none'; });
+
+  // History & Favorites Modal trigger
+  const btnHistory = document.getElementById('btn-history');
+  if (btnHistory) {
+    btnHistory.addEventListener('click', async () => {
+      // 在打开历史窗口前，强行将当前所有挂起的防抖修改立即转正记录，并等待其写入完成
+      await recordHistory('immediate');
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_HISTORY_MODAL' });
+        }
+      });
+    });
+  }
 }
 
 function switchTab(mode, fromUserClick = false) {
@@ -1274,34 +1337,36 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'RETURN_PROMPT') {
-      hasReceivedInitialData = true;
       const { positive, negative } = msg.data;
 
+      // 如果尚未接到网页真正的框内文本数据（只传回undefined），不做任何处理直接等下一发
+      if (positive === undefined && negative === undefined && !hasReceivedInitialData) {
+          return;
+      }
+
+      const isFirstTime = !hasReceivedInitialData;
+      hasReceivedInitialData = true;
+
       // Skip echo: if this matches what we just sent, ignore
-      // Use normalized comparison to avoid loops on minor formatting diffs
-      if (normalizePrompt(positive) === normalizePrompt(lastSentPositive) &&
+      if (!isFirstTime && normalizePrompt(positive) === normalizePrompt(lastSentPositive) &&
         normalizePrompt(negative) === normalizePrompt(lastSentNegative)) {
         return;
       }
 
-      // Skip if identical to current popup state (normalized)
       const currentPosStr = tagsToString(positiveTags);
       const currentNegStr = tagsToString(negativeTags);
 
-      // Only update if the incoming data is genuinely different from our current state
-      // AND it's not undefined (meaning it wasn't hidden on the page)
-      let shouldUpdatePos = positive !== undefined && normalizePrompt(positive) !== normalizePrompt(currentPosStr);
-      let shouldUpdateNeg = negative !== undefined && normalizePrompt(negative) !== normalizePrompt(currentNegStr);
+      let shouldUpdatePos = positive !== undefined && (isFirstTime || normalizePrompt(positive) !== normalizePrompt(currentPosStr));
+      let shouldUpdateNeg = negative !== undefined && (isFirstTime || normalizePrompt(negative) !== normalizePrompt(currentNegStr));
 
-      if (!shouldUpdatePos && !shouldUpdateNeg) {
-         // Nothing new to apply or everything is hidden
+      if (!shouldUpdatePos && !shouldUpdateNeg && !isFirstTime) {
          return;
       }
 
-      // Apply external change
       if (shouldUpdatePos) {
           rawPositive = positive || '';
           const parsedPosTags = parsePromptToTags(rawPositive);
+          // 这里通过 mergeTagsPreservingDisabled() 能巧妙地将新入的数据与我们在启动期缝合的“完整带disabled态字典”比对！从而将 disabled 的 Tag 存留！
           positiveTags = mergeTagsPreservingDisabled(positiveTags, parsedPosTags);
       }
 
@@ -1311,20 +1376,28 @@ function initCommunication() {
           negativeTags = mergeTagsPreservingDisabled(negativeTags, parsedNegTags);
       }
 
-      // Update UI if we are on the relevant tab
       if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
       if (currentMode === 'negative' && shouldUpdateNeg) editor.setTags(negativeTags);
       
     } else if (msg.type === 'RETURN_CHARACTER_PROMPTS') {
       const charPrompts = msg.data || [];
       
+      const isFirstTime = !hasReceivedInitialChars;
+      hasReceivedInitialChars = true;
+      
       let uiNeedsRebuild = false;
-      if (characterPromptsData.length !== charPrompts.length) {
+      if (characterPromptsData.length !== charPrompts.length && !isFirstTime) {
           uiNeedsRebuild = true;
           // Trim removed characters from memory instantly
           if (characterPromptsData.length > charPrompts.length) {
               characterPromptsData.length = charPrompts.length;
               charEditors.length = charPrompts.length;
+          }
+      } else if (isFirstTime) {
+          uiNeedsRebuild = true;
+          if (charPrompts.length === 0) {
+              characterPromptsData = [];
+              charEditors = [];
           }
       }
 
@@ -1339,10 +1412,10 @@ function initCommunication() {
           const incomingPosStr = c.positive !== undefined ? normalizePrompt(c.positive) : currentPosStr;
           const incomingNegStr = c.negative !== undefined ? normalizePrompt(c.negative) : currentNegStr;
 
-          let shouldUpdatePos = c.positive !== undefined && incomingPosStr !== currentPosStr;
-          let shouldUpdateNeg = c.negative !== undefined && incomingNegStr !== currentNegStr;
+          let shouldUpdatePos = c.positive !== undefined && (isFirstTime || incomingPosStr !== currentPosStr);
+          let shouldUpdateNeg = c.negative !== undefined && (isFirstTime || incomingNegStr !== currentNegStr);
 
-          if (!shouldUpdatePos && !shouldUpdateNeg && i < characterPromptsData.length) {
+          if (!shouldUpdatePos && !shouldUpdateNeg && i < characterPromptsData.length && !isFirstTime) {
               return; // Skip if identical (Debounce echo naturally)
           }
 
@@ -1386,6 +1459,9 @@ function initCommunication() {
           console.log('[Phase 2] Found structural changes, rebuilding UI...');
           rebuildCharacterPromptsUI();
       }
+
+      // 网页端角色提示词有实质变更，记录历史快照
+      if (changesApplied) recordHistory('webpage');
     } // End of RETURN_CHARACTER_PROMPTS
 
     // The following block runs for RETURN_PROMPT
@@ -1400,6 +1476,9 @@ function initCommunication() {
 
       lastSentPositive = tagsToString(positiveTags);
       lastSentNegative = tagsToString(negativeTags);
+
+      // 网页端主提示词有实质变更，记录历史快照
+      recordHistory('webpage');
     }
 
     if (msg.type === '__CLEAN_NUMERIC_PREFIXES__') {
@@ -1495,7 +1574,8 @@ function requestPrompt() {
   });
 }
 
-function syncToPage() {
+function syncToPage(source) {
+  if (source) _syncSource = source;
   const posStr = tagsToString(positiveTags);
   const negStr = tagsToString(negativeTags);
 
@@ -1514,4 +1594,176 @@ function syncToPage() {
       });
     }
   });
+
+  // 每次同步到页面时记录一次历史快照
+  recordHistory(_syncSource || 'popup');
+  _syncSource = null;
 }
+
+let _syncSource = null;
+
+// ═══════════════════════════════════════════════════════
+// 历史记录 & 收藏夹 核心逻辑
+// ═══════════════════════════════════════════════════════
+
+/** 记录当前完整状态的快照（带来源区分的防抖机制） */
+let _lastRecordedFingerprint = null;
+let _popupDebounceTimer = null;   // Popup 操作（编辑器 onChange）的防抖计时器
+let _webpageDebounceTimer = null; // 网页端同步回传的防抖计时器
+
+const POPUP_DEBOUNCE_MS = 1500;   // Popup 权重修改防抖：1.5 秒
+const WEBPAGE_DEBOUNCE_MS = 2000; // 网页端打字防抖：2 秒
+
+/**
+ * 请求记录一次历史快照。
+ * @param {'immediate' | 'popup' | 'webpage'} source - 变更来源
+ *   - 'immediate'：来自 Popup 结构性操作（添加、删除、拖拽排序等），立即记录。
+ *   - 'popup'    ：来自 Popup 权重修改等连续微调操作，使用 1.5 秒防抖。
+ *   - 'webpage'  ：来自网页端输入框的实时同步回传，使用 2 秒防抖。
+ */
+function recordHistory(source = 'popup') {
+  if (source === 'immediate' || source === 'restore') {
+    // 结构性操作：立刻取消所有挂起计时并写入快照
+    clearTimeout(_popupDebounceTimer);
+    clearTimeout(_webpageDebounceTimer);
+    _popupDebounceTimer = null;
+    _webpageDebounceTimer = null;
+    return _commitSnapshot();
+  } else if (source === 'popup') {
+    // 权重修改等微调操作：取消网页端挂起计时，使用短防抖
+    clearTimeout(_webpageDebounceTimer);
+    clearTimeout(_popupDebounceTimer);
+    _popupDebounceTimer = setTimeout(() => _commitSnapshot(), POPUP_DEBOUNCE_MS);
+    return Promise.resolve();
+  } else {
+    // 网页端同步：如果 popup 计时器正在等待，不干扰它
+    if (_popupDebounceTimer) return Promise.resolve();
+    clearTimeout(_webpageDebounceTimer);
+    _webpageDebounceTimer = setTimeout(() => _commitSnapshot(), WEBPAGE_DEBOUNCE_MS);
+    return Promise.resolve();
+  }
+}
+
+/** 实际执行快照写入的内部方法 */
+async function _commitSnapshot() {
+  _popupDebounceTimer = null;
+  _webpageDebounceTimer = null;
+
+  const posStr = tagsToString(positiveTags);
+  const negStr = tagsToString(negativeTags);
+
+  // 去重：使用提取好的统合指纹函数，与上次实际写入的记录完全相同时跳过
+  const fingerprint = computeStateFingerprint(positiveTags, negativeTags, characterPromptsData);
+  if (fingerprint === _lastRecordedFingerprint) return;
+  _lastRecordedFingerprint = fingerprint;
+
+  const snapshot = {
+    id: Date.now(),
+    timestamp: Date.now(),
+    isFavorite: false,
+    name: '',
+    positive: posStr,
+    negative: negStr,
+    // [v2] 保存原始 tag 对象数组，用于完整还原禁用状态、换行、复合组等
+    positiveTags: positiveTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+    negativeTags: negativeTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+    characters: characterPromptsData.map(c => ({
+      posPrompt: c.posPrompt || '',
+      negPrompt: c.negPrompt || '',
+      posTags: (c.posTags || []).map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+      negTags: (c.negTags || []).map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+      gender: c.gender || 'other',
+      activeTab: c.activeTab || 'positive'
+    }))
+  };
+
+  const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
+  let history = data.promptHistory || [];
+  const limit = data.historyLimit || 100;
+
+  // 插入新快照到数组头部
+  history.unshift(snapshot);
+
+  // 安全裁剪：只删除非收藏的普通记录
+  const favorites = history.filter(s => s.isFavorite);
+  let normals = history.filter(s => !s.isFavorite);
+  if (normals.length > limit) {
+    normals = normals.slice(0, limit);
+  }
+  // 按时间戳倒序重新合并
+  history = [...normals, ...favorites].sort((a, b) => b.timestamp - a.timestamp);
+
+  await chrome.storage.local.set({ promptHistory: history });
+}
+
+/** 将某个历史快照恢复为当前状态 */
+async function restoreFromSnapshot(snapshot) {
+  if (!snapshot) return;
+
+  // 恢复正负向提示词
+  rawPositive = snapshot.positive || '';
+  rawNegative = snapshot.negative || '';
+  positiveTags = snapshot.positiveTags ? JSON.parse(JSON.stringify(snapshot.positiveTags)) : parsePromptToTags(rawPositive);
+  negativeTags = snapshot.negativeTags ? JSON.parse(JSON.stringify(snapshot.negativeTags)) : parsePromptToTags(rawNegative);
+
+  // 恢复角色数据
+  characterPromptsData = (snapshot.characters || []).map(c => ({
+    posPrompt: c.posPrompt || '',
+    posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : parsePromptToTags(c.posPrompt || ''),
+    negPrompt: c.negPrompt || '',
+    negTags: c.negTags ? JSON.parse(JSON.stringify(c.negTags)) : parsePromptToTags(c.negPrompt || ''),
+    gender: c.gender || 'other',
+    activeTab: c.activeTab || 'positive'
+  }));
+
+  // 刷新 UI
+  if (currentMode === 'positive') {
+    editor.setTags(positiveTags);
+  } else {
+    editor.setTags(negativeTags);
+  }
+
+  rebuildCharacterPromptsUI();
+
+  // 同步到页面
+  const posStr = tagsToString(positiveTags);
+  const negStr = tagsToString(negativeTags);
+  lastSentPositive = posStr;
+  lastSentNegative = negStr;
+
+  // 清除挂起的防抖计时器
+  clearTimeout(_popupDebounceTimer);
+  clearTimeout(_webpageDebounceTimer);
+  _popupDebounceTimer = null;
+  _webpageDebounceTimer = null;
+
+  // 显式记录这次“恢复”动作为一次新的历史快照（如果确实有变化）
+  await recordHistory('restore');
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'SET_PROMPT',
+        data: { positive: posStr, negative: negStr }
+      });
+      // 同时恢复角色
+      const payload = characterPromptsData.map(c => ({
+        positive: c.posPrompt,
+        negative: c.negPrompt,
+        gender: c.gender,
+        activeTab: c.activeTab
+      }));
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'SET_CHARACTER_PROMPTS',
+        data: payload
+      });
+    }
+  });
+}
+
+// 监听来自 injector modal 的恢复指令（通过 bridge 中转）
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
+    restoreFromSnapshot(msg.snapshot);
+  }
+});

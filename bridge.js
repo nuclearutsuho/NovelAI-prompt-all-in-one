@@ -361,6 +361,28 @@
       }, '*');
     }
 
+    // ── 历史数据代理（injector 在页面上下文无法访问 chrome.storage，通过此处中转） ──
+    if (e.data?.type === '__REQUEST_HISTORY_DATA__') {
+      const reqId = e.data.reqId;
+      chrome.storage.local.get(['promptHistory', 'historyLimit'], (data) => {
+        window.postMessage({
+          type: '__HISTORY_DATA__',
+          reqId,
+          data: { history: data.promptHistory || [], limit: data.historyLimit || 100 }
+        }, '*');
+      });
+    }
+
+    if (e.data?.type === '__SAVE_HISTORY_DATA__') {
+      chrome.storage.local.set({ promptHistory: e.data.history });
+    }
+
+    if (e.data?.type === '__SAVE_HISTORY_LIMIT__') {
+      chrome.storage.local.set({ historyLimit: e.data.limit });
+    }
+
+// 移除 __CLEAR_HISTORY__，统一使用 __SAVE_HISTORY_DATA__
+
     if (e.data?.type === '__RETURN_PROMPT__') {
       console.log('[Bridge] Received __RETURN_PROMPT__ from injector, relaying to popup');
       // Relay back to popup
@@ -382,6 +404,14 @@
       chrome.runtime.sendMessage({
         type: 'SYNC_TAB',
         data: e.data.data
+      });
+    }
+
+    // 来自注入层 history modal 的恢复指令，中继给 popup
+    if (e.data?.type === '__RESTORE_HISTORY__') {
+      chrome.runtime.sendMessage({
+        type: 'RESTORE_HISTORY_SNAPSHOT',
+        snapshot: e.data.snapshot
       });
     }
   });
@@ -418,6 +448,10 @@
         type: '__SET_RESOLUTION__',
         data: request.data
       }, '*');
+    }
+    // 从 popup 打开历史与收藏面板
+    if (request.type === 'OPEN_HISTORY_MODAL') {
+      window.postMessage({ type: '__OPEN_HISTORY_MODAL__' }, '*');
     }
     // Return true if we want to sendResponse asynchronously, but here we use runtime.sendMessage for return.
   });
