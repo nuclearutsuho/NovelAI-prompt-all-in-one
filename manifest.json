@@ -24,6 +24,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "history-favorites-panel.js",
         "injector.js",
         "auto-clicker.js",
         "dictionary.csv",

@@ -13,6 +13,12 @@
     hideAutoClicker = false
   } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker']);
 
+  // 1.5) inject history/favorites panel
+  const hp = document.createElement('script');
+  hp.src = chrome.runtime.getURL('history-favorites-panel.js');
+  hp.onload = () => hp.remove();
+  (document.head || document.documentElement).appendChild(hp);
+
   // 2) inject script to page
   const s = document.createElement('script');
   s.src = chrome.runtime.getURL('injector.js');
