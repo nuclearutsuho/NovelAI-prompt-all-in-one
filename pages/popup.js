@@ -1696,11 +1696,57 @@ async function _commitSnapshot() {
   await chrome.storage.local.set({ promptHistory: history });
 }
 
-/** 将某个历史快照恢复为当前状态 */
+/** 将某个历史快照恢复为当前状态（支持局部恢复） */
 async function restoreFromSnapshot(snapshot) {
   if (!snapshot) return;
 
-  // 恢复正负向提示词
+  // ── 局部恢复分支：仅更新 partialType 对应的区块 ──
+  if (snapshot.isPartial && snapshot.partialType) {
+    const pt = snapshot.partialType;
+    if (pt === 'positive') {
+      rawPositive = snapshot.positive || '';
+      positiveTags = snapshot.positiveTags ? JSON.parse(JSON.stringify(snapshot.positiveTags)) : parsePromptToTags(rawPositive);
+      if (currentMode === 'positive') editor.setTags(positiveTags);
+    } else if (pt === 'negative') {
+      rawNegative = snapshot.negative || '';
+      negativeTags = snapshot.negativeTags ? JSON.parse(JSON.stringify(snapshot.negativeTags)) : parsePromptToTags(rawNegative);
+      if (currentMode === 'negative') editor.setTags(negativeTags);
+    } else if (pt.startsWith('character-')) {
+      const charIdx = parseInt(pt.split('-')[1]);
+      const srcChars = snapshot.characters || [];
+      const srcChar = srcChars[0] || srcChars[charIdx];
+      if (srcChar && charIdx < characterPromptsData.length) {
+        characterPromptsData[charIdx] = {
+          posPrompt: srcChar.posPrompt || '',
+          posTags: srcChar.posTags ? JSON.parse(JSON.stringify(srcChar.posTags)) : parsePromptToTags(srcChar.posPrompt || ''),
+          negPrompt: srcChar.negPrompt || '',
+          negTags: srcChar.negTags ? JSON.parse(JSON.stringify(srcChar.negTags)) : parsePromptToTags(srcChar.negPrompt || ''),
+          gender: srcChar.gender || 'other',
+          activeTab: srcChar.activeTab || 'positive'
+        };
+        rebuildCharacterPromptsUI();
+      }
+    }
+    const posStr = tagsToString(positiveTags);
+    const negStr = tagsToString(negativeTags);
+    lastSentPositive = posStr;
+    lastSentNegative = negStr;
+    clearTimeout(_popupDebounceTimer);
+    clearTimeout(_webpageDebounceTimer);
+    _popupDebounceTimer = null;
+    _webpageDebounceTimer = null;
+    await recordHistory('restore');
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_PROMPT', data: { positive: posStr, negative: negStr } });
+        const payload = characterPromptsData.map(c => ({ positive: c.posPrompt, negative: c.negPrompt, gender: c.gender, activeTab: c.activeTab }));
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_CHARACTER_PROMPTS', data: payload });
+      }
+    });
+    return;
+  }
+
+  // ── 全量恢复（原有逻辑不变） ──
   rawPositive = snapshot.positive || '';
   rawNegative = snapshot.negative || '';
   positiveTags = snapshot.positiveTags ? JSON.parse(JSON.stringify(snapshot.positiveTags)) : parsePromptToTags(rawPositive);

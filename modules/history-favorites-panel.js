@@ -393,6 +393,95 @@ const MODAL_ID = 'nai-history-modal';
         margin: 0;
         padding: 0;
       }
+
+      /* ── 区块标题 + 操作按钮行 ── */
+      .nhm-section-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding-bottom: 6px; margin-bottom: 8px;
+        border-bottom: 1px solid #2e2e50;
+      }
+      .nhm-section-header.pos { border-bottom-color: #4ade8040; }
+      .nhm-section-header.neg { border-bottom-color: #f8717140; }
+      .nhm-section-header.char { border-bottom-color: #60a5fa40; }
+      .nhm-section-header-title {
+        font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #555;
+      }
+      .nhm-section-header-title.pos { color: #4ade80; }
+      .nhm-section-header-title.neg { color: #f87171; }
+      .nhm-section-header-title.char { color: #60a5fa; }
+      .nhm-section-actions {
+        display: flex; gap: 4px; flex-shrink: 0;
+      }
+      .nhm-action-btn {
+        background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #aaa;
+        cursor: pointer; transition: all 0.15s; white-space: nowrap;
+      }
+      .nhm-action-btn:hover { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.2); }
+      .nhm-action-btn.fav:hover { color: #f59e0b; border-color: #f59e0b80; }
+      .nhm-action-btn.restore:hover { color: #818cf8; border-color: #818cf880; }
+
+      /* ── 局部标记胶囊 ── */
+      .nhm-partial-badge {
+        display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+        margin-left: 6px; font-weight: 600; letter-spacing: 0.5px;
+      }
+      .nhm-partial-badge.pos { background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
+      .nhm-partial-badge.neg { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+      .nhm-partial-badge.char { background: rgba(96, 165, 250, 0.15); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.3); }
+
+      /* ── 收藏夹工具栏 ── */
+      .nhm-fav-toolbar {
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 12px; border-bottom: 1px solid #2e2e50; flex-shrink: 0;
+      }
+      .nhm-toolbar-btn {
+        background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.15);
+        border-radius: 5px; padding: 4px 10px; font-size: 11px; color: #999;
+        cursor: pointer; transition: all 0.15s;
+      }
+      .nhm-toolbar-btn:hover { background: rgba(255,255,255,0.12); color: #fff; border-style: solid; }
+
+      /* ── 文件夹容器 ── */
+      .nhm-folder-item {
+        border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;
+        margin: 4px 6px; overflow: hidden;
+        background: rgba(22, 22, 42, 0.6);
+      }
+      .nhm-folder-header {
+        display: flex; align-items: center; gap: 6px;
+        padding: 7px 10px; cursor: pointer;
+        background: rgba(42, 42, 64, 0.5); transition: background 0.15s;
+        border-bottom: 1px solid transparent;
+      }
+      .nhm-folder-header:hover { background: rgba(42, 42, 64, 0.8); }
+      .nhm-folder-header.open { border-bottom-color: rgba(255,255,255,0.06); }
+      .nhm-folder-arrow {
+        font-size: 10px; color: #888; transition: transform 0.2s; flex-shrink: 0;
+      }
+      .nhm-folder-arrow.open { transform: rotate(90deg); }
+      .nhm-folder-name {
+        flex: 1; font-size: 12px; color: #c5c5ef; font-weight: 500;
+        cursor: pointer; padding: 1px 3px; border-radius: 3px; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .nhm-folder-name:hover { background: #3a3a5c; }
+      .nhm-folder-count {
+        font-size: 10px; color: #666; flex-shrink: 0;
+      }
+      .nhm-folder-delete {
+        background: transparent; border: none; cursor: pointer; font-size: 12px;
+        color: #555; flex-shrink: 0; padding: 0 2px; transition: color 0.15s;
+      }
+      .nhm-folder-delete:hover { color: #ef4444; }
+      .nhm-folder-content {
+        padding: 2px 0 2px 8px;
+      }
+      .nhm-folder-content.collapsed { display: none; }
+
+      /* 拖拽高亮 */
+      .nhm-folder-header.drag-over { background: rgba(129, 140, 248, 0.2); border-bottom-color: #818cf840; }
+      .nhm-item.dragging { opacity: 0.4; }
     `;
 
     function injectStyle() {
@@ -1039,19 +1128,50 @@ const MODAL_ID = 'nai-history-modal';
       document.getElementById('nhm-actions').style.display = 'none';
     }
 
+    // ── 跟踪文件夹展开状态 ──
+    let folderOpenState = {}; // { folderId: true/false }
+
     function renderList() {
       const list = document.getElementById('nhm-list');
       if (!list) return;
 
+      // 移除之前可能残留的工具栏
+      const oldToolbar = list.parentElement.querySelector('.nhm-fav-toolbar');
+      if (oldToolbar) oldToolbar.remove();
+
       const filtered = currentTab === 'favorites'
-        ? historyData.filter(s => s.isFavorite)
-        : historyData.filter(s => !s.isFavorite);
+        ? historyData.filter(s => s.isFavorite || s.isFolder)
+        : historyData.filter(s => !s.isFavorite && !s.isFolder);
 
       // 统计信息
-      const normalCount = historyData.filter(s => !s.isFavorite).length;
+      const normalCount = historyData.filter(s => !s.isFavorite && !s.isFolder).length;
       const favCount = historyData.filter(s => s.isFavorite).length;
       const stats = document.getElementById('nhm-stats');
       if (stats) stats.textContent = `普通: ${normalCount} 条 · 收藏: ${favCount} 项`;
+
+      // 收藏页工具栏（新建文件夹按钮）
+      if (currentTab === 'favorites') {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'nhm-fav-toolbar';
+        const newFolderBtn = document.createElement('button');
+        newFolderBtn.className = 'nhm-toolbar-btn';
+        newFolderBtn.textContent = '📁 新建文件夹';
+        newFolderBtn.addEventListener('click', () => {
+          const folder = {
+            id: 'folder-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            isFolder: true,
+            isFavorite: true, // 让它出现在收藏 tab 的 filter 中
+            name: '新建文件夹',
+            timestamp: Date.now()
+          };
+          historyData.unshift(folder);
+          folderOpenState[folder.id] = true; // 默认展开
+          saveHistoryData(historyData);
+          renderList();
+        });
+        toolbar.appendChild(newFolderBtn);
+        list.parentElement.insertBefore(toolbar, list);
+      }
 
       if (filtered.length === 0) {
         list.innerHTML = `
@@ -1065,104 +1185,385 @@ const MODAL_ID = 'nai-history-modal';
       }
 
       list.innerHTML = '';
-      filtered.forEach((snapshot, ObjectIndex) => {
-        const item = document.createElement('div');
-        item.className = 'nhm-item' + (selectedSnapshot?.id === snapshot.id ? ' selected' : '');
-        item.dataset.id = snapshot.id;
 
-        const nameOrTime = snapshot.isFavorite && snapshot.name
-          ? `<div class="nhm-item-name" title="双击重命名">${snapshot.name}</div>`
-          : '';
-          
-        let previewHTML = '';
-        if (currentTab === 'history') {
-          previewHTML = generateDiffHTML(snapshot, filtered[ObjectIndex + 1]);
-        } else {
-          previewHTML = `<div class="nhm-item-preview">${tagsPreview(snapshot.positive)}</div>`;
-        }
+      if (currentTab === 'favorites') {
+        // ── 收藏页：分文件夹渲染 ──
+        const folders = filtered.filter(s => s.isFolder);
+        const items = filtered.filter(s => !s.isFolder);
+        const itemsInFolders = new Set();
 
-        item.innerHTML = `
-          <div class="nhm-item-main">
-            ${nameOrTime}
-            <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
-            ${previewHTML}
-          </div>
-          <button class="nhm-star-btn ${snapshot.isFavorite ? 'starred' : ''}" title="${snapshot.isFavorite ? '取消收藏' : '收藏'}">
-            ${snapshot.isFavorite ? '★' : '☆'}
-          </button>
-          <button class="nhm-delete-btn" title="删除此条">🗑</button>
-        `;
+        // 先渲染文件夹
+        folders.forEach(folder => {
+          const children = items.filter(s => s.folderId === folder.id);
+          children.forEach(c => itemsInFolders.add(c.id));
 
-        // 点击选中
-        item.addEventListener('click', (e) => {
-          if (e.target.closest('.nhm-star-btn') || e.target.closest('.nhm-delete-btn')) return;
-          selectedSnapshot = snapshot;
-          list.querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
-          item.classList.add('selected');
-          renderDetail(snapshot);
-        });
+          const folderEl = document.createElement('div');
+          folderEl.className = 'nhm-folder-item';
+          folderEl.dataset.folderId = folder.id;
 
-        // 点击名称双击重命名
-        const nameEl = item.querySelector('.nhm-item-name');
-        if (nameEl) {
-          nameEl.addEventListener('dblclick', (e) => {
+          const isOpen = folderOpenState[folder.id] !== false; // 默认展开
+
+          // 文件夹头
+          const headerEl = document.createElement('div');
+          headerEl.className = 'nhm-folder-header' + (isOpen ? ' open' : '');
+
+          headerEl.innerHTML = `
+            <span class="nhm-folder-arrow ${isOpen ? 'open' : ''}">▶</span>
+            <span class="nhm-folder-name" title="双击重命名">${folder.name || '未命名文件夹'}</span>
+            <span class="nhm-folder-count">${children.length} 项</span>
+            <button class="nhm-folder-delete" title="删除文件夹">🗑</button>
+          `;
+
+          // 展开/收起
+          headerEl.addEventListener('click', (e) => {
+            if (e.target.closest('.nhm-folder-delete') || e.target.closest('.nhm-folder-name')) return;
+            folderOpenState[folder.id] = !isOpen;
+            renderList();
+          });
+
+          // 文件夹名双击重命名
+          const nameSpan = headerEl.querySelector('.nhm-folder-name');
+          nameSpan.addEventListener('dblclick', (e) => {
             e.stopPropagation();
             const input = document.createElement('input');
-            input.value = snapshot.name || '';
-            input.style.cssText = 'background:#2a2a40;border:1px solid #3a3a5c;color:#ccc;border-radius:3px;padding:1px 4px;font-size:12px;width:90%;';
-            nameEl.replaceWith(input);
+            input.value = folder.name || '';
+            input.style.cssText = 'background:#2a2a40;border:1px solid #3a3a5c;color:#ccc;border-radius:3px;padding:1px 4px;font-size:12px;width:80%;';
+            nameSpan.replaceWith(input);
             input.focus();
             const save = () => {
-              snapshot.name = input.value.trim() || formatTime(snapshot.timestamp);
-              const idx = historyData.findIndex(s => s.id === snapshot.id);
-              if (idx !== -1) historyData[idx] = snapshot;
+              folder.name = input.value.trim() || '未命名文件夹';
+              const idx = historyData.findIndex(s => s.id === folder.id);
+              if (idx !== -1) historyData[idx] = folder;
               saveHistoryData(historyData);
               renderList();
             };
             input.addEventListener('blur', save);
-            input.addEventListener('keydown', e => { if (e.key === 'Enter') { save(); e.preventDefault(); } });
+            input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save(); ev.preventDefault(); } });
           });
-        }
 
-        // 收藏切换
-        item.querySelector('.nhm-star-btn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          snapshot.isFavorite = !snapshot.isFavorite;
-          const idx = historyData.findIndex(s => s.id === snapshot.id);
-          if (idx !== -1) historyData[idx] = snapshot;
-          saveHistoryData(historyData);
-          renderList();
-          if (selectedSnapshot?.id === snapshot.id) renderDetail(snapshot);
+          // 删除文件夹（子项释放回根目录）
+          headerEl.querySelector('.nhm-folder-delete').addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 释放子项
+            children.forEach(child => { delete child.folderId; });
+            historyData = historyData.filter(s => s.id !== folder.id);
+            delete folderOpenState[folder.id];
+            saveHistoryData(historyData);
+            renderList();
+          });
+
+          // 文件夹拖放目标事件
+          headerEl.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            headerEl.classList.add('drag-over');
+          });
+          headerEl.addEventListener('dragleave', () => {
+            headerEl.classList.remove('drag-over');
+          });
+          headerEl.addEventListener('drop', (e) => {
+            e.preventDefault();
+            headerEl.classList.remove('drag-over');
+            const dragId = e.dataTransfer.getData('text/plain');
+            if (!dragId || dragId === folder.id) return;
+            const target = historyData.find(s => s.id === dragId);
+            if (target && !target.isFolder) {
+              target.folderId = folder.id;
+              saveHistoryData(historyData);
+              renderList();
+            }
+          });
+
+          folderEl.appendChild(headerEl);
+
+          // 文件夹的子内容区
+          const contentEl = document.createElement('div');
+          contentEl.className = 'nhm-folder-content' + (isOpen ? '' : ' collapsed');
+
+          children.forEach(snapshot => {
+            contentEl.appendChild(buildFavItem(snapshot));
+          });
+
+          folderEl.appendChild(contentEl);
+          list.appendChild(folderEl);
         });
 
-        // 删除
-        item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          historyData = historyData.filter(s => s.id !== snapshot.id);
-          saveHistoryData(historyData);
-          if (selectedSnapshot?.id === snapshot.id) {
-            selectedSnapshot = null;
-            showPlaceholder();
+        // 渲染未归档的"根目录"收藏项
+        const rootItems = items.filter(s => !itemsInFolders.has(s.id));
+        rootItems.forEach(snapshot => {
+          list.appendChild(buildFavItem(snapshot));
+        });
+
+        // 列表本身也是拖放目标（拖出到根目录）
+        list.addEventListener('dragover', (e) => { e.preventDefault(); });
+        list.addEventListener('drop', (e) => {
+          // 只处理直接放在列表背景上的情况
+          if (e.target !== list && !e.target.classList.contains('nhm-empty-state')) return;
+          e.preventDefault();
+          const dragId = e.dataTransfer.getData('text/plain');
+          if (!dragId) return;
+          const target = historyData.find(s => s.id === dragId);
+          if (target && !target.isFolder) {
+            delete target.folderId;
+            saveHistoryData(historyData);
+            renderList();
           }
-          renderList();
         });
 
-        // 弹窗展开胶囊点击事件
-    const expandCapsule = item.querySelector('.nhm-diff-expand-capsule');
-    if (expandCapsule) {
-      expandCapsule.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const diffModal = document.getElementById('nhm-diff-modal');
-        const diffBody = document.getElementById('nhm-diff-modal-body');
-        if (diffModal && diffBody) {
-          diffBody.innerHTML = `<div class="nhm-item-diff-container">${expandCapsule.dataset.fulldiff}</div>`;
-          diffModal.classList.add('visible');
-        }
-      });
+      } else {
+        // ── 历史页：与之前逻辑相同 ──
+        filtered.forEach((snapshot, ObjectIndex) => {
+          const item = buildHistoryItem(snapshot, filtered, ObjectIndex);
+          list.appendChild(item);
+        });
+      }
     }
 
-    list.appendChild(item);
+    // ── 构建历史列表项 ──
+    function buildHistoryItem(snapshot, filtered, ObjectIndex) {
+      const item = document.createElement('div');
+      item.className = 'nhm-item' + (selectedSnapshot?.id === snapshot.id ? ' selected' : '');
+      item.dataset.id = snapshot.id;
+
+      const previewHTML = generateDiffHTML(snapshot, filtered[ObjectIndex + 1]);
+
+      // 检查是否已被收藏
+      const favoriteClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id);
+      const isActuallyStarred = !!favoriteClone;
+
+      item.innerHTML = `
+        <div class="nhm-item-main">
+          <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
+          ${previewHTML}
+        </div>
+        <button class="nhm-star-btn ${isActuallyStarred ? 'starred' : ''}" title="${isActuallyStarred ? '取消收藏' : '收藏'}">
+          ${isActuallyStarred ? '★' : '☆'}
+        </button>
+        <button class="nhm-delete-btn" title="删除此条">🗑</button>
+      `;
+
+      // 点击选中
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.nhm-star-btn') || e.target.closest('.nhm-delete-btn')) return;
+        selectedSnapshot = snapshot;
+        document.getElementById('nhm-list').querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        renderDetail(snapshot);
       });
+
+      // 收藏切换
+      const starBtn = item.querySelector('.nhm-star-btn');
+      starBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const favoriteClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id);
+        if (favoriteClone) {
+          historyData = historyData.filter(s => s.id !== favoriteClone.id);
+        } else {
+          const clone = JSON.parse(JSON.stringify(snapshot));
+          clone.id = 'fav-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+          clone.isFavorite = true;
+          clone.originId = snapshot.id;
+          historyData.unshift(clone);
+        }
+        saveHistoryData(historyData);
+        renderList();
+      });
+
+      // 删除
+      item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        historyData = historyData.filter(s => s.id !== snapshot.id);
+        saveHistoryData(historyData);
+        if (selectedSnapshot?.id === snapshot.id) { selectedSnapshot = null; showPlaceholder(); }
+        renderList();
+      });
+
+      // Diff 弹窗展开胶囊
+      const expandCapsule = item.querySelector('.nhm-diff-expand-capsule');
+      if (expandCapsule) {
+        expandCapsule.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const diffModal = document.getElementById('nhm-diff-modal');
+          const diffBody = document.getElementById('nhm-diff-modal-body');
+          if (diffModal && diffBody) {
+            diffBody.innerHTML = `<div class="nhm-item-diff-container">${expandCapsule.dataset.fulldiff}</div>`;
+            diffModal.classList.add('visible');
+          }
+        });
+      }
+
+      return item;
+    }
+
+    // ── 构建收藏列表项（含拖拽和局部标记） ──
+    function buildFavItem(snapshot) {
+      const item = document.createElement('div');
+      item.className = 'nhm-item' + (selectedSnapshot?.id === snapshot.id ? ' selected' : '');
+      item.dataset.id = snapshot.id;
+      item.draggable = true; // 启用拖拽
+
+      // 局部标记胶囊
+      let partialBadge = '';
+      if (snapshot.isPartial) {
+        const badgeLabels = { positive: '正面', negative: '负面' };
+        let cls = 'pos';
+        let label = badgeLabels[snapshot.partialType] || snapshot.partialType;
+        if (snapshot.partialType === 'negative') cls = 'neg';
+        else if (snapshot.partialType && snapshot.partialType.startsWith('character-')) { cls = 'char'; label = '角色'; }
+        partialBadge = `<span class="nhm-partial-badge ${cls}">${label}</span>`;
+      }
+
+      const nameOrTime = snapshot.name
+        ? `<div class="nhm-item-name" title="双击重命名">${snapshot.name}${partialBadge}</div>`
+        : (partialBadge ? `<div class="nhm-item-name" title="双击重命名">${formatTime(snapshot.timestamp)}${partialBadge}</div>` : '');
+
+      const previewText = snapshot.isPartial
+        ? tagsPreview(snapshot.positiveTags ? snapshot.positiveTags.map(t=>t.value).join(', ') : (snapshot.positive || snapshot.negative || ''))
+        : tagsPreview(snapshot.positive);
+
+      item.innerHTML = `
+        <div class="nhm-item-main">
+          ${nameOrTime}
+          <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
+          <div class="nhm-item-preview">${previewText}</div>
+        </div>
+        <button class="nhm-delete-btn" title="删除此条">🗑</button>
+      `;
+
+      // 拖拽事件
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', snapshot.id);
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+      });
+
+      // 点击选中
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.nhm-delete-btn')) return;
+        selectedSnapshot = snapshot;
+        document.getElementById('nhm-list').querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        renderDetail(snapshot);
+      });
+
+      // 双击重命名
+      const nameEl = item.querySelector('.nhm-item-name');
+      if (nameEl) {
+        nameEl.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          const input = document.createElement('input');
+          input.value = snapshot.name || '';
+          input.style.cssText = 'background:#2a2a40;border:1px solid #3a3a5c;color:#ccc;border-radius:3px;padding:1px 4px;font-size:12px;width:90%;';
+          nameEl.replaceWith(input);
+          input.focus();
+          const save = () => {
+            snapshot.name = input.value.trim() || formatTime(snapshot.timestamp);
+            const idx = historyData.findIndex(s => s.id === snapshot.id);
+            if (idx !== -1) historyData[idx] = snapshot;
+            saveHistoryData(historyData);
+            renderList();
+          };
+          input.addEventListener('blur', save);
+          input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save(); ev.preventDefault(); } });
+        });
+      }
+
+      // 删除
+      item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        historyData = historyData.filter(s => s.id !== snapshot.id);
+        saveHistoryData(historyData);
+        if (selectedSnapshot?.id === snapshot.id) { selectedSnapshot = null; showPlaceholder(); }
+        renderList();
+      });
+
+      return item;
+    }
+
+    // ── 局部收藏辅助：创建精简版收藏快照 ──
+    function createPartialFavorite(snapshot, partialType) {
+      const clone = JSON.parse(JSON.stringify(snapshot));
+      clone.id = 'fav-part-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+      clone.isFavorite = true;
+      clone.isPartial = true;
+      clone.partialType = partialType; // 'positive' | 'negative' | 'character-0' ...
+      clone.originId = snapshot.id;
+
+      // 根据 partialType 清除无关数据
+      if (partialType === 'positive') {
+        clone.negative = ''; clone.negativeTags = [];
+        clone.characters = [];
+        clone.name = clone.name || '正面提示词片段';
+      } else if (partialType === 'negative') {
+        clone.positive = ''; clone.positiveTags = [];
+        clone.characters = [];
+        clone.name = clone.name || '负面提示词片段';
+      } else if (partialType.startsWith('character-')) {
+        const charIdx = parseInt(partialType.split('-')[1]);
+        const targetChar = (snapshot.characters || [])[charIdx];
+        clone.positive = ''; clone.positiveTags = [];
+        clone.negative = ''; clone.negativeTags = [];
+        clone.characters = targetChar ? [JSON.parse(JSON.stringify(targetChar))] : [];
+        clone.name = clone.name || `角色 #${charIdx + 1} 片段`;
+      }
+
+      clone.timestamp = Date.now();
+      return clone;
+    }
+
+    // ── 局部恢复辅助：发送带 isPartial 标记的恢复指令 ──
+    function restorePartial(snapshot, partialType) {
+      const partial = JSON.parse(JSON.stringify(snapshot));
+      partial.isPartial = true;
+      partial.partialType = partialType;
+      window.postMessage({ type: '__RESTORE_HISTORY__', snapshot: partial }, '*');
+      closeModal();
+    }
+
+    // ── 构建区块标题行（含操作按钮）──
+    function buildSectionHeader(titleText, cssClass, snapshot, partialType) {
+      const header = document.createElement('div');
+      header.className = `nhm-section-header ${cssClass}`;
+
+      const title = document.createElement('span');
+      title.className = `nhm-section-header-title ${cssClass}`;
+      title.textContent = titleText;
+      header.appendChild(title);
+
+      const actions = document.createElement('div');
+      actions.className = 'nhm-section-actions';
+
+      // 收藏片段按钮
+      const favBtn = document.createElement('button');
+      favBtn.className = 'nhm-action-btn fav';
+      favBtn.textContent = '⭐ 收藏片段';
+      favBtn.title = '将此区块单独收藏';
+      favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const partial = createPartialFavorite(snapshot, partialType);
+        historyData.unshift(partial);
+        saveHistoryData(historyData);
+        // 可视反馈
+        favBtn.textContent = '✅ 已收藏';
+        favBtn.style.color = '#4ade80';
+        setTimeout(() => { favBtn.textContent = '⭐ 收藏片段'; favBtn.style.color = ''; }, 1500);
+      });
+      actions.appendChild(favBtn);
+
+      // 仅恢复此段按钮
+      const restoreBtn = document.createElement('button');
+      restoreBtn.className = 'nhm-action-btn restore';
+      restoreBtn.textContent = '⏮️ 仅恢复此段';
+      restoreBtn.title = '仅将此区块的内容应用到当前编辑器，不影响其他区块';
+      restoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        restorePartial(snapshot, partialType);
+      });
+      actions.appendChild(restoreBtn);
+
+      header.appendChild(actions);
+      return header;
     }
 
     function renderDetail(snapshot) {
@@ -1177,35 +1578,54 @@ const MODAL_ID = 'nai-history-modal';
       content.innerHTML = '';
 
       const charCount = (snapshot.characters || []).filter(c => c.posPrompt || c.negPrompt).length;
-      meta.textContent = `记录于 ${formatTime(snapshot.timestamp)} · ${charCount} 个角色`;
+      // 如果是局部快照，在 meta 中追加标记
+      let metaText = `记录于 ${formatTime(snapshot.timestamp)} · ${charCount} 个角色`;
+      if (snapshot.isPartial) {
+        const typeLabels = { positive: '正面', negative: '负面' };
+        const label = typeLabels[snapshot.partialType] || snapshot.partialType;
+        metaText += ` · 📌 局部片段 (${label})`;
+      }
+      meta.textContent = metaText;
+
+      // 判断是否需要渲染各区块（局部快照仅渲染对应区块）
+      const showPositive = !snapshot.isPartial || snapshot.partialType === 'positive';
+      const showNegative = !snapshot.isPartial || snapshot.partialType === 'negative';
+      const showCharacters = !snapshot.isPartial || (snapshot.partialType && snapshot.partialType.startsWith('character-'));
 
       // 正向
-      const posSection = document.createElement('div');
-      posSection.className = 'nhm-section';
-      posSection.innerHTML = `<div class="nhm-section-title pos">✅ 正向提示词 (Positive)</div>`;
-      const posCloud = document.createElement('div');
-      posCloud.className = 'nhm-tag-cloud';
-      renderTagCloud(posCloud, snapshot.positiveTags || snapshot.positive);
-      posSection.appendChild(posCloud);
-      content.appendChild(posSection);
+      if (showPositive) {
+        const posSection = document.createElement('div');
+        posSection.className = 'nhm-section';
+        posSection.appendChild(buildSectionHeader('✅ 正向提示词 (Positive)', 'pos', snapshot, 'positive'));
+        const posCloud = document.createElement('div');
+        posCloud.className = 'nhm-tag-cloud';
+        renderTagCloud(posCloud, snapshot.positiveTags || snapshot.positive);
+        posSection.appendChild(posCloud);
+        content.appendChild(posSection);
+      }
 
       // 负向
-      const negSection = document.createElement('div');
-      negSection.className = 'nhm-section';
-      negSection.innerHTML = `<div class="nhm-section-title neg">🚫 负向提示词 (Negative)</div>`;
-      const negCloud = document.createElement('div');
-      negCloud.className = 'nhm-tag-cloud';
-      renderTagCloud(negCloud, snapshot.negativeTags || snapshot.negative);
-      negSection.appendChild(negCloud);
-      content.appendChild(negSection);
+      if (showNegative) {
+        const negSection = document.createElement('div');
+        negSection.className = 'nhm-section';
+        negSection.appendChild(buildSectionHeader('🚫 负向提示词 (Negative)', 'neg', snapshot, 'negative'));
+        const negCloud = document.createElement('div');
+        negCloud.className = 'nhm-tag-cloud';
+        renderTagCloud(negCloud, snapshot.negativeTags || snapshot.negative);
+        negSection.appendChild(negCloud);
+        content.appendChild(negSection);
+      }
 
       // 角色
-      if (snapshot.characters && snapshot.characters.length > 0) {
+      if (showCharacters && snapshot.characters && snapshot.characters.length > 0) {
         snapshot.characters.forEach((char, idx) => {
           if (!char.posPrompt && !char.negPrompt) return;
+          // 如果是局部快照且指定了 character-N，只渲染对应角色
+          if (snapshot.isPartial && snapshot.partialType !== `character-${idx}`) return;
+
           const charSection = document.createElement('div');
           charSection.className = 'nhm-section';
-          charSection.innerHTML = `<div class="nhm-section-title char">👤 角色 #${idx + 1}</div>`;
+          charSection.appendChild(buildSectionHeader(`👤 角色 #${idx + 1}`, 'char', snapshot, `character-${idx}`));
           if (char.posPrompt) {
             const p = document.createElement('div');
             p.style.marginBottom = '6px';
@@ -1232,8 +1652,14 @@ const MODAL_ID = 'nai-history-modal';
         });
       }
 
-      // 恢复按钮
+      // 恢复按钮（底部全局恢复按钮）
       const restoreBtn = document.getElementById('nhm-restore-btn');
+      if (snapshot.isPartial) {
+        // 局部快照：底部按钮文字变更
+        restoreBtn.textContent = '⏮️ 恢复此片段';
+      } else {
+        restoreBtn.textContent = '⏮️ 恢复至此状态';
+      }
       restoreBtn.onclick = () => {
         if (!selectedSnapshot) return;
         window.postMessage({ type: '__RESTORE_HISTORY__', snapshot: selectedSnapshot }, '*');
@@ -1272,4 +1698,4 @@ const MODAL_ID = 'nai-history-modal';
     });
 
     console.log('[Wildcard] History Modal module initialized');
-  })();
+  })();
