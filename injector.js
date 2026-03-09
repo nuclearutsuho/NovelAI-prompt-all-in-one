@@ -1190,198 +1190,178 @@
     editor.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  // 查找基础编辑器（允许隐藏元素，用于读取不可见标签页的内容）
-  const findBaseEditorAny = (selectors, excludeSelector) => {
-    const els = document.querySelectorAll(selectors);
-    for (let el of els) {
-      if (excludeSelector && el.closest(excludeSelector)) continue;
-      return el; // 不检查可见性，直接返回第一个匹配
-    }
-    return null;
-  };
+  /* -------------------------------------------------
+   * 4a. Jotai Store 适配层
+   * 直接读写 NovelAI 的 React 内部状态，绕过 DOM 可见性限制
+   * 当 Jotai Store 不可用时（如 NovelAI 更新后），自动 fallback 到 DOM 操作
+   * ------------------------------------------------- */
 
-  // 从元素中读取文本（优先用 textContent，因为 innerText 对隐藏元素返回空串）
-  const getTextFromEl = el => {
-    if (!el) return undefined;
-    // textContent 不受 CSS visibility 影响，对隐藏元素也能正确读取
-    const text = (el.textContent || '').trim();
-    return text || undefined; // 空字符串返回 undefined，以便区分"没有"和"为空"
-  };
+  // 获取 Jotai Store 引用（NovelAI 在全局暴露了这个对象）
+  const getJotaiStore = () => globalThis.__JOTAI_DEFAULT_STORE__;
 
-  // 缓存最后已知的 negative 值
-  let _cachedNegative = undefined;
-  let _cachedCharPrompts = {};
+  // Atom 引用缓存：避免每次都遍历所有已挂载的 atom
+  const _atomCache = {};
 
-  function getCurrentPrompts() {
-    let posEl = findBaseEditor('.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror', '.character-prompt-input');
-    
-    // 先找可见的 negative 编辑器，再找隐藏的
-    let negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
-    if (!negEl) {
-      negEl = findBaseEditorAny('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
-    }
-
-    const getVal = el => el ? (el.innerText || el.textContent || '').trim() : undefined;
-
-    // 对 negative 使用 textContent 优先（隐藏元素友好）
-    const negValue = negEl ? getTextFromEl(negEl) : undefined;
-    // 更新缓存：仅当成功读取到非空内容时更新
-    if (negValue !== undefined) {
-      _cachedNegative = negValue;
+  /**
+   * 通过 localStorage 键名反查对应的 Jotai Atom 引用
+   *
+   * 原理说明（给初学者）：
+   * NovelAI 使用 Jotai 的 atomWithStorage 创建 atom，这种 atom 会自动
+   * 把值同步到 localStorage。所以 atom 的当前值和 localStorage 中的值是一致的。
+   * 我们利用这个特性，遍历所有已挂载的 atom，找到值与 localStorage 匹配的那个。
+   *
+   * 由于 NovelAI 的代码是混淆过的，变量名是随机的（如 t_, tE），
+   * 我们无法直接引用它们。但通过这种"值匹配"的方式，我们可以稳定地找到目标 atom。
+   */
+  function findAtomByKey(storageKey) {
+    // 先检查缓存：如果之前已经找到过这个 atom，直接复用
+    if (_atomCache[storageKey]) {
+      try {
+        const store = getJotaiStore();
+        if (store) store.get(_atomCache[storageKey]); // 验证缓存仍有效
+        return _atomCache[storageKey];
+      } catch (e) { _atomCache[storageKey] = null; } // 缓存失效，重新查找
     }
 
-    const result = {
-      positive: getVal(posEl),
-      negative: negValue !== undefined ? negValue : (_cachedNegative !== undefined ? _cachedNegative : undefined)
-    };
+    const store = getJotaiStore();
+    // dev4_get_mounted_atoms 是 Jotai 提供的调试方法，用于获取所有已挂载的 atom
+    if (!store || !store.dev4_get_mounted_atoms) return null;
 
-    // Extract Character Prompts
-    const charPrompts = [];
-    const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
-    const charContainers = Array.from(settingsPanel.querySelectorAll('.character-prompt-input'));
-    
-    charContainers.forEach((charContainer, idx) => {
-      const rect = charContainer.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
+    // 从 localStorage 读取当前值，用于和 atom 的值进行比对
+    const rawVal = localStorage.getItem(storageKey);
+    if (rawVal === null) return null;
 
-      const pm = charContainer.querySelector('.ProseMirror');
-      const btns = Array.from(charContainer.querySelectorAll('button'));
-      const activeBtn = btns.find(btn => 
-        (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired')) 
-        && btn.parentElement 
-        && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9
-      );
-      const isUndesired = activeBtn && activeBtn.textContent.includes('Undesired');
+    // localStorage 中的值是 JSON 序列化后的字符串
+    let targetVal;
+    try { targetVal = JSON.parse(rawVal); } catch (e) { targetVal = rawVal; }
 
-      const currentVal = getVal(pm);
-
-      if (!_cachedCharPrompts[idx]) _cachedCharPrompts[idx] = {};
-      if (isUndesired) {
-        _cachedCharPrompts[idx].negative = currentVal;
-      } else {
-        _cachedCharPrompts[idx].positive = currentVal;
-      }
-
-      charPrompts.push({
-        positive: isUndesired ? _cachedCharPrompts[idx].positive : currentVal,
-        negative: isUndesired ? currentVal : _cachedCharPrompts[idx].negative,
-        gender: 'other',
-        activeTab: isUndesired ? 'negative' : 'positive'
-      });
+    // 遍历所有已挂载的 atom，找到值匹配的那个
+    const mounted = Array.from(store.dev4_get_mounted_atoms());
+    const atom = mounted.find(function(a) {
+      try {
+        const v = store.get(a);
+        // 字符串直接比较
+        if (typeof targetVal === 'string' && typeof v === 'string') return v === targetVal;
+        // 数组/对象需要 JSON 序列化后比较
+        if (typeof targetVal === 'object' && typeof v === 'object') {
+          return JSON.stringify(v) === JSON.stringify(targetVal);
+        }
+        return false;
+      } catch (e) { return false; }
     });
-    result.characters = charPrompts;
 
-    return result;
+    if (atom) _atomCache[storageKey] = atom; // 找到后缓存起来
+    return atom;
   }
 
   /**
-   * 启动预热：复用 __SWITCH_TAB__ 的按钮查找逻辑，
-   * 快速切到 Undesired Content 读取内容后切回。
-   * 在页面加载后延迟执行，确保 DOM 已就绪。
+   * 从 Jotai Store 读取指定 atom 的值
+   * @param {string} storageKey - localStorage 键名
+   * @returns {*} atom 的当前值，Jotai 不可用时返回 undefined
    */
-  let _warmupDone = false;
+  function jotaiGet(storageKey) {
+    const store = getJotaiStore();
+    const atom = findAtomByKey(storageKey);
+    if (store && atom) {
+      try { return store.get(atom); } catch (e) { return undefined; }
+    }
+    return undefined;
+  }
 
-  async function warmupNegativePrompt() {
-    if (_warmupDone) return;
-    _warmupDone = true;
+  /**
+   * 通过 Jotai Store 修改指定 atom 的值
+   * 修改后 React 组件（包括 ProseMirror 编辑器）会通过 useEffect 自动同步更新
+   * @param {string} storageKey - localStorage 键名
+   * @param {*} value - 要设置的新值
+   * @returns {boolean} 是否写入成功
+   */
+  function jotaiSet(storageKey, value) {
+    const store = getJotaiStore();
+    const atom = findAtomByKey(storageKey);
+    if (store && atom) {
+      try {
+        store.set(atom, value);
+        // 写入成功后清除缓存，因为值已改变，下次查找需要重新匹配
+        _atomCache[storageKey] = null;
+        return true;
+      } catch (e) { return false; }
+    }
+    return false;
+  }
 
-    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  /**
+   * 读取当前页面上的所有提示词数据
+   * 优先从 Jotai Store 读取（不受 tab 可见性限制），fallback 到 DOM
+   */
 
-    // === 主提示词区域 ===
-    const baseContainer = document.querySelector('.image-gen-prompt-main') || document;
-    const baseBtns = Array.from(baseContainer.querySelectorAll('button'));
+  function getCurrentPrompts() {
+    // === 主提示词：优先从 Jotai 读取 ===
+    let positive = jotaiGet('imagegen-prompt');
+    let negative = jotaiGet('imagegen-negativeprompt');
 
-    const undesiredBtn = baseBtns.find(el => el.textContent.trim() === 'Undesired Content');
-    const promptBtn = baseBtns.find(el => {
-      const t = el.textContent.trim();
-      return t === 'Base Prompt' || t === 'Prompt';
-    });
-
-    if (undesiredBtn && promptBtn) {
-      console.log('[Wildcard] Warmup: switching to Undesired Content...');
-      undesiredBtn.click();
-      await wait(200);
-
-      // 读取 negative 编辑器内容
-      const negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input')
-                 || findBaseEditorAny('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
-      if (negEl) {
-        const text = (negEl.innerText || negEl.textContent || '').trim();
-        _cachedNegative = text;
-        console.log('[Wildcard] Warmup: negative prompt cached (' + text.length + ' chars)');
-      }
-
-      // 切回 positive
-      promptBtn.click();
-      await wait(50);
-      console.log('[Wildcard] Warmup: switched back to Prompt');
-    } else {
-      console.log('[Wildcard] Warmup: buttons not found. undesired:', !!undesiredBtn, 'prompt:', !!promptBtn);
+    // Fallback：Jotai 不可用时从 DOM 读取（仅能读到当前可见 tab 的内容）
+    if (positive === undefined) {
+      const posEl = findBaseEditor(
+        '.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror',
+        '.character-prompt-input'
+      );
+      positive = posEl ? (posEl.innerText || posEl.textContent || '').trim() : undefined;
+    }
+    if (negative === undefined) {
+      const negEl = findBaseEditor(
+        '.prompt-input-box-undesired-content .ProseMirror',
+        '.character-prompt-input'
+      );
+      negative = negEl ? (negEl.innerText || negEl.textContent || '').trim() : undefined;
     }
 
-    // === 角色提示词区域 ===
-    const charContainers = Array.from(document.querySelectorAll('.character-prompt-input'));
-    for (let idx = 0; idx < charContainers.length; idx++) {
-      const container = charContainers[idx];
-      const btns = Array.from(container.querySelectorAll('button'));
-      const charUndesiredBtn = btns.find(el => el.textContent.trim() === 'Undesired Content');
-      const charPromptBtn = btns.find(el => {
-        const t = el.textContent.trim();
-        return t === 'Base Prompt' || t === 'Prompt';
+    const result = { positive, negative };
+
+    // === 角色提示词：优先从 Jotai 读取 ===
+    const charAtomData = jotaiGet('imagegen-character-prompts');
+    if (Array.isArray(charAtomData) && charAtomData.length > 0) {
+      // 从 Jotai atom 直接读取，结构：{ prompt, uc, center, enabled }
+      // Jotai 读取不依赖 tab 可见状态，能同时获得 positive 和 negative
+      result.characters = charAtomData.map(function(c) {
+        return {
+          positive: c.prompt || '',
+          negative: c.uc || '',
+          gender: 'other',
+          activeTab: 'positive'
+        };
       });
+    } else {
+      // Fallback：从 DOM 读取角色提示词（受 tab 可见性限制）
+      const charPrompts = [];
+      const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
+      const charContainers = Array.from(settingsPanel.querySelectorAll('.character-prompt-input'));
 
-      if (charUndesiredBtn && charPromptBtn) {
-        charUndesiredBtn.click();
-        await wait(200);
-        const pm = container.querySelector('.ProseMirror');
-        if (pm) {
-          if (!_cachedCharPrompts[idx]) _cachedCharPrompts[idx] = {};
-          _cachedCharPrompts[idx].negative = (pm.innerText || pm.textContent || '').trim();
-        }
-        charPromptBtn.click();
-        await wait(50);
-      }
+      charContainers.forEach(function(charContainer) {
+        const rect = charContainer.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        const pm = charContainer.querySelector('.ProseMirror');
+        const getVal = function(el) { return el ? (el.innerText || el.textContent || '').trim() : undefined; };
+        const btns = Array.from(charContainer.querySelectorAll('button'));
+        const activeBtn = btns.find(function(btn) {
+          return (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired'))
+            && btn.parentElement
+            && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9;
+        });
+        const isUndesired = activeBtn && activeBtn.textContent.includes('Undesired');
+
+        charPrompts.push({
+          positive: isUndesired ? undefined : getVal(pm),
+          negative: isUndesired ? getVal(pm) : undefined,
+          gender: 'other',
+          activeTab: isUndesired ? 'negative' : 'positive'
+        });
+      });
+      result.characters = charPrompts;
     }
+
+    return result;
   }
-
-  // 智能预热启动器：等待 DOM 就绪且用户未在输入时启动预热
-  function initWarmup() {
-    let attempts = 0;
-    const interval = setInterval(() => {
-      attempts++;
-      if (_warmupDone || attempts > 120) { // 60 秒后放弃尝试
-        clearInterval(interval);
-        return;
-      }
-
-      // 等待主生成区域加载
-      const baseContainer = document.querySelector('.image-gen-prompt-main');
-      if (!baseContainer) return;
-
-      // 确保相关标签切换按钮已渲染
-      const btns = Array.from(baseContainer.querySelectorAll('button'));
-      const undesiredBtn = btns.find(el => el.textContent.trim() === 'Undesired Content');
-      if (!undesiredBtn) return;
-
-      // 检查用户是否正在与界面交互，如果是则推迟预热，防止打断输入
-      const activeEl = document.activeElement;
-      if (activeEl && (
-        activeEl.tagName === 'INPUT' || 
-        activeEl.tagName === 'TEXTAREA' || 
-        activeEl.isContentEditable || 
-        activeEl.closest('.ProseMirror')
-      )) {
-        return;
-      }
-
-      // 条件满足，开始预热
-      clearInterval(interval);
-      warmupNegativePrompt();
-    }, 500);
-  }
-
-  // 启动智能预热监听
-  initWarmup();
 
   window.addEventListener('message', e => {
     if (e.source !== window) return;
@@ -1403,154 +1383,123 @@
       isSyncingFromPopup = true;
       try {
         const { positive, negative } = data || {};
-        
-        let posEl = findBaseEditor('.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror', '.character-prompt-input');
-        
-        let negEl = findBaseEditor('.prompt-input-box-undesired-content .ProseMirror', '.character-prompt-input');
 
-        if (positive !== undefined && posEl) setEditorContent(posEl, positive);
-        if (negative !== undefined && negEl) setEditorContent(negEl, negative);
+        // 优先使用 Jotai 直接写入（不受 tab 可见性限制）
+        // Jotai 写入后，ProseMirror 编辑器会通过 React 的 useEffect 自动同步
+        let posOk = positive !== undefined && jotaiSet('imagegen-prompt', positive);
+        let negOk = negative !== undefined && jotaiSet('imagegen-negativeprompt', negative);
+
+        // Fallback：Jotai 不可用时退回 DOM 操作（仅适用于当前可见的 tab）
+        if (!posOk && positive !== undefined) {
+          const posEl = findBaseEditor(
+            '.prompt-input-box-base-prompt .ProseMirror, .image-gen-prompt-main .prompt-input-box-prompt .ProseMirror, .prompt-input-box-prompt .ProseMirror',
+            '.character-prompt-input'
+          );
+          if (posEl) setEditorContent(posEl, positive);
+        }
+        if (!negOk && negative !== undefined) {
+          const negEl = findBaseEditor(
+            '.prompt-input-box-undesired-content .ProseMirror',
+            '.character-prompt-input'
+          );
+          if (negEl) setEditorContent(negEl, negative);
+        }
       } finally {
-        // Use timeout to ensure all immediate side effects (like 'input' events) are processed
         setTimeout(() => { isSyncingFromPopup = false; }, 100);
       }
-    }
-
-    // --- STAGE 6: GLOBAL SYNC TRACKER ---
-    // Stores the last known state of each character to avoid redundant clicks/focus-stealing
-    if (typeof window.lastSyncCharactersState === 'undefined') {
-        window.lastSyncCharactersState = [];
     }
 
     if (type === '__SET_CHARACTER_PROMPTS__') {
       isSyncingFromPopup = true;
       try {
         const charDataList = data || [];
+
+        // === 优先使用 Jotai 直接写入角色提示词 ===
+        const charAtomData = jotaiGet('imagegen-character-prompts');
+        if (Array.isArray(charAtomData)) {
+          // 创建副本（React 要求新引用才能检测到变化）
+          const newChars = [...charAtomData];
+
+          // 调整角色数量：增加缺少的角色
+          while (newChars.length < charDataList.length) {
+            newChars.push({ prompt: '', uc: '', center: { x: 0.5, y: 0.5 }, enabled: true });
+          }
+          // 删除多余的角色
+          while (newChars.length > charDataList.length) {
+            newChars.pop();
+          }
+
+          // 更新每个角色的提示词文本
+          for (let i = 0; i < charDataList.length; i++) {
+            const src = charDataList[i];
+            newChars[i] = {
+              ...newChars[i],
+              prompt: src.positive !== undefined ? src.positive : newChars[i].prompt,
+              uc: src.negative !== undefined ? src.negative : newChars[i].uc
+            };
+          }
+
+          const ok = jotaiSet('imagegen-character-prompts', newChars);
+          if (ok) {
+            console.log('[Jotai] 角色提示词已通过 Jotai 写入，共', newChars.length, '个角色');
+            setTimeout(() => { isSyncingFromPopup = false; }, 100);
+            return; // Jotai 写入成功，无需 DOM 操作
+          }
+        }
+
+        // === Fallback：Jotai 不可用时使用原有的 DOM 操作 ===
         const syncCharactersDOM = async (charList) => {
           if (!Array.isArray(charList)) return;
           const wait = (ms) => new Promise(r => setTimeout(r, ms));
           const settingsPanel = document.querySelector('.settings-panel') || document.querySelector('.mobile-tray-contents') || document;
-          
+
           let getCharContainers = () => Array.from(settingsPanel.querySelectorAll('.character-prompt-input')).filter(el => el.className.match(/character-prompt-input-\d+/));
           let charContainers = getCharContainers();
-          // 1. Add missing characters
+
+          // 1. 添加缺少的角色（模拟点击 Add Character 按钮）
           while (charContainers.length < charList.length) {
-              const addBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Add Character') || b.textContent.includes('添加角色') || b.textContent.includes('キャラの追加'));
-              if (addBtn) {
-                  addBtn.click();
-                  await wait(100); 
-                  
-                  // Auto-click "Other" if gender popup appears
-                  const otherBtn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent === 'Other' && window.getComputedStyle(el).cursor === 'pointer');
-                  if(otherBtn) {
-                      otherBtn.click();
-                      await wait(100);
-                  }
-                  charContainers = getCharContainers();
-              } else {
-                  console.warn('[Phase 4] React "Add Character" btn not found');
-                  break;
-              }
+            const addBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Add Character') || b.textContent.includes('添加角色') || b.textContent.includes('キャラの追加'));
+            if (addBtn) {
+              addBtn.click();
+              await wait(100);
+              const otherBtn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent === 'Other' && window.getComputedStyle(el).cursor === 'pointer');
+              if (otherBtn) { otherBtn.click(); await wait(100); }
+              charContainers = getCharContainers();
+            } else { break; }
           }
-          
-          // 2. Remove excess characters
+
+          // 2. 删除多余的角色（模拟点击删除按钮）
           while (charContainers.length > charList.length) {
-              const lastChar = charContainers[charContainers.length - 1];
-              
-              // Searching for X button.
-              // NovelAI uses CSS mask-image for icons, not direct SVGs!
-              const delBtn = Array.from(lastChar.querySelectorAll('button')).find(btn => {
-                  const iconDiv = btn.querySelector('div');
-                  if (!iconDiv) return false;
-                  const style = window.getComputedStyle(iconDiv);
-                  const mask = style.maskImage || style.webkitMaskImage || style.getPropertyValue('-webkit-mask-image') || '';
-                  return mask.includes('trash');
-              }) || lastChar.querySelector('button.dcscxb'); // Fallback
-                   
-              if (delBtn) {
-                  delBtn.click();
-                  await wait(100);
-                  charContainers = getCharContainers();
-              } else {
-                  console.warn('[Phase 4] React Delete character btn not found');
-                  break; 
-              }
+            const lastChar = charContainers[charContainers.length - 1];
+            const delBtn = Array.from(lastChar.querySelectorAll('button')).find(btn => {
+              const iconDiv = btn.querySelector('div');
+              if (!iconDiv) return false;
+              const style = window.getComputedStyle(iconDiv);
+              const mask = style.maskImage || style.webkitMaskImage || style.getPropertyValue('-webkit-mask-image') || '';
+              return mask.includes('trash');
+            }) || lastChar.querySelector('button.dcscxb');
+            if (delBtn) { delBtn.click(); await wait(100); charContainers = getCharContainers(); }
+            else { break; }
           }
-          
-          // 3. Inject text data into active ProseMirror for each character
-           for (let i = 0; i < charList.length; i++) {
-               if (i >= charContainers.length) break;
-               const container = charContainers[i];
-               const charData = charList[i];
-               
-               // --- STAGE 6: DIFF CHECK ---
-               const lastState = window.lastSyncCharactersState[i] || {};
-               const isSame = lastState.positive === charData.positive &&
-                              lastState.negative === charData.negative &&
-                              lastState.activeTab === charData.activeTab;
 
-               if (isSame) continue; // Skip identical to save focus
+          // 3. 写入每个角色当前可见 tab 的提示词
+          for (let i = 0; i < charList.length; i++) {
+            if (i >= charContainers.length) break;
+            const container = charContainers[i];
+            const charData = charList[i];
+            const pm = container.querySelector('.ProseMirror');
+            if (!pm) continue;
 
-               // Helper: Find or Wake up ProseMirror (Localized inside loop for context)
-               const getOrWakeEditor = async () => {
-                   let pm = container.querySelector('.ProseMirror');
-                   if (pm && pm.getBoundingClientRect().height > 0) return pm;
-                   const inputBox = container.querySelector('[class*="prompt-input-box-character-prompts-"]') ||
-                                    container.querySelector('div[role="textbox"]') || 
-                                    (pm ? pm.parentElement : container); 
-                   if (inputBox) inputBox.click();
-                   for(let waitIdx=0; waitIdx<6; waitIdx++) {
-                       await wait(50);
-                       pm = container.querySelector('.ProseMirror');
-                       if (pm && pm.getBoundingClientRect().height > 0) return pm;
-                   }
-                   return null;
-               };
-
-               const pm = await getOrWakeEditor();
-               if (!pm) continue;
-
-               const targetTab = charData.activeTab; 
-               const btns = Array.from(container.querySelectorAll('button'));
-               const activeBtn = btns.find(btn => 
-                 (btn.textContent.includes('Prompt') || btn.textContent.includes('Base Prompt') || btn.textContent.includes('Undesired')) 
-                 && btn.parentElement 
-                 && parseFloat(window.getComputedStyle(btn.parentElement).opacity) > 0.9
-               );
-               const currentWebTab = activeBtn && activeBtn.textContent.includes('Undesired') ? 'negative' : 'positive';
-
-               if (targetTab && currentWebTab !== targetTab) {
-                   const targetTexts = targetTab === 'negative' ? ['Undesired Content'] : ['Prompt', 'Base Prompt'];
-                   const switchBtn = btns.find(btn => targetTexts.includes(btn.textContent.trim()));
-                   if (switchBtn) {
-                       switchBtn.click();
-                       await wait(150);
-                   }
-               }
-
-               const currentPm = container.querySelector('.ProseMirror');
-               const currentText = currentPm ? (currentPm.innerText || currentPm.textContent || '').trim() : '';
-               const targetText = targetTab === 'negative' ? charData.negative : charData.positive;
-               const targetStr = (targetText || '').trim();
-
-               if (currentText !== targetStr && targetText !== undefined && currentPm) {
-                   setEditorContent(currentPm, targetText);
-               }
-
-               // Update the Ledger
-               window.lastSyncCharactersState[i] = {
-                   positive: charData.positive,
-                   negative: charData.negative,
-                   activeTab: charData.activeTab
-               };
-           }
+            const targetText = charData.activeTab === 'negative' ? charData.negative : charData.positive;
+            if (targetText !== undefined) setEditorContent(pm, targetText);
+          }
         };
 
         syncCharactersDOM(charDataList).finally(() => {
-            setTimeout(() => { isSyncingFromPopup = false; }, 100);
+          setTimeout(() => { isSyncingFromPopup = false; }, 100);
         });
       } catch (err) {
-        console.error('[Phase 4] Sync char err:', err);
+        console.error('[Jotai/DOM] Sync char err:', err);
         isSyncingFromPopup = false;
       }
     }
