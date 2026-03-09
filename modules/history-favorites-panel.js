@@ -400,15 +400,15 @@ const MODAL_ID = 'nai-history-modal';
         padding-bottom: 6px; margin-bottom: 8px;
         border-bottom: 1px solid #2e2e50;
       }
-      .nhm-section-header.pos { border-bottom-color: #4ade8040; }
-      .nhm-section-header.neg { border-bottom-color: #f8717140; }
-      .nhm-section-header.char { border-bottom-color: #60a5fa40; }
+      .nhm-section-header.pos { border-bottom-color: #a855f740; }
+      .nhm-section-header.neg { border-bottom-color: #f59e0b40; }
+      .nhm-section-header.char { border-bottom-color: #14b8a640; }
       .nhm-section-header-title {
         font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #555;
       }
-      .nhm-section-header-title.pos { color: #4ade80; }
-      .nhm-section-header-title.neg { color: #f87171; }
-      .nhm-section-header-title.char { color: #60a5fa; }
+      .nhm-section-header-title.pos { color: #a855f7; }
+      .nhm-section-header-title.neg { color: #f59e0b; }
+      .nhm-section-header-title.char { color: #14b8a6; }
       .nhm-section-actions {
         display: flex; gap: 4px; flex-shrink: 0;
       }
@@ -426,9 +426,20 @@ const MODAL_ID = 'nai-history-modal';
         display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
         margin-left: 6px; font-weight: 600; letter-spacing: 0.5px;
       }
-      .nhm-partial-badge.pos { background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
-      .nhm-partial-badge.neg { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
-      .nhm-partial-badge.char { background: rgba(96, 165, 250, 0.15); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.3); }
+      .nhm-partial-badge.pos { background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); }
+      .nhm-partial-badge.neg { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+      .nhm-partial-badge.char { background: rgba(20, 184, 166, 0.15); color: #14b8a6; border: 1px solid rgba(20, 184, 166, 0.3); }
+
+      /* ── 差异标记分类徽章 ── */
+      .nhm-diff-section-badge {
+        font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid transparent;
+        margin-right: 6px; margin-left: 2px; display: inline-flex; align-items: center;
+        font-weight: 600; font-family: 'Inter', sans-serif;
+        vertical-align: middle; flex-shrink: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      }
+      .nhm-diff-section-badge.pos { background: rgba(168, 85, 247, 0.12); color: #a855f7; border-color: rgba(168, 85, 247, 0.25); }
+      .nhm-diff-section-badge.neg { background: rgba(245, 158, 11, 0.12); color: #f59e0b; border-color: rgba(245, 158, 11, 0.25); }
+      .nhm-diff-section-badge.char { background: rgba(20, 184, 166, 0.12); color: #14b8a6; border-color: rgba(20, 184, 166, 0.25); }
 
       /* ── 收藏夹工具栏 ── */
       .nhm-fav-toolbar {
@@ -622,7 +633,7 @@ const MODAL_ID = 'nai-history-modal';
     }
 
     /**
-     * 渲染 6-State Diff 内容为 HTML，生成微型变动胶囊
+     * 渲染 6-State Diff 内容为 HTML，支持正/负/角色级别的多维度 Diff 展示
      */
     function generateDiffHTML(currSnapshot, prevSnapshot) {
       if (!prevSnapshot) {
@@ -630,34 +641,91 @@ const MODAL_ID = 'nai-history-modal';
          return `<div class="nhm-item-preview">${tagsPreview(previewTags)}</div>`;
       }
 
-      // 优先提取精确的 tags 数组（如果版本太旧就退化到处理普通字符串）
-      const currTarget = currSnapshot.positiveTags || currSnapshot.positive;
-      const prevTarget = prevSnapshot.positiveTags || prevSnapshot.positive;
+      const allDiffsHTML = [];
+      let totalDiffCount = 0;
 
-      const diff = computePromptDiff(currTarget, prevTarget);
-      
-      const allDiffs = [
-        ...diff.added.map(item => `<span class="nhm-diff-tag diff-add"><span class="diff-op">+</span> ${item.cleanText}</span>`),
-        ...diff.removed.map(item => `<span class="nhm-diff-tag diff-remove"><span class="diff-op">-</span> ${item.cleanText}</span>`),
-        ...diff.changed.map(item => `<span class="nhm-diff-tag diff-change" ${item.disabled ? 'style="opacity:0.6"' : ''}><span class="diff-op">~</span> ${item.cleanText}: ${item.oldWeight.toFixed(2)} → ${item.newWeight.toFixed(2)}</span>`),
-        ...diff.enabled.map(item => `<span class="nhm-diff-tag diff-enable"><span class="diff-op">👁️</span> ${item.cleanText}</span>`),
-        ...diff.disabled.map(item => `<span class="nhm-diff-tag diff-disable"><span class="diff-op">🚫</span> ${item.cleanText}</span>`),
-        ...diff.ghost_deleted.map(item => `<span class="nhm-diff-tag diff-ghost"><span class="diff-op">×</span> ${item.cleanText}</span>`)
-      ];
+      // 内部工具函数：根据目标 target 和 prevTarget 计算 Diff 并生成 HTML 数组
+      const renderDiffs = (currTargetJSON, prevTargetJSON, badgeHTML) => {
+        const diff = computePromptDiff(currTargetJSON, prevTargetJSON);
+        const tagsHTML = [
+          ...diff.added.map(item => `<span class="nhm-diff-tag diff-add"><span class="diff-op">+</span> ${item.cleanText}</span>`),
+          ...diff.removed.map(item => `<span class="nhm-diff-tag diff-remove"><span class="diff-op">-</span> ${item.cleanText}</span>`),
+          ...diff.changed.map(item => `<span class="nhm-diff-tag diff-change" ${item.disabled ? 'style="opacity:0.6"' : ''}><span class="diff-op">~</span> ${item.cleanText}: ${item.oldWeight.toFixed(2)} → ${item.newWeight.toFixed(2)}</span>`),
+          ...diff.enabled.map(item => `<span class="nhm-diff-tag diff-enable"><span class="diff-op">👁️</span> ${item.cleanText}</span>`),
+          ...diff.disabled.map(item => `<span class="nhm-diff-tag diff-disable"><span class="diff-op">🚫</span> ${item.cleanText}</span>`),
+          ...diff.ghost_deleted.map(item => `<span class="nhm-diff-tag diff-ghost"><span class="diff-op">×</span> ${item.cleanText}</span>`)
+        ];
 
-      if (allDiffs.length === 0) {
-        return `<div class="nhm-item-preview" style="color:#666; font-style:italic;">仅顺序或位置变动</div>`;
+        if (tagsHTML.length > 0) {
+          totalDiffCount += tagsHTML.length;
+          // 在这组差异的最前面插入分类徽章
+          allDiffsHTML.push(badgeHTML, ...tagsHTML);
+        }
+      };
+
+      // 1. 基础正面提示词 (Base Positive)
+      renderDiffs(
+        currSnapshot.positiveTags || currSnapshot.positive, 
+        prevSnapshot.positiveTags || prevSnapshot.positive, 
+        `<span class="nhm-diff-section-badge pos" title="Base Prompt"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:2px"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Base</span>`
+      );
+
+      // 2. 基础负面提示词 (Base Negative)
+      renderDiffs(
+        currSnapshot.negativeTags || currSnapshot.negative, 
+        prevSnapshot.negativeTags || prevSnapshot.negative, 
+        `<span class="nhm-diff-section-badge neg" title="Undesired Content"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:2px"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>UC</span>`
+      );
+
+      // 3. 角色提示词 (Character Prompts)
+      const currChars = currSnapshot.characters || [];
+      const prevChars = prevSnapshot.characters || [];
+      const len = Math.max(currChars.length, prevChars.length);
+
+      for (let i = 0; i < len; i++) {
+        const cCurr = currChars[i] || {};
+        const cPrev = prevChars[i] || {};
+
+        // 角色正面
+        renderDiffs(
+          cCurr.posTags || cCurr.posPrompt,
+          cPrev.posTags || cPrev.posPrompt,
+          `<span class="nhm-diff-section-badge char" title="Character ${i + 1} Prompt"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:2px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Char ${i + 1}</span>`
+        );
+
+        // 角色负面
+        renderDiffs(
+          cCurr.negTags || cCurr.negPrompt,
+          cPrev.negTags || cPrev.negPrompt,
+          `<span class="nhm-diff-section-badge char" title="Character ${i + 1} Undesired Content" style="color:#f59e0b; background:rgba(245, 158, 11, 0.15); border-color:rgba(245, 158, 11, 0.3)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:2px"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>C${i + 1} UC</span>`
+        );
+      }
+
+      if (allDiffsHTML.length === 0) {
+        return `<div class="nhm-item-preview" style="color:#666; font-style:italic;">仅顺序或位置变动 / 零变动</div>`;
       }
 
       const MAX_PREVIEW_TAGS = 25; 
       let html = '';
       
-      if (allDiffs.length > MAX_PREVIEW_TAGS) {
-        const fullHTML = allDiffs.join('').replace(/"/g, '&quot;');
-        html = allDiffs.slice(0, MAX_PREVIEW_TAGS).join('') + 
-               `<span class="nhm-diff-tag nhm-diff-expand-capsule" title="点击查看所有变动" data-fulldiff="${fullHTML}">... +${allDiffs.length - MAX_PREVIEW_TAGS}</span>`;
+      if (totalDiffCount > MAX_PREVIEW_TAGS) {
+        // 由于 allDiffsHTML 中混杂了 badge 和 tags，我们做粗略截断
+        // 为了确保不会阶段坏结构，简单截断前 N 个元素（保守计算标签数量）
+        let outputElements = [];
+        let count = 0;
+        for (const elementHTML of allDiffsHTML) {
+          outputElements.push(elementHTML);
+          if (!elementHTML.includes('nhm-diff-section-badge')) {
+            count++;
+          }
+          if (count >= MAX_PREVIEW_TAGS) break;
+        }
+
+        const fullHTML = allDiffsHTML.join('').replace(/"/g, '&quot;');
+        html = outputElements.join('') + 
+               `<span class="nhm-diff-tag nhm-diff-expand-capsule" title="点击查看所有变动" data-fulldiff="${fullHTML}">... +${totalDiffCount - MAX_PREVIEW_TAGS}</span>`;
       } else {
-        html = allDiffs.join('');
+        html = allDiffsHTML.join('');
       }
 
       return `<div class="nhm-item-diff-container">${html}</div>`;
