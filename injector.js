@@ -1206,64 +1206,121 @@
    * 通过 localStorage 键名反查对应的 Jotai Atom 引用
    *
    * 原理说明（给初学者）：
-   * NovelAI 使用 Jotai 的 atomWithStorage 创建 atom，这种 atom 会自动
-   * 把值同步到 localStorage。所以 atom 的当前值和 localStorage 中的值是一致的。
-   * 我们利用这个特性，遍历所有已挂载的 atom，找到值与 localStorage 匹配的那个。
+   * NovelAI 的代码是混淆过的，atom 对象上没有可读的键名标识。
+   * 所以我们需要通过"设置验证法"来精确识别：
+   * 1. 先找出所有"值匹配"的候选 atom（可能有多个）
+   * 2. 然后逐个测试：临时删除 localStorage 条目 → set 候选 atom →
+   *    检查 localStorage 是否被恢复 → 有则找到正确 atom
    *
-   * 由于 NovelAI 的代码是混淆过的，变量名是随机的（如 t_, tE），
-   * 我们无法直接引用它们。但通过这种"值匹配"的方式，我们可以稳定地找到目标 atom。
+   * 为什么不用简单的"值匹配"？
+   * 因为多个 atom 可能持有相同的值（比如空字符串 ""），
+   * 值匹配会找到错误的 atom（如触发 random prompt 的控制 atom）。
+   *
+   * 找到正确 atom 后会永久缓存，后续调用直接使用缓存，不再遍历。
    */
   function findAtomByKey(storageKey) {
-    // 先检查缓存：如果之前已经找到过这个 atom，直接复用
+    // 先检查缓存：atom 引用在值变化后仍然有效，缓存可以长期使用
     if (_atomCache[storageKey]) {
       try {
-        const store = getJotaiStore();
-        if (store) store.get(_atomCache[storageKey]); // 验证缓存仍有效
-        return _atomCache[storageKey];
-      } catch (e) { _atomCache[storageKey] = null; } // 缓存失效，重新查找
+        var store = getJotaiStore();
+        if (store) { store.get(_atomCache[storageKey]); return _atomCache[storageKey]; }
+      } catch (e) { _atomCache[storageKey] = null; }
     }
 
-    const store = getJotaiStore();
-    // dev4_get_mounted_atoms 是 Jotai 提供的调试方法，用于获取所有已挂载的 atom
+    var store = getJotaiStore();
     if (!store || !store.dev4_get_mounted_atoms) return null;
 
-    // 从 localStorage 读取当前值，用于和 atom 的值进行比对
-    const rawVal = localStorage.getItem(storageKey);
-    if (rawVal === null) return null;
+    var mounted = Array.from(store.dev4_get_mounted_atoms());
 
-    // localStorage 中的值是 JSON 序列化后的字符串
-    let targetVal;
-    try { targetVal = JSON.parse(rawVal); } catch (e) { targetVal = rawVal; }
-
-    // 遍历所有已挂载的 atom，找到值匹配的那个
-    const mounted = Array.from(store.dev4_get_mounted_atoms());
-    const atom = mounted.find(function(a) {
+    // ===  方法1：通过 atom 属性精确匹配（如 toString、debugLabel、key 等） ===
+    var atom = mounted.find(function(a) {
       try {
-        const v = store.get(a);
-        // 字符串直接比较
-        if (typeof targetVal === 'string' && typeof v === 'string') return v === targetVal;
-        // 数组/对象需要 JSON 序列化后比较
-        if (typeof targetVal === 'object' && typeof v === 'object') {
-          return JSON.stringify(v) === JSON.stringify(targetVal);
+        if (String(a).indexOf(storageKey) !== -1) return true;
+        if (a.debugLabel && a.debugLabel.indexOf(storageKey) !== -1) return true;
+        if (a.key === storageKey) return true;
+        // 检查所有可枚举属性值
+        var keys = Object.keys(a);
+        for (var i = 0; i < keys.length; i++) {
+          if (typeof a[keys[i]] === 'string' && a[keys[i]] === storageKey) return true;
         }
         return false;
       } catch (e) { return false; }
     });
 
-    if (atom) _atomCache[storageKey] = atom; // 找到后缓存起来
+    // === 方法2（核心）：设置验证法 ===
+    // 在所有值匹配的候选 atom 中，通过实际 set 操作验证哪个绑定了正确的 localStorage key
+    if (!atom) {
+      var rawVal = localStorage.getItem(storageKey);
+      if (rawVal !== null) {
+        var targetVal;
+        try { targetVal = JSON.parse(rawVal); } catch (e) { targetVal = rawVal; }
+
+        // 找到所有值匹配的可写候选 atom
+        var candidates = mounted.filter(function(a) {
+          if (!a.write) return false; // 排除只读 atom，atomWithStorage 一定是可写的
+          try {
+            var v = store.get(a);
+            if (typeof targetVal === 'string' && typeof v === 'string') return v === targetVal;
+            if (typeof targetVal === 'object' && typeof v === 'object') {
+              return JSON.stringify(v) === JSON.stringify(targetVal);
+            }
+            return false;
+          } catch (e) { return false; }
+        });
+
+        console.log('[Jotai] "' + storageKey + '" 候选 atom 数:', candidates.length,
+          '(已排除只读 atom)');
+
+        if (candidates.length === 1) {
+          // 只有一个候选，大概率就是它
+          atom = candidates[0];
+        } else if (candidates.length > 1) {
+          // 多个候选：逐个验证哪个 atom 的 set 操作会更新这个 localStorage key
+          // 原理：atomWithStorage 的 write 函数内部会调用 localStorage.setItem(key, ...)
+          // 只有绑定了正确 key 的 atom 才会更新对应的 localStorage 条目
+          var savedLs = localStorage.getItem(storageKey);
+          for (var i = 0; i < candidates.length; i++) {
+            try {
+              // 临时删除 localStorage 条目
+              localStorage.removeItem(storageKey);
+              // 对候选 atom 执行 set（设置相同的值，不影响 UI）
+              store.set(candidates[i], targetVal);
+              // 检查 localStorage 是否被恢复（说明此 atom 绑定了这个 key）
+              var restoredLs = localStorage.getItem(storageKey);
+              if (restoredLs !== null) {
+                atom = candidates[i];
+                console.log('[Jotai] ✓ Atom for "' + storageKey +
+                  '" verified via set-probe (candidate ' + (i + 1) + '/' + candidates.length + ')');
+                break;
+              }
+            } catch (e) { /* continue to next candidate */ }
+          }
+          // 确保 localStorage 恢复
+          if (!atom && localStorage.getItem(storageKey) === null) {
+            localStorage.setItem(storageKey, savedLs);
+          }
+        }
+      }
+    }
+
+    if (atom) {
+      _atomCache[storageKey] = atom;
+      console.log('[Jotai] ✓ Cached atom for "' + storageKey + '"');
+    } else {
+      console.warn('[Jotai] ✗ No atom found for "' + storageKey + '"');
+    }
     return atom;
   }
 
   /**
    * 从 Jotai Store 读取指定 atom 的值
-   * @param {string} storageKey - localStorage 键名
-   * @returns {*} atom 的当前值，Jotai 不可用时返回 undefined
+   * 直接从 localStorage 读取 — 最可靠，不需要查找 atom
+   * （atomWithStorage 会自动同步 atom 值到 localStorage）
    */
   function jotaiGet(storageKey) {
-    const store = getJotaiStore();
-    const atom = findAtomByKey(storageKey);
-    if (store && atom) {
-      try { return store.get(atom); } catch (e) { return undefined; }
+    var rawVal = localStorage.getItem(storageKey);
+    if (rawVal !== null) {
+      try { return JSON.parse(rawVal); } catch (e) { return rawVal; }
     }
     return undefined;
   }
@@ -1271,22 +1328,41 @@
   /**
    * 通过 Jotai Store 修改指定 atom 的值
    * 修改后 React 组件（包括 ProseMirror 编辑器）会通过 useEffect 自动同步更新
-   * @param {string} storageKey - localStorage 键名
-   * @param {*} value - 要设置的新值
-   * @returns {boolean} 是否写入成功
+   *
+   * 写入策略（按优先级）：
+   * 1. 找到正确的 atom → store.set() 直接更新 React 状态
+   * 2. atom 找不到 → 写 localStorage + 触发 StorageEvent 让 Jotai 感知
    */
   function jotaiSet(storageKey, value) {
-    const store = getJotaiStore();
-    const atom = findAtomByKey(storageKey);
+    // 策略1：直接通过 Jotai atom 写入（最佳，能立即触发 React 渲染）
+    var store = getJotaiStore();
+    var atom = findAtomByKey(storageKey);
     if (store && atom) {
       try {
         store.set(atom, value);
-        // 写入成功后清除缓存，因为值已改变，下次查找需要重新匹配
-        _atomCache[storageKey] = null;
         return true;
-      } catch (e) { return false; }
+      } catch (e) {
+        console.warn('[Jotai] store.set failed for "' + storageKey + '":', e);
+      }
     }
-    return false;
+
+    // 策略2：写 localStorage + StorageEvent（让 Jotai 的 subscribe 回调感知变化）
+    // 原理：atomWithStorage 内部通过 window.addEventListener('storage', ...) 监听
+    // 虽然原生 storage 事件只在跨 tab 时触发，但手动 dispatch 可以在当前 tab 触发
+    try {
+      var serialized = JSON.stringify(value);
+      localStorage.setItem(storageKey, serialized);
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: storageKey,
+        newValue: serialized,
+        storageArea: localStorage
+      }));
+      console.log('[Jotai] Wrote to localStorage + dispatched StorageEvent for "' + storageKey + '"');
+      return true;
+    } catch (e) {
+      console.error('[Jotai] All write methods failed for "' + storageKey + '":', e);
+      return false;
+    }
   }
 
   /**
