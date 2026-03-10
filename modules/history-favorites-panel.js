@@ -1307,6 +1307,30 @@ const MODAL_ID = 'nai-history-modal';
           });
           toolbar.appendChild(newFolderBtn);
 
+          // 导出收藏夹按钮
+          const exportBtn = document.createElement('button');
+          exportBtn.className = 'nhm-toolbar-btn';
+          exportBtn.textContent = '📤 导出';
+          exportBtn.addEventListener('click', () => {
+            // 从 historyData 中过滤出所有收藏项和文件夹
+            const favData = historyData.filter(s => s.isFavorite || s.isFolder);
+            const json = JSON.stringify(favData, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const date = new Date().toISOString().slice(0, 10);
+            a.download = `favorites-export-${date}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            // 可视反馈
+            exportBtn.textContent = '✅ 已导出';
+            setTimeout(() => { exportBtn.textContent = '📤 导出'; }, 1500);
+          });
+          toolbar.appendChild(exportBtn);
+
           const manageBtn = document.createElement('button');
           manageBtn.className = 'nhm-toolbar-btn';
           manageBtn.style.marginLeft = 'auto';
