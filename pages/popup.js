@@ -268,7 +268,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function initData() {
   const data = await chrome.storage.local.get(['sequentialCounters', 'promptHistory']);
   if (data.promptHistory && data.promptHistory.length > 0) {
-    const s = data.promptHistory[0];
+    // 应该找最近的一条非收藏、非文件夹的普通真实历史记录，作为最后状态
+    const s = data.promptHistory.find(item => !item.isFavorite && !item.isFolder) || data.promptHistory[0];
     
     // 初始化防抖指纹，避免由于空初始导致的 F5 刷新重复记录历史
     _lastRecordedFingerprint = computeStateFingerprint(s.positiveTags, s.negativeTags, s.characters);

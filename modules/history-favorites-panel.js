@@ -86,12 +86,12 @@ const MODAL_ID = 'nai-history-modal';
 
       .nhm-item {
         display: flex; align-items: flex-start;
-        padding: 8px 12px; gap: 8px;
-        cursor: pointer; border-left: 3px solid transparent;
-        transition: background 0.1s;
+        padding: 6px 12px; gap: 8px;
+        cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.03); border-left: 3px solid transparent;
+        transition: all 0.2s;
       }
-      .nhm-item:hover { background: #22223a; }
-      .nhm-item.selected { background: #22223a; border-left-color: #818cf8; }
+      .nhm-item:hover { background: rgba(255,255,255, 0.04); }
+      .nhm-item.selected { background: rgba(129, 140, 248, 0.15); border-left-color: #818cf8; }
 
       .nhm-item-main { flex: 1; min-width: 0; }
       .nhm-item-time { font-size: 11px; color: #818cf8; margin-bottom: 3px; }
@@ -135,9 +135,10 @@ const MODAL_ID = 'nai-history-modal';
       .nhm-delete-btn {
         background: transparent; border: none; cursor: pointer;
         font-size: 13px; color: #555; flex-shrink: 0; padding: 0 2px;
-        align-self: center; transition: color 0.15s;
+        align-self: center; transition: all 0.15s; opacity: 0;
       }
-      .nhm-delete-btn:hover { color: #ef4444; }
+      .nhm-item:hover .nhm-delete-btn { opacity: 1; }
+      .nhm-delete-btn:hover { color: #ef4444; text-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
 
       .nhm-footer {
         padding: 10px 12px;
@@ -455,18 +456,19 @@ const MODAL_ID = 'nai-history-modal';
 
       /* ── 文件夹容器 ── */
       .nhm-folder-item {
-        border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;
-        margin: 4px 6px; overflow: hidden;
-        background: rgba(22, 22, 42, 0.6);
+        border: 1px solid rgba(129, 140, 248, 0.25); border-radius: 6px;
+        margin: 6px; overflow: hidden;
+        background: rgba(30, 30, 50, 0.6);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
       }
       .nhm-folder-header {
         display: flex; align-items: center; gap: 6px;
         padding: 7px 10px; cursor: pointer;
-        background: rgba(42, 42, 64, 0.5); transition: background 0.15s;
+        background: rgba(50, 50, 75, 0.5); transition: background 0.15s;
         border-bottom: 1px solid transparent;
       }
-      .nhm-folder-header:hover { background: rgba(42, 42, 64, 0.8); }
-      .nhm-folder-header.open { border-bottom-color: rgba(255,255,255,0.06); }
+      .nhm-folder-header:hover { background: rgba(60, 60, 90, 0.7); }
+      .nhm-folder-header.open { border-bottom-color: rgba(129, 140, 248, 0.2); }
       .nhm-folder-arrow {
         font-size: 10px; color: #888; transition: transform 0.2s; flex-shrink: 0;
       }
@@ -486,13 +488,70 @@ const MODAL_ID = 'nai-history-modal';
       }
       .nhm-folder-delete:hover { color: #ef4444; }
       .nhm-folder-content {
-        padding: 2px 0 2px 8px;
+        padding: 2px 0 2px 8px; min-height: 12px;
       }
       .nhm-folder-content.collapsed { display: none; }
 
-      /* 拖拽高亮 */
+      /* Sortable.js 拖拽样式 */
+      .nhm-item-icon { cursor: grab; }
+      .nhm-item-icon:active { cursor: grabbing; }
+      .nhm-sortable-ghost {
+        opacity: 0.3; background: rgba(129, 140, 248, 0.15);
+        border: 1px dashed rgba(129, 140, 248, 0.4); border-radius: 4px;
+      }
+      .nhm-sortable-chosen { background: rgba(129, 140, 248, 0.08); }
+      .nhm-sortable-drag { opacity: 0.9; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
       .nhm-folder-header.drag-over { background: rgba(129, 140, 248, 0.2); border-bottom-color: #818cf840; }
-      .nhm-item.dragging { opacity: 0.4; }
+
+      /* ── 批量管理样式 ── */
+      .nhm-fav-toolbar {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05);
+        background: rgba(26, 26, 46, 0.4);
+      }
+      .nhm-batch-toolbar {
+        display: flex; align-items: center; gap: 6px; width: 100%;
+      }
+      .nhm-batch-btn {
+        background: rgba(129, 140, 248, 0.1); border: 1px solid rgba(129, 140, 248, 0.2);
+        color: #818cf8; border-radius: 4px; padding: 3px 6px; font-size: 11px;
+        cursor: pointer; transition: all 0.15s;
+      }
+      .nhm-batch-btn:hover { background: rgba(129, 140, 248, 0.2); color: #fff; }
+      .nhm-batch-btn.danger {
+        color: #f87171; border-color: rgba(248, 113, 113, 0.2);
+      }
+      .nhm-batch-btn.danger:hover { background: rgba(248, 113, 113, 0.2); }
+      
+      .nhm-item-checkbox-wrap {
+        margin-right: 8px; display: flex; align-items: center; flex-shrink: 0;
+      }
+      .nhm-batch-checkbox {
+        width: 14px; height: 14px; border: 1.5px solid #555; border-radius: 3px;
+        cursor: pointer; position: relative; transition: all 0.15s; background: transparent;
+      }
+      .nhm-batch-checkbox.checked {
+        background: #818cf8; border-color: #818cf8;
+      }
+      .nhm-batch-checkbox.checked::after {
+        content: '✔'; position: absolute; top: -1px; left: 1px;
+        color: #fff; font-size: 10px; font-weight: bold;
+      }
+      .nhm-item.batch-selected { background: rgba(129, 140, 248, 0.1); }
+      
+      .nhm-batch-move-wrap { position: relative; display: inline-block; }
+      .nhm-batch-dropdown {
+        position: absolute; top: 100%; left: 0; z-index: 1000;
+        background: #2a2a40; border: 1px solid #3a3a5c; border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.5); min-width: 140px; margin-top: 4px;
+        display: none; flex-direction: column; padding: 4px 0;
+      }
+      .nhm-batch-dropdown.visible { display: flex; }
+      .nhm-batch-dropdown-item {
+        padding: 6px 12px; font-size: 11px; color: #ccc; cursor: pointer;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .nhm-batch-dropdown-item:hover { background: #3a3a5c; color: #fff; }
     `;
 
     function injectStyle() {
@@ -1126,6 +1185,12 @@ const MODAL_ID = 'nai-history-modal';
           container.querySelectorAll('.nhm-tab').forEach(t => t.classList.remove('active'));
           tab.classList.add('active');
           currentTab = tab.dataset.tab;
+          
+          // 切换 Tab 时重置批量管理状态
+          batchMode = false;
+          batchSelected.clear();
+          lastCheckedIndex = -1;
+          
           renderList();
         });
       });
@@ -1221,23 +1286,149 @@ const MODAL_ID = 'nai-history-modal';
       if (currentTab === 'favorites') {
         const toolbar = document.createElement('div');
         toolbar.className = 'nhm-fav-toolbar';
-        const newFolderBtn = document.createElement('button');
-        newFolderBtn.className = 'nhm-toolbar-btn';
-        newFolderBtn.textContent = '📁 新建文件夹';
-        newFolderBtn.addEventListener('click', () => {
-          const folder = {
-            id: 'folder-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-            isFolder: true,
-            isFavorite: true, // 让它出现在收藏 tab 的 filter 中
-            name: '新建文件夹',
-            timestamp: Date.now()
+        
+        if (!batchMode) {
+          // 普通模式工具栏
+          const newFolderBtn = document.createElement('button');
+          newFolderBtn.className = 'nhm-toolbar-btn';
+          newFolderBtn.textContent = '📁 新建文件夹';
+          newFolderBtn.addEventListener('click', () => {
+            const folder = {
+              id: 'folder-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+              isFolder: true,
+              isFavorite: true,
+              name: '新建文件夹',
+              timestamp: Date.now()
+            };
+            historyData.unshift(folder);
+            folderOpenState[folder.id] = true;
+            saveHistoryData(historyData);
+            renderList();
+          });
+          toolbar.appendChild(newFolderBtn);
+
+          const manageBtn = document.createElement('button');
+          manageBtn.className = 'nhm-toolbar-btn';
+          manageBtn.style.marginLeft = 'auto';
+          manageBtn.textContent = '✅ 管理';
+          manageBtn.addEventListener('click', () => {
+            batchMode = true;
+            batchSelected.clear();
+            lastCheckedIndex = -1;
+            renderList();
+          });
+          toolbar.appendChild(manageBtn);
+        } else {
+          // 批量管理模式工具栏
+          const batchToolbar = document.createElement('div');
+          batchToolbar.className = 'nhm-batch-toolbar';
+          
+          const selAllBtn = document.createElement('button');
+          selAllBtn.className = 'nhm-batch-btn';
+          selAllBtn.textContent = '全选';
+          selAllBtn.onclick = () => {
+            filtered.filter(s => !s.isFolder).forEach(s => batchSelected.add(s.id));
+            renderList();
           };
-          historyData.unshift(folder);
-          folderOpenState[folder.id] = true; // 默认展开
-          saveHistoryData(historyData);
-          renderList();
-        });
-        toolbar.appendChild(newFolderBtn);
+          
+          const selNoneBtn = document.createElement('button');
+          selNoneBtn.className = 'nhm-batch-btn';
+          selNoneBtn.textContent = '取消';
+          selNoneBtn.onclick = () => {
+            batchSelected.clear();
+            renderList();
+          };
+
+          // 移入文件夹按钮
+          const moveWrap = document.createElement('div');
+          moveWrap.className = 'nhm-batch-move-wrap';
+          const moveBtn = document.createElement('button');
+          moveBtn.className = 'nhm-batch-btn';
+          moveBtn.textContent = `移至...`;
+          
+          const dropdown = document.createElement('div');
+          dropdown.className = 'nhm-batch-dropdown';
+          
+          // 渲染文件夹选项
+          const folders = historyData.filter(s => s.isFolder);
+          const rootOpt = document.createElement('div');
+          rootOpt.className = 'nhm-batch-dropdown-item';
+          rootOpt.textContent = '根目录';
+          rootOpt.onclick = () => {
+             batchSelected.forEach(id => {
+               const item = historyData.find(s => s.id === id);
+               if (item) delete item.folderId;
+             });
+             saveHistoryData(historyData);
+             renderList();
+          };
+          dropdown.appendChild(rootOpt);
+
+          folders.forEach(f => {
+            const opt = document.createElement('div');
+            opt.className = 'nhm-batch-dropdown-item';
+            opt.textContent = `📁 ${f.name || '未命名'}`;
+            opt.onclick = () => {
+              batchSelected.forEach(id => {
+                const item = historyData.find(s => s.id === id);
+                if (item) item.folderId = f.id;
+              });
+              saveHistoryData(historyData);
+              renderList();
+            };
+            dropdown.appendChild(opt);
+          });
+
+          moveBtn.onclick = (e) => {
+            e.stopPropagation();
+            dropdown.classList.toggle('visible');
+          };
+          document.addEventListener('click', () => dropdown.classList.remove('visible'), { once: true });
+
+          moveWrap.appendChild(moveBtn);
+          moveWrap.appendChild(dropdown);
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'nhm-batch-btn danger';
+          const selCount = batchSelected.size;
+          delBtn.textContent = delBtn.dataset.confirm === 'true' ? '确定删除?' : `删除(${selCount})`;
+          delBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (selCount === 0) return;
+            if (delBtn.dataset.confirm !== 'true') {
+              delBtn.dataset.confirm = 'true';
+              delBtn.textContent = '确定删除?';
+              setTimeout(() => {
+                delBtn.dataset.confirm = 'false';
+                delBtn.textContent = `删除(${selCount})`;
+              }, 3000);
+              return;
+            }
+            // 执行批量删除
+            historyData = historyData.filter(s => !batchSelected.has(s.id));
+            batchSelected.clear();
+            saveHistoryData(historyData);
+            renderList();
+          };
+
+          const exitBtn = document.createElement('button');
+          exitBtn.className = 'nhm-batch-btn';
+          exitBtn.style.marginLeft = 'auto';
+          exitBtn.textContent = '✖ 退出';
+          exitBtn.onclick = () => {
+            batchMode = false;
+            batchSelected.clear();
+            renderList();
+          };
+
+          batchToolbar.appendChild(selAllBtn);
+          batchToolbar.appendChild(selNoneBtn);
+          batchToolbar.appendChild(moveWrap);
+          batchToolbar.appendChild(delBtn);
+          batchToolbar.appendChild(exitBtn);
+          toolbar.appendChild(batchToolbar);
+        }
+
         list.parentElement.insertBefore(toolbar, list);
       }
 
@@ -1256,13 +1447,20 @@ const MODAL_ID = 'nai-history-modal';
 
       if (currentTab === 'favorites') {
         // ── 收藏页：分文件夹渲染 ──
-        const folders = filtered.filter(s => s.isFolder);
-        const items = filtered.filter(s => !s.isFolder);
+        // 按 sortOrder 排序（无 sortOrder 则按时间戳降序排列）
+        const sortFn = (a, b) => {
+          if (a.sortOrder !== undefined && b.sortOrder !== undefined) return a.sortOrder - b.sortOrder;
+          if (a.sortOrder !== undefined) return -1;
+          if (b.sortOrder !== undefined) return 1;
+          return (b.timestamp || 0) - (a.timestamp || 0);
+        };
+        const folders = filtered.filter(s => s.isFolder).sort(sortFn);
+        const items = filtered.filter(s => !s.isFolder).sort(sortFn);
         const itemsInFolders = new Set();
 
         // 先渲染文件夹
         folders.forEach(folder => {
-          const children = items.filter(s => s.folderId === folder.id);
+          const children = items.filter(s => s.folderId === folder.id).sort(sortFn);
           children.forEach(c => itemsInFolders.add(c.id));
 
           const folderEl = document.createElement('div');
@@ -1276,6 +1474,11 @@ const MODAL_ID = 'nai-history-modal';
           headerEl.className = 'nhm-folder-header' + (isOpen ? ' open' : '');
 
           headerEl.innerHTML = `
+            <div class="nhm-item-icon" title="拖拽排序">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path>
+              </svg>
+            </div>
             <span class="nhm-folder-arrow ${isOpen ? 'open' : ''}">▶</span>
             <span class="nhm-folder-name" title="双击重命名">${folder.name || '未命名文件夹'}</span>
             <span class="nhm-folder-count">${children.length} 项</span>
@@ -1284,7 +1487,7 @@ const MODAL_ID = 'nai-history-modal';
 
           // 展开/收起
           headerEl.addEventListener('click', (e) => {
-            if (e.target.closest('.nhm-folder-delete') || e.target.closest('.nhm-folder-name')) return;
+            if (e.target.closest('.nhm-folder-delete') || e.target.closest('.nhm-folder-name') || e.target.tagName === 'INPUT') return;
             folderOpenState[folder.id] = !isOpen;
             renderList();
           });
@@ -1307,11 +1510,34 @@ const MODAL_ID = 'nai-history-modal';
             };
             input.addEventListener('blur', save);
             input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save(); ev.preventDefault(); } });
+            // 防止点击和拖拽选择文字时触发父级的 renderList 或 Sortable 逻辑
+            input.addEventListener('mousedown', e => e.stopPropagation());
+            input.addEventListener('click', e => e.stopPropagation());
           });
 
-          // 删除文件夹（子项释放回根目录）
-          headerEl.querySelector('.nhm-folder-delete').addEventListener('click', (e) => {
+          // 删除文件夹（双击/二段点击保护，子项释放回根目录）
+          const folderDelBtn = headerEl.querySelector('.nhm-folder-delete');
+          let isDeletingFolder = false;
+          let deleteTimeoutFolder;
+
+          folderDelBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (!isDeletingFolder) {
+              isDeletingFolder = true;
+              folderDelBtn.innerHTML = '✔';
+              folderDelBtn.style.color = '#ef4444';
+              folderDelBtn.title = "再次点击确认删除 (3s后还原)";
+              deleteTimeoutFolder = setTimeout(() => {
+                if (isDeletingFolder) {
+                  isDeletingFolder = false;
+                  folderDelBtn.innerHTML = '🗑';
+                  folderDelBtn.style.color = '';
+                  folderDelBtn.title = "删除文件夹";
+                }
+              }, 3000);
+              return;
+            }
+            clearTimeout(deleteTimeoutFolder);
             // 释放子项
             children.forEach(child => { delete child.folderId; });
             historyData = historyData.filter(s => s.id !== folder.id);
@@ -1320,26 +1546,7 @@ const MODAL_ID = 'nai-history-modal';
             renderList();
           });
 
-          // 文件夹拖放目标事件
-          headerEl.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            headerEl.classList.add('drag-over');
-          });
-          headerEl.addEventListener('dragleave', () => {
-            headerEl.classList.remove('drag-over');
-          });
-          headerEl.addEventListener('drop', (e) => {
-            e.preventDefault();
-            headerEl.classList.remove('drag-over');
-            const dragId = e.dataTransfer.getData('text/plain');
-            if (!dragId || dragId === folder.id) return;
-            const target = historyData.find(s => s.id === dragId);
-            if (target && !target.isFolder) {
-              target.folderId = folder.id;
-              saveHistoryData(historyData);
-              renderList();
-            }
-          });
+          // 文件夹拖放目标事件（已迁移至 Sortable.js）
 
           folderEl.appendChild(headerEl);
 
@@ -1361,21 +1568,16 @@ const MODAL_ID = 'nai-history-modal';
           list.appendChild(buildFavItem(snapshot));
         });
 
-        // 列表本身也是拖放目标（拖出到根目录）
-        list.addEventListener('dragover', (e) => { e.preventDefault(); });
-        list.addEventListener('drop', (e) => {
-          // 只处理直接放在列表背景上的情况
-          if (e.target !== list && !e.target.classList.contains('nhm-empty-state')) return;
-          e.preventDefault();
-          const dragId = e.dataTransfer.getData('text/plain');
-          if (!dragId) return;
-          const target = historyData.find(s => s.id === dragId);
-          if (target && !target.isFolder) {
-            delete target.folderId;
-            saveHistoryData(historyData);
-            renderList();
-          }
-        });
+        // ── Sortable.js 实例化：拖拽排序与跨组穿梭 ──
+        if (!batchMode) {
+          initSortableForFavorites(list);
+        } else {
+          // 管理模式下保证销毁所有拖拽实例
+          sortableInstances.forEach(inst => {
+            try { inst.destroy(); } catch(e) {}
+          });
+          sortableInstances = [];
+        }
 
       } else {
         // ── 历史页：与之前逻辑相同 ──
@@ -1394,8 +1596,8 @@ const MODAL_ID = 'nai-history-modal';
 
       const previewHTML = generateDiffHTML(snapshot, filtered[ObjectIndex + 1]);
 
-      // 检查是否已被收藏
-      const favoriteClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id);
+      // 检查是否已被收藏全文（排除仅仅由于局部片段被收藏的情况）
+      const favoriteClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id && !s.isPartial);
       const isActuallyStarred = !!favoriteClone;
 
       item.innerHTML = `
@@ -1403,7 +1605,7 @@ const MODAL_ID = 'nai-history-modal';
           <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
           ${previewHTML}
         </div>
-        <button class="nhm-star-btn ${isActuallyStarred ? 'starred' : ''}" title="${isActuallyStarred ? '取消收藏' : '收藏'}">
+        <button class="nhm-star-btn ${isActuallyStarred ? 'starred' : ''}" title="${isActuallyStarred ? '取消收藏' : '收藏全文'}">
           ${isActuallyStarred ? '★' : '☆'}
         </button>
         <button class="nhm-delete-btn" title="删除此条">🗑</button>
@@ -1422,9 +1624,10 @@ const MODAL_ID = 'nai-history-modal';
       const starBtn = item.querySelector('.nhm-star-btn');
       starBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const favoriteClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id);
-        if (favoriteClone) {
-          historyData = historyData.filter(s => s.id !== favoriteClone.id);
+        // 同样在点击交互时，只对“全文收藏”进行 toggle
+        const favClone = historyData.find(s => s.isFavorite && s.originId === snapshot.id && !s.isPartial);
+        if (favClone) {
+          historyData = historyData.filter(s => s.id !== favClone.id);
         } else {
           const clone = JSON.parse(JSON.stringify(snapshot));
           clone.id = 'fav-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
@@ -1436,9 +1639,28 @@ const MODAL_ID = 'nai-history-modal';
         renderList();
       });
 
-      // 删除
-      item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
+      // 删除 (双击/二段点击保护)
+      const delBtn = item.querySelector('.nhm-delete-btn');
+      let isDeleting = false;
+      let deleteTimeout;
+      delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (!isDeleting) {
+          isDeleting = true;
+          delBtn.innerHTML = '✔';
+          delBtn.style.color = '#ef4444';
+          delBtn.title = "再次点击确认删除 (3s后还原)";
+          deleteTimeout = setTimeout(() => {
+            if (isDeleting) {
+              isDeleting = false;
+              delBtn.innerHTML = '🗑';
+              delBtn.style.color = '';
+              delBtn.title = "删除此条";
+            }
+          }, 3000);
+          return;
+        }
+        clearTimeout(deleteTimeout);
         historyData = historyData.filter(s => s.id !== snapshot.id);
         saveHistoryData(historyData);
         if (selectedSnapshot?.id === snapshot.id) { selectedSnapshot = null; showPlaceholder(); }
@@ -1458,93 +1680,266 @@ const MODAL_ID = 'nai-history-modal';
           }
         });
       }
-
       return item;
+    }
+
+    // ── Sortable.js 实例化核心 ──
+    // 修正#1: 维护实例数组，防止 renderList 反复创建导致内存泄漏
+    let sortableInstances = [];
+
+    // ── 批量管理状态 ──
+    let batchMode = false;
+    let batchSelected = new Set();
+    let lastCheckedIndex = -1; // 用于 Shift 连选
+
+    function initSortableForFavorites(listEl) {
+      // 销毁上一轮遗留的所有 Sortable 实例
+      sortableInstances.forEach(inst => {
+        try { inst.destroy(); } catch(e) { /* 已被 DOM 移除则忽略 */ }
+      });
+      sortableInstances = [];
+
+      if (typeof Sortable === 'undefined') {
+        console.warn('[NHM] Sortable.js 未加载，跳过排序初始化');
+        return;
+      }
+
+      const groupConfig = { name: 'favorites', pull: true, put: true };
+
+      // 辅助：从当前 DOM 顺序反推并精准更新 historyData 的排序
+      function syncOrderFromDOM(listContainer) {
+        // 收集所有"根级"元素的 ID 顺序（包括文件夹和根级卡片）
+        const rootEls = listContainer.children;
+        let sortIndex = 0;
+
+        for (const el of rootEls) {
+          // 文件夹元素
+          if (el.classList.contains('nhm-folder-item')) {
+            const folderId = el.dataset.folderId;
+            const folderData = historyData.find(s => s.id === folderId);
+            if (folderData) folderData.sortOrder = sortIndex++;
+
+            // 文件夹内部的子元素
+            const contentEl = el.querySelector('.nhm-folder-content');
+            if (contentEl) {
+              let childOrder = 0;
+              for (const childEl of contentEl.children) {
+                const childId = childEl.dataset?.id;
+                if (!childId) continue;
+                const childData = historyData.find(s => s.id === childId);
+                if (childData) {
+                  childData.folderId = folderId; // 确保归属正确
+                  childData.sortOrder = childOrder++;
+                }
+              }
+            }
+          }
+          // 根级卡片
+          else if (el.dataset?.id) {
+            const itemData = historyData.find(s => s.id === el.dataset.id);
+            if (itemData) {
+              delete itemData.folderId; // 在根级意味着不属于任何文件夹
+              itemData.sortOrder = sortIndex++;
+            }
+          }
+        }
+
+        saveHistoryData(historyData);
+
+        // 局部刷新文件夹头部的计数显示
+        listContainer.querySelectorAll('.nhm-folder-item').forEach(folderEl => {
+          const fId = folderEl.dataset.folderId;
+          const contentEl = folderEl.querySelector('.nhm-folder-content');
+          const countEl = folderEl.querySelector('.nhm-folder-count');
+          if (contentEl && countEl) {
+            countEl.textContent = `${contentEl.children.length} 项`;
+          }
+        });
+      }
+
+      // 修正#2: 使用 handle 模式，仅图标可拖拽，不阻断双击/按钮
+      const commonOptions = {
+        group: groupConfig,
+        animation: 150,
+        handle: '.nhm-item-icon',
+        ghostClass: 'nhm-sortable-ghost',
+        chosenClass: 'nhm-sortable-chosen',
+        dragClass: 'nhm-sortable-drag',
+        // 修正#5: 阻止文件夹被拖进另一个文件夹
+        onMove: function(evt) {
+          const draggedEl = evt.dragged;
+          // 如果被拖拽的是文件夹，不允许放入文件夹子容器
+          if (draggedEl.classList.contains('nhm-folder-item') &&
+              evt.to.classList.contains('nhm-folder-content')) {
+            return false;
+          }
+          return true;
+        },
+        // 修正#3: onEnd 只更新数据层，不调用 renderList 避免闪烁
+        onEnd: function(evt) {
+          syncOrderFromDOM(listEl);
+        }
+      };
+
+      // 为根列表容器实例化 Sortable
+      const rootSortable = new Sortable(listEl, {
+        ...commonOptions,
+        // 根容器内文件夹本身也可以被排序（但 onMove 阻止嵌套）
+      });
+      sortableInstances.push(rootSortable);
+
+      // 为每个文件夹内部子容器实例化独立的 Sortable（无论是否折叠，Sortable 能自动忽略 display:none）
+      listEl.querySelectorAll('.nhm-folder-content').forEach(contentEl => {
+        const folderSortable = new Sortable(contentEl, {
+          ...commonOptions,
+        });
+        sortableInstances.push(folderSortable);
+      });
     }
 
     // ── 构建收藏列表项（含拖拽和局部标记） ──
     function buildFavItem(snapshot) {
       const item = document.createElement('div');
-      item.className = 'nhm-item' + (selectedSnapshot?.id === snapshot.id ? ' selected' : '');
+      item.className = 'nhm-item' + 
+        (selectedSnapshot?.id === snapshot.id ? ' selected' : '') +
+        (batchSelected.has(snapshot.id) ? ' batch-selected' : '');
       item.dataset.id = snapshot.id;
-      item.draggable = true; // 启用拖拽
 
-      // 局部标记胶囊
-      let partialBadge = '';
-      if (snapshot.isPartial) {
-        const badgeLabels = { positive: '正面', negative: '负面' };
-        let cls = 'pos';
-        let label = badgeLabels[snapshot.partialType] || snapshot.partialType;
-        if (snapshot.partialType === 'negative') cls = 'neg';
-        else if (snapshot.partialType && snapshot.partialType.startsWith('character-')) { cls = 'char'; label = '角色'; }
-        partialBadge = `<span class="nhm-partial-badge ${cls}">${label}</span>`;
+      // 1. 左侧图标或 Checkbox
+      let leftIcon;
+      if (batchMode) {
+        const isChecked = batchSelected.has(snapshot.id);
+        leftIcon = `
+          <div class="nhm-item-checkbox-wrap">
+            <div class="nhm-batch-checkbox ${isChecked ? 'checked' : ''}"></div>
+          </div>
+        `;
+      } else {
+        // 原有的图标逻辑
+        let iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon" style="color: #666; margin-right: 8px; flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`;
+        if (snapshot.isPartial) {
+          if (snapshot.partialType === 'positive') {
+            iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon pos" style="color: #a855f7; margin-right: 8px; flex-shrink: 0;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
+          } else if (snapshot.partialType === 'negative') {
+            iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon neg" style="color: #f59e0b; margin-right: 8px; flex-shrink: 0;"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>`;
+          } else if (snapshot.partialType && snapshot.partialType.startsWith('character-')) {
+            iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon char" style="color: #14b8a6; margin-right: 8px; flex-shrink: 0;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
+          }
+        }
+        leftIcon = iconSvg;
       }
 
-      const nameOrTime = snapshot.name
-        ? `<div class="nhm-item-name" title="双击重命名">${snapshot.name}${partialBadge}</div>`
-        : (partialBadge ? `<div class="nhm-item-name" title="双击重命名">${formatTime(snapshot.timestamp)}${partialBadge}</div>` : '');
-
-      const previewText = snapshot.isPartial
-        ? tagsPreview(snapshot.positiveTags ? snapshot.positiveTags.map(t=>t.value).join(', ') : (snapshot.positive || snapshot.negative || ''))
-        : tagsPreview(snapshot.positive);
-
+      const displayName = snapshot.name || formatTime(snapshot.timestamp);
+      
       item.innerHTML = `
-        <div class="nhm-item-main">
-          ${nameOrTime}
-          <div class="nhm-item-time">${formatTime(snapshot.timestamp)}</div>
-          <div class="nhm-item-preview">${previewText}</div>
+        <div class="nhm-item-main" style="display: flex; align-items: center; justify-content: space-between; flex-direction: row; width: 100%;">
+          <div class="nhm-item-name-wrap" title="${batchMode ? '点击选中' : '双击重命名'}" style="flex-grow: 1; display:flex; align-items:center;">
+            ${leftIcon}
+            <span class="nhm-item-name" style="color: #e0e0e0; font-size: 13px; font-weight: 500; min-width: 50px;">${displayName}</span>
+          </div>
         </div>
-        <button class="nhm-delete-btn" title="删除此条">🗑</button>
+        ${!batchMode ? '<button class="nhm-delete-btn" title="删除此条">🗑</button>' : ''}
       `;
 
-      // 拖拽事件
-      item.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('text/plain', snapshot.id);
-        item.classList.add('dragging');
-      });
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-      });
-
-      // 点击选中
+      // 点击识别逻辑
       item.addEventListener('click', (e) => {
-        if (e.target.closest('.nhm-delete-btn')) return;
-        selectedSnapshot = snapshot;
-        document.getElementById('nhm-list').querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
-        item.classList.add('selected');
-        renderDetail(snapshot);
+        if (e.target.closest('.nhm-delete-btn') || e.target.tagName === 'INPUT') return;
+        
+        if (batchMode) {
+          // 查找当前项在 filtered (且非文件夹) 列表中的索引，用于 Shift 连选
+          const selectableItems = Array.from(document.querySelectorAll('#nhm-list .nhm-item'));
+          const currentIndex = selectableItems.indexOf(item);
+          
+          const toggleId = snapshot.id;
+          if (e.shiftKey && lastCheckedIndex !== -1) {
+            // Shift 连选逻辑
+            const start = Math.min(lastCheckedIndex, currentIndex);
+            const end = Math.max(lastCheckedIndex, currentIndex);
+            const shouldAdd = !batchSelected.has(toggleId); // 根据当前点击项决定是连选还是连取消
+            
+            for (let i = start; i <= end; i++) {
+              const sid = selectableItems[i].dataset.id;
+              if (sid) {
+                if (shouldAdd) batchSelected.add(sid);
+                else batchSelected.delete(sid);
+              }
+            }
+          } else {
+            // 普通单选
+            if (batchSelected.has(toggleId)) batchSelected.delete(toggleId);
+            else batchSelected.add(toggleId);
+          }
+          lastCheckedIndex = currentIndex;
+          renderList();
+        } else {
+          // 普通模式：选中详情
+          selectedSnapshot = snapshot;
+          document.getElementById('nhm-list').querySelectorAll('.nhm-item').forEach(i => i.classList.remove('selected'));
+          item.classList.add('selected');
+          renderDetail(snapshot);
+        }
       });
 
       // 双击重命名
+      const nameWrapperEl = item.querySelector('.nhm-item-name-wrap');
       const nameEl = item.querySelector('.nhm-item-name');
-      if (nameEl) {
-        nameEl.addEventListener('dblclick', (e) => {
+      if (nameWrapperEl && nameEl) {
+        nameWrapperEl.addEventListener('dblclick', (e) => {
           e.stopPropagation();
           const input = document.createElement('input');
+          // 只把原始名称填入。如果是默认时间戳则留空，让其作为 placeholder
           input.value = snapshot.name || '';
-          input.style.cssText = 'background:#2a2a40;border:1px solid #3a3a5c;color:#ccc;border-radius:3px;padding:1px 4px;font-size:12px;width:90%;';
+          input.placeholder = formatTime(snapshot.timestamp);
+          input.style.cssText = 'background:transparent; border:none; outline:none; color:#fff; font-size:13px; font-weight:500; font-family:inherit; width:100%; padding:0; margin:0; box-shadow:0 1px 0 #818cf8; border-radius:0;';
           nameEl.replaceWith(input);
           input.focus();
           const save = () => {
-            snapshot.name = input.value.trim() || formatTime(snapshot.timestamp);
+            snapshot.name = input.value.trim() || ""; // 空则表示不特别命名，渲染时再调用 formatTime
             const idx = historyData.findIndex(s => s.id === snapshot.id);
             if (idx !== -1) historyData[idx] = snapshot;
             saveHistoryData(historyData);
             renderList();
           };
           input.addEventListener('blur', save);
-          input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save(); ev.preventDefault(); } });
+          input.addEventListener('keydown', ev => { 
+            if (ev.key === 'Enter') { save(); ev.preventDefault(); } 
+            else if (ev.key === 'Escape') { input.value = snapshot.name || ''; save(); }
+          });
+          // 防止点击和拖拽选择文字时触发父级的渲染或选中逻辑
+          input.addEventListener('mousedown', e => e.stopPropagation());
+          input.addEventListener('click', e => e.stopPropagation());
         });
       }
 
-      // 删除
-      item.querySelector('.nhm-delete-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        historyData = historyData.filter(s => s.id !== snapshot.id);
-        saveHistoryData(historyData);
-        if (selectedSnapshot?.id === snapshot.id) { selectedSnapshot = null; showPlaceholder(); }
-        renderList();
-      });
+      // 删除 (双击/二段点击保护)
+      const delBtn = item.querySelector('.nhm-delete-btn');
+      if (delBtn) {
+        let isDeletingFav = false;
+        let deleteTimeoutFav;
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!isDeletingFav) {
+            isDeletingFav = true;
+            delBtn.innerHTML = '✔';
+            delBtn.style.color = '#ef4444';
+            delBtn.title = "再次点击确认删除 (3s后还原)";
+            deleteTimeoutFav = setTimeout(() => {
+              if (isDeletingFav) {
+                isDeletingFav = false;
+                delBtn.innerHTML = '🗑';
+                delBtn.style.color = '';
+                delBtn.title = "删除此条";
+              }
+            }, 3000);
+            return;
+          }
+          clearTimeout(deleteTimeoutFav);
+          historyData = historyData.filter(s => s.id !== snapshot.id);
+          saveHistoryData(historyData);
+          if (selectedSnapshot?.id === snapshot.id) { selectedSnapshot = null; showPlaceholder(); }
+          renderList();
+        });
+      }
 
       return item;
     }
@@ -1612,6 +2007,10 @@ const MODAL_ID = 'nai-history-modal';
         const partial = createPartialFavorite(snapshot, partialType);
         historyData.unshift(partial);
         saveHistoryData(historyData);
+        // 如果当前在收藏页面，立即刷新列表以显示新收藏的片段
+        if (currentTab === 'favorites') {
+          renderList();
+        }
         // 可视反馈
         favBtn.textContent = '✅ 已收藏';
         favBtn.style.color = '#4ade80';

@@ -13,11 +13,20 @@
     hideAutoClicker = false
   } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker']);
 
-  // 1.5) inject history/favorites panel
-  const hp = document.createElement('script');
-  hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
-  hp.onload = () => hp.remove();
-  (document.head || document.documentElement).appendChild(hp);
+  // 1.5) inject Sortable.js dependency first, then history/favorites panel
+  const sortableScript = document.createElement('script');
+  sortableScript.src = chrome.runtime.getURL('lib/Sortable.umd.js');
+  const sortableReady = new Promise(resolve => {
+    sortableScript.onload = () => { sortableScript.remove(); resolve(); };
+  });
+  (document.head || document.documentElement).appendChild(sortableScript);
+
+  sortableReady.then(() => {
+    const hp = document.createElement('script');
+    hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
+    hp.onload = () => hp.remove();
+    (document.head || document.documentElement).appendChild(hp);
+  });
 
   // 2) inject script to page
   const s = document.createElement('script');
