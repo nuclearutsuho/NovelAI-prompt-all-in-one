@@ -1,4 +1,4 @@
-// auto-clicker.js
+﻿// auto-clicker.js
 // NovelAI 自定义连点器 — 插件版（独立浮窗）
 // 原作: Takoro (v2.8)，移植改编为 Chrome 插件模块
 (() => {
@@ -31,6 +31,22 @@
   let loopCounterEl = null; // 进度显示元素的引用（由 createComponent 赋值）
   let imageCount   = 0;     // MutationObserver 监听到的实际新增图片数
   let imgCounterEl = null;  // 实际图片计数显示元素
+  let clickMode = 'fixed';
+  let runToken = 0;
+  const ON_IMAGE_TIMEOUT_MS = 25000;
+
+  let startBtnEl = null;
+  let modeBtnEl = null;
+  let intervalInputEl = null;
+
+  let autoClickerI18n = {
+    fixedShort: 'Fixed',
+    onImageShort: 'On Img',
+    fixedTitle: 'Fixed Interval',
+    onImageTitle: 'On Image'
+  };
+
+  const imageWaiters = new Set();
 
   /**
    * 判断 img 是否为 NAI 实际生成的图片（排除小图标、SVG、预览图等）
@@ -107,6 +123,7 @@
 
         imageCount++;
         if (imgCounterEl) imgCounterEl.textContent = `📷 ${imageCount}`;
+        notifyImageWaiters();
         console.log('[AutoClicker] 检测到新生成图片:', src.substring(0, 60));
       }
     }
@@ -155,6 +172,98 @@
       // 无限模式：直接显示已执行次数
       loopCounterEl.textContent = String(currentLoop);
     }
+  }
+
+  function applyModeI18n() {
+    if (!modeBtnEl) return;
+    if (clickMode === 'fixed') {
+      modeBtnEl.textContent = autoClickerI18n.fixedShort || 'Fixed';
+      modeBtnEl.title = autoClickerI18n.fixedTitle || 'Fixed Interval';
+    } else {
+      modeBtnEl.textContent = autoClickerI18n.onImageShort || 'On Img';
+      modeBtnEl.title = autoClickerI18n.onImageTitle || 'On Image';
+    }
+  }
+
+  function updateModeUI() {
+    applyModeI18n();
+    if (intervalInputEl) {
+      intervalInputEl.style.display = (clickMode === 'fixed') ? 'block' : 'none';
+    }
+  }
+
+  function setClickMode(mode) {
+    clickMode = (mode === 'on-image') ? 'on-image' : 'fixed';
+    updateModeUI();
+  }
+
+  function cancelPendingWaits() {
+    if (imageWaiters.size === 0) return;
+    for (const waiter of imageWaiters) {
+      if (waiter.done) continue;
+      waiter.done = true;
+      clearTimeout(waiter.timeoutId);
+      waiter.resolve(false);
+    }
+    imageWaiters.clear();
+  }
+
+  function notifyImageWaiters() {
+    if (imageWaiters.size === 0) return;
+    for (const waiter of imageWaiters) {
+      if (waiter.done) continue;
+      if (waiter.token !== runToken) {
+        waiter.done = true;
+        clearTimeout(waiter.timeoutId);
+        waiter.resolve(false);
+        imageWaiters.delete(waiter);
+        continue;
+      }
+      if (imageCount > waiter.prevCount) {
+        waiter.done = true;
+        clearTimeout(waiter.timeoutId);
+        waiter.resolve(true);
+        imageWaiters.delete(waiter);
+      }
+    }
+  }
+
+  function waitForNewImage(prevCount, timeoutMs, token) {
+    return new Promise(resolve => {
+      const waiter = { prevCount, token, resolve, timeoutId: null, done: false };
+      waiter.timeoutId = setTimeout(() => {
+        if (waiter.done) return;
+        waiter.done = true;
+        imageWaiters.delete(waiter);
+        resolve(false);
+      }, timeoutMs);
+      imageWaiters.add(waiter);
+
+      if (imageCount > prevCount) {
+        clearTimeout(waiter.timeoutId);
+        imageWaiters.delete(waiter);
+        resolve(true);
+      }
+    });
+  }
+
+  function scheduleNext(delayMs, token) {
+    if (interval) clearTimeout(interval);
+    interval = setTimeout(() => {
+      if (isRunning && token === runToken) runAutoClicker();
+    }, delayMs);
+  }
+
+  function stopAutoClicker(reason) {
+    if (!isRunning) return;
+    isRunning = false;
+    runToken += 1;
+    ignoreAnlasWarning = false;
+    if (interval) clearTimeout(interval);
+    interval = null;
+    cancelPendingWaits();
+    if (startBtnEl) startBtnEl.textContent = 'Start';
+    if (reason) console.log('[AutoClicker] stopped:', reason);
   }
 
   // ─── 工具函数 ─────────────────────────────────────────────────
@@ -398,51 +507,64 @@
 
   async function runAutoClicker() {
     if (!isRunning) return;
+    const token = runToken;
 
-    // 检查是否达到最大循环次数
     if (maxLoops > 0 && currentLoop >= maxLoops) {
-      console.log(`[AutoClicker] 已完成 ${maxLoops} 次循环，自动停止`);
-      isRunning = false;
-      ignoreAnlasWarning = false;
-      const btnStart = document.querySelector('#nai-auto-clicker button');
-      if (btnStart) btnStart.textContent = 'Start';
+      console.log(`[AutoClicker] Completed ${maxLoops} loops, stopping`);
+      stopAutoClicker('completed');
       updateLoopCounter();
       return;
     }
 
-    // 每次点击前检查 Anlas。如果点了取消，直接停止运行
     const ok = await checkAnlas();
-    if (!ok) {
-      console.log('[AutoClicker] 用户取消或 Anlas 消耗过多，停止连点');
-      isRunning = false;
-      const btnStart = document.querySelector('#nai-auto-clicker button'); // 找 Start 按钮复位
-      if (btnStart) btnStart.textContent = 'Start';
+    if (!ok || token !== runToken) {
+      if (!ok) console.log('[AutoClicker] Anlas cancelled, stop');
+      stopAutoClicker('anlas-cancel');
       return;
     }
 
-    // 执行点击
     const target = findGenerateButton();
     if (target) {
       triggerClick(target);
     } else {
-      console.error('[AutoClicker] 未找到可见的生成按钮');
+      console.error('[AutoClicker] Visible Generate button not found');
     }
 
-    // 计数 +1 并更新显示
     currentLoop++;
     updateLoopCounter();
-    console.log(`[AutoClicker] 已执行 ${currentLoop}/${maxLoops > 0 ? maxLoops : '∞'} 次`);
+    console.log(`[AutoClicker] Ran ${currentLoop}/${maxLoops > 0 ? maxLoops : 'inf'}`);
 
-    // 延迟 500ms 重置 Seed，避免干扰生成请求处理
     setTimeout(resetSeed, 500);
 
-    // 计算到下一次点击的等待时间（在 loopTime ± randomTime 范围内随机）
-    const offset  = randInt(0, randomTime);
-    const tmpTime = Math.random() < 0.5 ? loopTime + offset : loopTime - offset;
-    console.log('[AutoClicker] 生成按钮已点击，下次间隔:', tmpTime / 1000, 's');
+    if (!isRunning || token !== runToken) return;
 
-    // 等待指定时间后，递归调用自身
-    interval = setTimeout(runAutoClicker, tmpTime);
+    if (clickMode === 'fixed') {
+      const offset  = randInt(0, randomTime);
+      const tmpTime = Math.random() < 0.5 ? loopTime + offset : loopTime - offset;
+      console.log('[AutoClicker] Next fixed interval (s):', tmpTime / 1000);
+      scheduleNext(tmpTime, token);
+      return;
+    }
+
+    const prevCount = imageCount;
+    let gotImage = await waitForNewImage(prevCount, ON_IMAGE_TIMEOUT_MS, token);
+    if (!isRunning || token !== runToken) return;
+    if (!gotImage) {
+      console.warn('[AutoClicker] On-image timeout, retrying once');
+      gotImage = await waitForNewImage(prevCount, ON_IMAGE_TIMEOUT_MS, token);
+      if (!isRunning || token !== runToken) return;
+      if (!gotImage) {
+        console.warn('[AutoClicker] On-image timeout twice, stopping');
+        stopAutoClicker('image-timeout');
+        return;
+      }
+    }
+
+    const baseDelay = Math.abs(randomTime);
+    const jitter = randInt(0, baseDelay);
+    const delay = baseDelay + jitter;
+    console.log('[AutoClicker] Image detected, next delay (s):', delay / 1000);
+    scheduleNext(delay, token);
   }
 
   // ─── UI 创建 ──────────────────────────────────────────────────
@@ -503,6 +625,14 @@
     });
     document.body.appendChild(container);
 
+    // Mode toggle (leftmost)
+    const btnMode = document.createElement('button');
+    btnMode.textContent = autoClickerI18n.fixedShort || 'Fixed';
+    btnMode.title = autoClickerI18n.fixedTitle || 'Fixed Interval';
+    styleBtn(btnMode, { paddingLeft: '8px', paddingRight: '8px', minWidth: '52px' });
+    container.appendChild(btnMode);
+    modeBtnEl = btnMode;
+
     // ── 实际图片计数显示框（Start 按钮左边）──
     const spanImgCounter = document.createElement('span');
     Object.assign(spanImgCounter.style, {
@@ -529,6 +659,7 @@
     btnStart.textContent = 'Start';
     styleBtn(btnStart, { paddingLeft: '10px', paddingRight: '10px' });
     container.appendChild(btnStart);
+    startBtnEl = btnStart;
 
     // ── 循环次数输入框 ──
     const inputLoops = document.createElement('input');
@@ -573,6 +704,7 @@
     inputInterval.placeholder = `间隔: ${loopTime / 1000}s`;
     styleInput(inputInterval, { width: '64px', padding: '0 5px' });
     container.appendChild(inputInterval);
+    intervalInputEl = inputInterval;
 
     // ── 随机偏移输入框 ──
     const inputRandom = document.createElement('input');
@@ -581,6 +713,8 @@
     inputRandom.placeholder = `± ${randomTime / 1000}s`;
     styleInput(inputRandom, { width: '38px', padding: '0 4px' });
     container.appendChild(inputRandom);
+
+    updateModeUI();
 
 
     // ── 拖拽手柄 ↔ ──
@@ -591,18 +725,14 @@
     container.appendChild(btnMover);
 
     // ─── 事件：Start / Pause ───────────────────────────────────
+    btnMode.addEventListener('click', () => {
+      setClickMode(clickMode === 'fixed' ? 'on-image' : 'fixed');
+    });
+
     btnStart.addEventListener('click', async () => {
       if (isRunning) {
-        // 暂停
-        isRunning = false;
-        clearTimeout(interval);
-        interval = null;
-        ignoreAnlasWarning = false;
-        // 暂停时保留计数，方便用户查看已生成数量；下次 Start 时才会重置
-        btnStart.textContent = 'Start';
-        console.log('[AutoClicker] 已暂停');
-        
-        // 如果当前有弹窗，触发其取消按钮而非直接移除，让 Promise 正常 resolve 为 false
+        stopAutoClicker('pause');
+
         const dialog = document.getElementById('nai-anlas-dialog');
         if (dialog) {
           const cancelBtn = Array.from(dialog.querySelectorAll('button'))
@@ -610,9 +740,12 @@
           if (cancelBtn) cancelBtn.click();
           else dialog.remove();
         }
-        
       } else {
-        // 启动：先重置计数，再读取循环次数设置
+        runToken += 1;
+        if (interval) clearTimeout(interval);
+        interval = null;
+        cancelPendingWaits();
+
         currentLoop = 0;
         imageCount = 0;
         if (imgCounterEl) imgCounterEl.textContent = '📷 0';
@@ -620,7 +753,7 @@
         maxLoops = (!isNaN(v) && v > 0) ? v : 0;
         updateLoopCounter();
 
-        console.log(`[AutoClicker] 正在启动，目标次数: ${maxLoops > 0 ? maxLoops : '无限'}`);
+        console.log(`[AutoClicker] Starting, target loops: ${maxLoops > 0 ? maxLoops : 'inf'}`);
         isRunning = true;
         ignoreAnlasWarning = false;
         btnStart.textContent = 'Pause';
@@ -732,10 +865,16 @@
   // 监听来自 bridge.js 的配置信息
   window.addEventListener('message', e => {
     if (e.source !== window) return;
-    const { type, hideAutoClicker } = e.data || {};
-    if ((type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') && typeof hideAutoClicker !== 'undefined') {
-      latestHideAutoClicker = hideAutoClicker;
-      updateVisibility(hideAutoClicker);
+    const { type, hideAutoClicker, autoClickerI18n: i18n } = e.data || {};
+    if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
+      if (typeof hideAutoClicker !== 'undefined') {
+        latestHideAutoClicker = hideAutoClicker;
+        updateVisibility(hideAutoClicker);
+      }
+      if (i18n && typeof i18n === 'object') {
+        autoClickerI18n = { ...autoClickerI18n, ...i18n };
+        applyModeI18n();
+      }
     }
   });
 

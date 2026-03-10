@@ -90,7 +90,11 @@ const translations = {
     res_h: "H",
     setting_hide_autoclicker: "Hide Count Bar",
     setting_hide_autoclicker_desc: "Hide the auto-clicker status bar at the bottom.",
-    btn_history: "History & Favorites"
+    btn_history: "History & Favorites",
+    ac_mode_fixed_short: "Fixed",
+    ac_mode_on_image_short: "On Img",
+    ac_mode_fixed_title: "Fixed Interval",
+    ac_mode_on_image_title: "On Image"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -165,7 +169,11 @@ const translations = {
     res_h: "高",
     setting_hide_autoclicker: "隐藏整个计数条",
     setting_hide_autoclicker_desc: "隐藏页面底部的连点器状态条。",
-    btn_history: "历史与收藏"
+    btn_history: "历史与收藏",
+    ac_mode_fixed_short: "定时",
+    ac_mode_on_image_short: "看图",
+    ac_mode_fixed_title: "定时模式",
+    ac_mode_on_image_title: "出图后再点"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -240,7 +248,11 @@ const translations = {
     res_h: "高",
     setting_hide_autoclicker: "カウントバーを隠す",
     setting_hide_autoclicker_desc: "ページ下部のオートクリッカーバーを非表示にします。",
-    btn_history: "履歴とお気に入り"
+    btn_history: "履歴とお気に入り",
+    ac_mode_fixed_short: "固定",
+    ac_mode_on_image_short: "画像後",
+    ac_mode_fixed_title: "固定間隔",
+    ac_mode_on_image_title: "画像生成後"
   }
 };
 
@@ -1010,6 +1022,15 @@ function initUI() {
       const btn = document.getElementById(id);
       if (btn) btn.classList.toggle('active', id === `btn-${lang}`);
     });
+
+    const fallback = translations.en || {};
+    const acI18n = {
+      fixedShort: dict.ac_mode_fixed_short || fallback.ac_mode_fixed_short || 'Fixed',
+      onImageShort: dict.ac_mode_on_image_short || fallback.ac_mode_on_image_short || 'On Img',
+      fixedTitle: dict.ac_mode_fixed_title || fallback.ac_mode_fixed_title || 'Fixed Interval',
+      onImageTitle: dict.ac_mode_on_image_title || fallback.ac_mode_on_image_title || 'On Image'
+    };
+    chrome.storage.local.set({ autoClickerI18n: acI18n });
 
     // 刷新多选分辨率按钮文字
     if (typeof syncMultiResStorage === 'function') syncMultiResStorage();

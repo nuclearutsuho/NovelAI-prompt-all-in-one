@@ -10,8 +10,9 @@
     triggerSpace = true,
     sequentialCounters = {},
     multiResConfig = null,
-    hideAutoClicker = false
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker']);
+    hideAutoClicker = false,
+    autoClickerI18n = null
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n']);
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
   const sortableScript = document.createElement('script');
@@ -42,7 +43,8 @@
       triggerSpace,
       sequentialCounters,
       multiResConfig,
-      hideAutoClicker
+      hideAutoClicker,
+      autoClickerI18n
     }, '*');
     s.remove();
   };
@@ -247,7 +249,8 @@
       changes.triggerTab ||
       changes.triggerSpace ||
       changes.multiResConfig ||
-      changes.hideAutoClicker) {
+      changes.hideAutoClicker ||
+      changes.autoClickerI18n) {
 
       wildcards = changes.wildcards
         ? changes.wildcards.newValue
@@ -273,6 +276,9 @@
       hideAutoClicker = changes.hideAutoClicker
         ? changes.hideAutoClicker.newValue
         : hideAutoClicker;
+      autoClickerI18n = changes.autoClickerI18n
+        ? changes.autoClickerI18n.newValue
+        : autoClickerI18n;
 
       window.postMessage({
         type: '__WILDCARD_UPDATE__',
@@ -281,11 +287,12 @@
         preservePrompt,
         alternativeDanbooruAutocomplete,
         triggerTab,
-        triggerSpace,
-        sequentialCounters,
-        multiResConfig,
-        hideAutoClicker
-      }, '*');
+      triggerSpace,
+      sequentialCounters,
+      multiResConfig,
+      hideAutoClicker,
+      autoClickerI18n
+    }, '*');
     }
   });
 
