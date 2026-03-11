@@ -29,10 +29,22 @@
     (document.head || document.documentElement).appendChild(hp);
   });
 
-  // 2) inject script to page
-  const s = document.createElement('script');
-  s.src = chrome.runtime.getURL('injector.js');
-  s.onload = () => {
+  // 2) inject scripts to page
+  const p1 = new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = chrome.runtime.getURL('injector.js');
+    s.onload = () => { s.remove(); resolve(); };
+    (document.head || document.documentElement).appendChild(s);
+  });
+
+  const p2 = new Promise((resolve) => {
+    const ac = document.createElement('script');
+    ac.src = chrome.runtime.getURL('modules/auto-clicker.js');
+    ac.onload = () => { ac.remove(); resolve(); };
+    (document.head || document.documentElement).appendChild(ac);
+  });
+
+  Promise.all([p1, p2]).then(() => {
     window.postMessage({
       type: '__WILDCARD_INIT__',
       map: wildcards,
@@ -46,15 +58,7 @@
       hideAutoClicker,
       autoClickerI18n
     }, '*');
-    s.remove();
-  };
-  (document.head || document.documentElement).appendChild(s);
-
-  // 2.5) inject auto-clicker to page context
-  const ac = document.createElement('script');
-  ac.src = chrome.runtime.getURL('modules/auto-clicker.js');
-  ac.onload = () => ac.remove();
-  (document.head || document.documentElement).appendChild(ac);
+  });
 
   // 3) inject manager panel (runs in Content Script context)
   function injectManagerPanel() {

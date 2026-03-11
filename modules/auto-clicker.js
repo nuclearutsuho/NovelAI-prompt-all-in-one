@@ -1,4 +1,4 @@
-﻿// auto-clicker.js
+// auto-clicker.js
 // NovelAI 自定义连点器 — 插件版（独立浮窗）
 // 原作: Takoro (v2.8)，移植改编为 Chrome 插件模块
 (() => {
@@ -847,6 +847,9 @@
 
     startImageObserver();
     console.log('[AutoClicker] 浮窗已创建');
+    
+    // 强制基于当前字典进行一次文本刷新，双重保险
+    applyModeI18n();
   }
 
   // ─── 等待生成按钮出现后初始化 ────────────────────────────────
