@@ -1055,7 +1055,19 @@ function initUI() {
 
   // Load language preference
   chrome.storage.local.get('language', (data) => {
-    if (data.language) applyTranslations(data.language);
+    if (data.language) {
+      applyTranslations(data.language);
+    } else {
+      // 首次加载，获取浏览器语言
+      const browserLang = navigator.language || navigator.userLanguage || 'en';
+      let defaultLang = 'en';
+      if (browserLang.toLowerCase().startsWith('zh')) {
+        defaultLang = 'zh';
+      } else if (browserLang.toLowerCase().startsWith('ja')) {
+        defaultLang = 'jp';
+      }
+      setLanguage(defaultLang);
+    }
   });
 
   // Observe width for responsive short-text mode
@@ -1088,7 +1100,7 @@ function initUI() {
         let val = data[key];
         if (val === undefined) {
           // 默认开启的选项
-          if (key === 'alternativeDanbooruAutocomplete' || key === 'renderNewlines') {
+          if (key === 'alternativeDanbooruAutocomplete') {
             val = true;
           } else {
             val = false;
