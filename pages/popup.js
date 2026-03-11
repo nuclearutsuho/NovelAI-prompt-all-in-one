@@ -94,7 +94,10 @@ const translations = {
     ac_mode_fixed_short: "Fixed",
     ac_mode_on_image_short: "On Img",
     ac_mode_fixed_title: "Fixed Interval",
-    ac_mode_on_image_title: "On Image"
+    ac_mode_on_image_title: "On Image",
+    btn_group_tags: "Group Tags",
+    btn_group_tags_short: "Groups",
+    btn_group_tags_title: "Open Group Tags Panel"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -173,7 +176,10 @@ const translations = {
     ac_mode_fixed_short: "定时",
     ac_mode_on_image_short: "看图",
     ac_mode_fixed_title: "定时模式",
-    ac_mode_on_image_title: "出图后再点"
+    ac_mode_on_image_title: "出图后再点",
+    btn_group_tags: "分组标签",
+    btn_group_tags_short: "分组",
+    btn_group_tags_title: "打开分组标签面板"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -252,7 +258,10 @@ const translations = {
     ac_mode_fixed_short: "固定",
     ac_mode_on_image_short: "画像後",
     ac_mode_fixed_title: "固定間隔",
-    ac_mode_on_image_title: "画像生成後"
+    ac_mode_on_image_title: "画像生成後",
+    btn_group_tags: "グループタグ",
+    btn_group_tags_short: "グループ",
+    btn_group_tags_title: "グループタグパネルを開く"
   }
 };
 
@@ -816,6 +825,13 @@ function initUI() {
       const isStructural = tags.length !== prevTags.length;
       updateTagsFromEditor(tags);
       syncToPage(isStructural ? 'immediate' : 'popup');
+      
+      // 同步最新 tags 到 Group Tags Panel
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabsList) => {
+        if (tabsList[0]) {
+          chrome.tabs.sendMessage(tabsList[0].id, { type: 'SYNC_ACTIVE_TAGS', tags });
+        }
+      });
     }
   });
 
@@ -961,6 +977,18 @@ function initUI() {
       }, 100);
     }
   });
+
+  // 分组标签入口按钮：发送消息到 bridge.js 切换面板显示
+  const btnGroupTags = document.getElementById('btn-group-tags');
+  if (btnGroupTags) {
+    btnGroupTags.addEventListener('click', () => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_GROUP_TAGS_PANEL' });
+        }
+      });
+    });
+  }
 
   // Library & Settings
   document.getElementById('btn-library').addEventListener('click', () => {
@@ -1841,9 +1869,23 @@ async function restoreFromSnapshot(snapshot) {
   });
 }
 
-// 监听来自 injector modal 的恢复指令（通过 bridge 中转）
+// 监听跨组件通讯指令（通过 bridge 中转）
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
     restoreFromSnapshot(msg.snapshot);
+  }
+  
+  if (msg.type === 'APPEND_TAG_FROM_PANEL' && msg.tag) {
+    if (editor) {
+      editor.addTag(msg.tag);
+      // addTag 会自动触发 onChange，所以不需要手动在此发送 sync
+    }
+  }
+
+  if (msg.type === 'REMOVE_TAG_FROM_PANEL' && msg.tag) {
+    if (editor) {
+      // 从对应的 prompt 数组中移除
+      editor.removeTagByText(msg.tag);
+    }
   }
 });

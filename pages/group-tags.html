@@ -1,0 +1,383 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Group Tags Panel</title>
+  <style>
+    /* CSS Variables for Dynamic Density Control */
+    :root {
+      --density-gap: 2px;
+      --density-pad-v: 6px;
+      --density-pad-h: 8px;
+      --density-tab-pad-v: 2px;
+      --density-tab-pad-h: 8px;
+      --density-font-tab: 11px;
+      
+      --density-card-pad-v: 1px;
+      --density-card-pad-h: 4px;
+      --density-font-zh: 10px;
+      --density-font-en: 11px;
+      
+      --density-grid-pad: 8px;
+    }
+
+    /* Reset & Base */
+    body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      background: #1e1e2e;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      border: 1px solid #4a4a6a;
+      box-sizing: border-box;
+      border-radius: 8px; /* Applied to the container when injected, but good for local dev */
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      width: 100%;
+    }
+
+
+    /* Tabs Area (Dual Layer) */
+    .tabs-container {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    /* Primary Categories (Layer 1) */
+    .primary-tabs {
+      display: flex;
+      gap: var(--density-gap);
+      padding: var(--density-pad-v) var(--density-pad-h);
+      background: #1e1e2e;
+      border-bottom: 1px solid #3a3a55;
+      overflow-x: auto;
+    }
+
+    /* Secondary Groups (Layer 2) */
+    .secondary-tabs {
+      display: flex;
+      gap: var(--density-gap);
+      padding: calc(var(--density-pad-v) - 2px) var(--density-pad-h);
+      background: #252538;
+      border-bottom: 1px solid #4a4a6a;
+      overflow-x: auto;
+    }
+
+    /* Hide scrollbar for tabs */
+    .primary-tabs::-webkit-scrollbar,
+    .secondary-tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+    .primary-tabs::-webkit-scrollbar-thumb,
+    .secondary-tabs::-webkit-scrollbar-thumb {
+      background: #4a4a6a;
+      border-radius: 2px;
+    }
+
+    .tab-btn {
+      background: #181825;
+      border: 1px solid #3a3a55;
+      color: #999;
+      padding: var(--density-tab-pad-v) var(--density-tab-pad-h);
+      cursor: pointer;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: all 0.2s;
+      font-size: var(--density-font-tab);
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover {
+      background: #2a2a3e;
+      color: #ddd;
+    }
+
+    .tab-btn.active {
+      background: #818cf8;
+      color: #fff;
+      border-color: #6366f1;
+    }
+
+    .secondary-tabs .tab-btn {
+      padding: calc(var(--density-tab-pad-v) - 1px) calc(var(--density-tab-pad-h) - 2px);
+      font-size: calc(var(--density-font-tab) - 1px);
+      border-radius: 3px;
+    }
+
+    .secondary-tabs .tab-btn.active {
+      background: #4a4a6a;
+      border-color: #818cf8;
+    }
+    
+    .add-tab-btn {
+      background: transparent;
+      color: #818cf8;
+      border: 1px dashed #4a4a6a;
+      font-weight: bold;
+    }
+    .add-tab-btn:hover {
+      background: rgba(129, 140, 248, 0.1);
+      border-color: #818cf8;
+    }
+
+    /* Grid Area for Tags */
+    .tags-grid-container {
+      flex: 1;
+      padding: var(--density-grid-pad);
+      overflow-y: auto;
+      background: #181825;
+    }
+
+    .tags-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: calc(var(--density-gap) * 2);
+    }
+
+    /* Tag Card */
+    .tag-card {
+      background: #181825;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.2s;
+      user-select: none;
+      position: relative;
+      overflow: hidden;
+      max-width: 120px; /* 动态宽度上限 */
+      min-width: 50px; /* 防止过窄 */
+    }
+
+    .tag-card:hover {
+      border-color: #818cf8;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .tag-card:active {
+      transform: translateY(0);
+    }
+
+    /* Grayscale Filter for "used" tags */
+    .tag-card.used {
+      filter: grayscale(1);
+      opacity: 0.6;
+      border-style: dashed;
+    }
+
+    /* Upper Half (Chinese / Localized) */
+    .tag-zh-part {
+      font-size: var(--density-font-zh);
+      color: #fff;
+      font-weight: 500;
+      padding: var(--density-card-pad-v) var(--density-card-pad-h);
+      text-align: center;
+      /* Background will be set dynamically via JS from group color */
+      background: #4a4a6a; 
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Lower Half (English / Original) */
+    .tag-en-part {
+      font-size: var(--density-font-en);
+      font-weight: bold;
+      color: #e0e0e0;
+      padding: calc(var(--density-card-pad-v) + 1px) var(--density-card-pad-h);
+      text-align: center;
+      background: #2a2a3e;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Bottom Toolbar */
+    .toolbar {
+      padding: 4px 8px;
+      background: #2a2a3e;
+      border-top: 1px solid #4a4a6a;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #ccc;
+    }
+
+    input[type="color"] {
+      -webkit-appearance: none;
+      appearance: none;
+      border: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 0;
+      background: transparent;
+    }
+    input[type="color"]::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    input[type="color"]::-webkit-color-swatch {
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+    }
+    
+    .toolbar-actions {
+       display: flex;
+       gap: 6px;
+    }
+    
+    .action-btn {
+      background: #3a3a55;
+      color: #ccc;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .action-btn:hover {
+      background: #4a4a6a;
+      color: #fff;
+    }
+
+    /* Density Slider */
+    .density-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #999;
+      font-size: 11px;
+    }
+    .density-slider {
+      width: 60px;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: #4a4a6a;
+      border-radius: 2px;
+      outline: none;
+    }
+    .density-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #818cf8;
+      cursor: pointer;
+    }
+    .density-slider::-webkit-slider-thumb:hover {
+      background: #6366f1;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="app">
+
+    <!-- Navigation Tabs -->
+    <div class="tabs-container">
+      <!-- Layer 1: Categories -->
+      <div class="primary-tabs" id="primary-tabs-container">
+        <!-- Mock Data -->
+        <button class="tab-btn active">环境 (Environment)</button>
+        <button class="tab-btn">角色 (Character)</button>
+        <button class="tab-btn">画质 (Quality)</button>
+        <button class="tab-btn add-tab-btn" title="Add Category">+</button>
+      </div>
+
+      <!-- Layer 2: Groups -->
+      <div class="secondary-tabs" id="secondary-tabs-container">
+        <!-- Mock Data -->
+        <button class="tab-btn active">天气 (Weather)</button>
+        <button class="tab-btn">时间 (Time)</button>
+        <button class="tab-btn">室内 (Indoor)</button>
+        <button class="tab-btn">室外 (Outdoor)</button>
+        <button class="tab-btn add-tab-btn" title="Add Group">+</button>
+      </div>
+    </div>
+
+    <!-- Tags Matrix Grid -->
+    <div class="tags-grid-container">
+      <div class="tags-grid" id="tags-grid">
+        <!-- Mock Data -->
+        <!-- Mock Data with proper titles to show full content on hover and inline styles to demo group color -->
+        <div class="tag-card" title="晴朗的日子里非常长的描述\nsunny day with very long description">
+          <div class="tag-zh-part" style="background-color: #10b981;">晴朗的日子里非常长的描述</div>
+          <div class="tag-en-part">sunny day with very long description</div>
+        </div>
+        <div class="tag-card used" title="雨\nrain">
+          <div class="tag-zh-part" style="background-color: #10b981;">雨</div>
+          <div class="tag-en-part">rain</div>
+        </div>
+        <div class="tag-card" title="下雪\nsnowing">
+          <div class="tag-zh-part" style="background-color: #10b981;">下雪</div>
+          <div class="tag-en-part">snowing</div>
+        </div>
+        <div class="tag-card" title="多云的\ncloudy">
+          <div class="tag-zh-part" style="background-color: #10b981;">多云的</div>
+          <div class="tag-en-part">cloudy</div>
+        </div>
+        <div class="tag-card" title="闪电与雷暴\nlightning and thunderstorm">
+          <div class="tag-zh-part" style="background-color: #10b981;">闪电与雷暴</div>
+          <div class="tag-en-part">lightning and thunderstorm</div>
+        </div>
+        <div class="tag-card" title="起雾\nfoggy">
+          <div class="tag-zh-part" style="background-color: #10b981;">起雾</div>
+          <div class="tag-en-part">foggy</div>
+        </div>
+        <div class="tag-card" title="刮风\nwindy">
+          <div class="tag-zh-part" style="background-color: #10b981;">刮风</div>
+          <div class="tag-en-part">windy</div>
+        </div>
+        <div class="tag-card used" title="夜晚\nnight">
+          <div class="tag-zh-part" style="background-color: #10b981;">夜晚</div>
+          <div class="tag-en-part">night</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Toolbar (Color Coding & Group Actions) -->
+    <div class="toolbar">
+      <div class="color-picker-wrapper">
+        <label for="group-color" data-i18n="group_color">Group Color:</label>
+        <input type="color" id="group-color" value="#10b981" title="Set background color for this group">
+        <button class="action-btn" id="btn-reset-color" title="Reset Color">↺</button>
+      </div>
+      
+      <div class="toolbar-actions">
+         <div class="density-control" title="Adjust Display Density">
+           <span>🔍</span>
+           <input type="range" id="density-slider" class="density-slider" min="0" max="100" value="50">
+         </div>
+         <button class="action-btn" id="btn-edit-group" data-i18n="btn_edit">Edit Group</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../modules/GroupTagsPanel.js"></script>
+</body>
+</html>

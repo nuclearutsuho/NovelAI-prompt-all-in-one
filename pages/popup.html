@@ -260,6 +260,26 @@
       background: #6366f1;
     }
 
+    #btn-group-tags, .group-tags-btn {
+      background: #10b981;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 0 10px;
+      height: 24px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+
+    #btn-group-tags:hover, .group-tags-btn:hover {
+      background: #059669;
+    }
+
     /* Settings Modal */
     #settings-modal {
       position: absolute;
@@ -560,6 +580,7 @@
       <button id="btn-quick-seq-wildcard" class="quick-btn" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</button>
       <button id="btn-quick-random" class="quick-btn" title="Random Choice" data-i18n-title="btn_quick_random" data-i18n="btn_quick_random">动态抽取</button>
       <button id="btn-add" class="primary-add-btn" data-i18n="btn_add">Add</button>
+      <button id="btn-group-tags" class="group-tags-btn" data-i18n="btn_group_tags" title="Open Group Tags Panel" data-i18n-title="btn_group_tags_title">Group Tags</button>
     </div>
 
     <div id="editor-container">

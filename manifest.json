@@ -31,6 +31,8 @@
         "data/dictionary.csv",
         "pages/popup.html",
         "pages/popup.js",
+        "pages/group-tags.html",
+        "modules/GroupTagsPanel.js",
         "pages/sync.html",
         "pages/sync.js",
         "lib/codemirror-bundle.js",
