@@ -15,6 +15,10 @@ let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' 
 let maxCharacters = 6;
 let isShortMode = false;
 
+// 焦点追踪：当前 GroupTags 面板将追加标签的目标编辑器
+// type: 'base' | 'character', charIndex: number, mode: 'positive'|'negative'|'pos'|'neg'
+let activeEditorTarget = { type: 'base', mode: 'positive' };
+
 // Language Support
 const translations = {
   en: {
@@ -461,7 +465,18 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
           characterPromptsData[index].negPrompt = tagsToString(tags);
       }
       syncCharactersToPage(isStructural ? 'immediate' : 'popup');
+      
+      // 同步当前角色编辑器的 tags 到 GroupTags 面板
+      if (activeEditorTarget.type === 'character' && activeEditorTarget.charIndex === index) {
+        syncActiveTagsToPanel();
+      }
     }
+  });
+
+  // ── 焦点追踪：点击角色编辑器容器时设为活动目标 ──
+  editorContainer.addEventListener('mousedown', () => {
+    activeEditorTarget = { type: 'character', charIndex: index };
+    syncActiveTagsToPanel();
   });
 
 
@@ -506,6 +521,11 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
           });
         }
       });
+    }
+
+    // 如果当前焦点正好在这个角色编辑器上，更新面板状态
+    if (activeEditorTarget.type === 'character' && activeEditorTarget.charIndex === index) {
+      syncActiveTagsToPanel();
     }
   };
   
@@ -827,16 +847,26 @@ function initUI() {
       syncToPage(isStructural ? 'immediate' : 'popup');
       
       // 同步最新 tags 到 Group Tags Panel
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabsList) => {
-        if (tabsList[0]) {
-          chrome.tabs.sendMessage(tabsList[0].id, { type: 'SYNC_ACTIVE_TAGS', tags });
-        }
-      });
+      syncActiveTagsToPanel();
     }
   });
 
   // Bind Autocomplete to Editor (for inline edit)
   editor.bindAutocomplete(autocomplete);
+
+  // ── 焦点追踪：点击 base editor 容器时设为活动目标 ──
+  container.addEventListener('mousedown', () => {
+    activeEditorTarget = { type: 'base', mode: currentMode };
+    syncActiveTagsToPanel();
+  });
+
+  // ── 初始化时从持久化存储加载分组颜色 ──
+  chrome.storage.local.get('groupColorMap', (data) => {
+    if (data.groupColorMap && editor) {
+      editor.groupColorMap = data.groupColorMap;
+      // 不立即 render，等待首次 setTags 时自然带上颜色
+    }
+  });
 
   // Character Prompt Add Button
   const btnAddChar = document.getElementById('btn-add-char');
@@ -1204,6 +1234,48 @@ function switchTab(mode, fromUserClick = false) {
       }
     });
   }
+
+  // 切换后立即同步正确的 tags 状态给面板，刷新灰阶
+  syncActiveTagsToPanel();
+}
+
+function syncActiveTagsToPanel() {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabsList) => {
+    if (tabsList[0]) {
+      let activeTags, inactiveTags, targetLabel;
+
+      if (activeEditorTarget.type === 'base') {
+        // 当前焦点在 Base 编辑器
+        activeEditorTarget.mode = currentMode; // 保持同步
+        activeTags = currentMode === 'positive' ? positiveTags : negativeTags;
+        inactiveTags = currentMode === 'positive' ? negativeTags : positiveTags;
+        targetLabel = currentMode === 'positive' ? 'Base (+)' : 'Base (-)';
+      } else if (activeEditorTarget.type === 'character') {
+        const idx = activeEditorTarget.charIndex;
+        const charData = characterPromptsData[idx];
+        const charEdObj = charEditors[idx];
+        if (charData && charEdObj) {
+          const tab = charEdObj.activeTab; // 'pos' | 'neg'
+          activeTags = tab === 'pos' ? (charData.posTags || []) : (charData.negTags || []);
+          inactiveTags = tab === 'pos' ? (charData.negTags || []) : (charData.posTags || []);
+          targetLabel = `Char ${idx + 1} (${tab === 'pos' ? '+' : '-'})`;
+        } else {
+          // 角色已被删除，回退到 base
+          activeEditorTarget = { type: 'base', mode: currentMode };
+          activeTags = currentMode === 'positive' ? positiveTags : negativeTags;
+          inactiveTags = currentMode === 'positive' ? negativeTags : positiveTags;
+          targetLabel = currentMode === 'positive' ? 'Base (+)' : 'Base (-)';
+        }
+      }
+
+      chrome.tabs.sendMessage(tabsList[0].id, { 
+        type: 'SYNC_ACTIVE_TAGS', 
+        activeTags,
+        inactiveTags,
+        targetLabel
+      });
+    }
+  });
 }
 
 function updateTagsFromEditor(updatedTags) {
@@ -1440,6 +1512,9 @@ function initCommunication() {
 
       if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
       if (currentMode === 'negative' && shouldUpdateNeg) editor.setTags(negativeTags);
+      
+      // 不论是初始加载还是后续同步，更新 tags 后推送给 GroupTags
+      syncActiveTagsToPanel();
       
     } else if (msg.type === 'RETURN_CHARACTER_PROMPTS') {
       const charPrompts = msg.data || [];
@@ -1876,16 +1951,51 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   
   if (msg.type === 'APPEND_TAG_FROM_PANEL' && msg.tag) {
-    if (editor) {
-      editor.addTag(msg.tag);
-      // addTag 会自动触发 onChange，所以不需要手动在此发送 sync
+    // 根据当前焦点追踪目标，将标签追加到正确的编辑器
+    if (activeEditorTarget.type === 'base') {
+      if (editor) {
+        editor.addTag(msg.tag);
+      }
+    } else if (activeEditorTarget.type === 'character') {
+      const idx = activeEditorTarget.charIndex;
+      const charEdObj = charEditors[idx];
+      if (charEdObj && charEdObj.editor) {
+        charEdObj.editor.addTag(msg.tag);
+      }
     }
   }
 
   if (msg.type === 'REMOVE_TAG_FROM_PANEL' && msg.tag) {
-    if (editor) {
-      // 从对应的 prompt 数组中移除
-      editor.removeTagByText(msg.tag);
+    if (activeEditorTarget.type === 'base') {
+      if (editor) {
+        editor.removeTagByText(msg.tag);
+      }
+    } else if (activeEditorTarget.type === 'character') {
+      const idx = activeEditorTarget.charIndex;
+      const charEdObj = charEditors[idx];
+      if (charEdObj && charEdObj.editor) {
+        charEdObj.editor.removeTagByText(msg.tag);
+      }
     }
   }
+
+  // 接收来自 GroupTags 面板的分组颜色映射，应用到所有 TagEditor 实例
+  if (msg.type === 'SYNC_GROUP_COLORS' && msg.colorMap) {
+    // 持久化保存到 storage
+    chrome.storage.local.set({ groupColorMap: msg.colorMap });
+    
+    // 设置到 base editor
+    if (editor) {
+      editor.groupColorMap = msg.colorMap;
+      editor.render();
+    }
+    // 设置到所有角色 editor
+    charEditors.forEach(charEdObj => {
+      if (charEdObj && charEdObj.editor) {
+        charEdObj.editor.groupColorMap = msg.colorMap;
+        charEdObj.editor.render();
+      }
+    });
+  }
 });
+

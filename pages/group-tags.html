@@ -172,9 +172,29 @@
 
     /* Grayscale Filter for "used" tags */
     .tag-card.used {
-      filter: grayscale(1);
-      opacity: 0.6;
-      border-style: dashed;
+      filter: grayscale(1) opacity(0.6);
+      cursor: default; /* Optional: if you still want hover effect for removing */
+    }
+
+    /* 在另一侧输入框中使用的标签 */
+    .tag-card.used-other {
+      filter: grayscale(0.5) opacity(0.4);
+      cursor: not-allowed;
+      position: relative;
+    }
+    .tag-card.used-other::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 5%;
+      right: 5%;
+      height: 2px;
+      background: #ff5555; /* 使用红色或亮色使其更明显 */
+      opacity: 0.9;
+      transform: translateY(-50%);
+      pointer-events: none;
+      z-index: 10;
+      box-shadow: 0 0 3px rgba(0,0,0,0.5); /* 增加阴影，更像真实的删除线 */
     }
 
     /* Upper Half (Chinese / Localized) */
@@ -242,6 +262,37 @@
       border-radius: 4px;
     }
     
+    /* 目标指示器 */
+    .target-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: #aaa;
+      background: rgba(255,255,255,0.05);
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: all 0.3s ease;
+      white-space: nowrap;
+    }
+    .target-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+      flex-shrink: 0;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0); }
+    }
+    .target-label {
+      font-weight: 500;
+      color: #ccc;
+    }
+
     .toolbar-actions {
        display: flex;
        gap: 6px;
@@ -302,61 +353,21 @@
     <div class="tabs-container">
       <!-- Layer 1: Categories -->
       <div class="primary-tabs" id="primary-tabs-container">
-        <!-- Mock Data -->
-        <button class="tab-btn active">环境 (Environment)</button>
-        <button class="tab-btn">角色 (Character)</button>
-        <button class="tab-btn">画质 (Quality)</button>
-        <button class="tab-btn add-tab-btn" title="Add Category">+</button>
+        <!-- 动态渲染区 -->
+        <button class="tab-btn add-tab-btn" id="btn-add-category" title="Add Category">+</button>
       </div>
 
       <!-- Layer 2: Groups -->
       <div class="secondary-tabs" id="secondary-tabs-container">
-        <!-- Mock Data -->
-        <button class="tab-btn active">天气 (Weather)</button>
-        <button class="tab-btn">时间 (Time)</button>
-        <button class="tab-btn">室内 (Indoor)</button>
-        <button class="tab-btn">室外 (Outdoor)</button>
-        <button class="tab-btn add-tab-btn" title="Add Group">+</button>
+        <!-- 动态渲染区 -->
+        <button class="tab-btn add-tab-btn" id="btn-add-group" title="Add Group">+</button>
       </div>
     </div>
 
     <!-- Tags Matrix Grid -->
     <div class="tags-grid-container">
       <div class="tags-grid" id="tags-grid">
-        <!-- Mock Data -->
-        <!-- Mock Data with proper titles to show full content on hover and inline styles to demo group color -->
-        <div class="tag-card" title="晴朗的日子里非常长的描述\nsunny day with very long description">
-          <div class="tag-zh-part" style="background-color: #10b981;">晴朗的日子里非常长的描述</div>
-          <div class="tag-en-part">sunny day with very long description</div>
-        </div>
-        <div class="tag-card used" title="雨\nrain">
-          <div class="tag-zh-part" style="background-color: #10b981;">雨</div>
-          <div class="tag-en-part">rain</div>
-        </div>
-        <div class="tag-card" title="下雪\nsnowing">
-          <div class="tag-zh-part" style="background-color: #10b981;">下雪</div>
-          <div class="tag-en-part">snowing</div>
-        </div>
-        <div class="tag-card" title="多云的\ncloudy">
-          <div class="tag-zh-part" style="background-color: #10b981;">多云的</div>
-          <div class="tag-en-part">cloudy</div>
-        </div>
-        <div class="tag-card" title="闪电与雷暴\nlightning and thunderstorm">
-          <div class="tag-zh-part" style="background-color: #10b981;">闪电与雷暴</div>
-          <div class="tag-en-part">lightning and thunderstorm</div>
-        </div>
-        <div class="tag-card" title="起雾\nfoggy">
-          <div class="tag-zh-part" style="background-color: #10b981;">起雾</div>
-          <div class="tag-en-part">foggy</div>
-        </div>
-        <div class="tag-card" title="刮风\nwindy">
-          <div class="tag-zh-part" style="background-color: #10b981;">刮风</div>
-          <div class="tag-en-part">windy</div>
-        </div>
-        <div class="tag-card used" title="夜晚\nnight">
-          <div class="tag-zh-part" style="background-color: #10b981;">夜晚</div>
-          <div class="tag-en-part">night</div>
-        </div>
+        <!-- 动态渲染的卡片将被放在这里 -->
       </div>
     </div>
 
@@ -368,6 +379,12 @@
         <button class="action-btn" id="btn-reset-color" title="Reset Color">↺</button>
       </div>
       
+      <!-- 目标指示器：显示当前标签将被追加到哪个编辑器 -->
+      <div class="target-indicator" id="target-indicator">
+        <span class="target-dot"></span>
+        <span class="target-label" id="target-label">Base (+)</span>
+      </div>
+
       <div class="toolbar-actions">
          <div class="density-control" title="Adjust Display Density">
            <span>🔍</span>

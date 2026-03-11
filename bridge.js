@@ -797,6 +797,24 @@
   }
 
   window.addEventListener('message', e => {
+    // ── 来自 GroupTags iframe 的指令（e.source 是 iframe window，不等于当前 window）──
+    if (e.data?.type === '__APPEND_TAG_FROM_PANEL__') {
+      console.log('[Bridge] Received __APPEND_TAG_FROM_PANEL__:', e.data.tag);
+      chrome.runtime.sendMessage({ type: 'APPEND_TAG_FROM_PANEL', tag: e.data.tag, zh: e.data.zh });
+      return;
+    }
+    if (e.data?.type === '__REMOVE_TAG_FROM_PANEL__') {
+      console.log('[Bridge] Received __REMOVE_TAG_FROM_PANEL__:', e.data.tag);
+      chrome.runtime.sendMessage({ type: 'REMOVE_TAG_FROM_PANEL', tag: e.data.tag });
+      return;
+    }
+    if (e.data?.type === '__SYNC_GROUP_COLORS__') {
+      console.log('[Bridge] Received __SYNC_GROUP_COLORS__');
+      chrome.runtime.sendMessage({ type: 'SYNC_GROUP_COLORS', colorMap: e.data.colorMap });
+      return;
+    }
+
+    // 只处理来自当前页面自身的消息（injector / popup 等同源通信）
     if (e.source !== window) return;
 
     if (e.data?.type === '__REQUEST_AUTOCOMPLETE_DICT__') {
@@ -860,13 +878,6 @@
       });
     }
 
-    // 从悬浮窗发送给主面板的 Tag 操作指令
-    if (e.data?.type === '__APPEND_TAG_FROM_PANEL__') {
-      chrome.runtime.sendMessage({ type: 'APPEND_TAG_FROM_PANEL', tag: e.data.tag });
-    }
-    if (e.data?.type === '__REMOVE_TAG_FROM_PANEL__') {
-      chrome.runtime.sendMessage({ type: 'REMOVE_TAG_FROM_PANEL', tag: e.data.tag });
-    }
   });
 
   // Relay from Popup to Injector
@@ -916,7 +927,12 @@
     if (request.type === 'SYNC_ACTIVE_TAGS') {
       const iframe = document.getElementById('group-tags-iframe');
       if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: '__SYNC_ACTIVE_TAGS__', tags: request.tags }, '*');
+        iframe.contentWindow.postMessage({ 
+          type: '__SYNC_ACTIVE_TAGS__', 
+          activeTags: request.activeTags,
+          inactiveTags: request.inactiveTags,
+          targetLabel: request.targetLabel
+        }, '*');
       }
     }
     
