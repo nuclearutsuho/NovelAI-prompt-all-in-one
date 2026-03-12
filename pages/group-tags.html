@@ -333,23 +333,222 @@
       color: #ccc;
     }
 
+
+    .secondary-tabs .tab-btn {
+      padding: calc(var(--density-tab-pad-v) - 1px) calc(var(--density-tab-pad-h) - 2px);
+      font-size: calc(var(--density-font-tab) - 1px);
+      border-radius: 3px;
+    }
+
+    .secondary-tabs .tab-btn.active {
+      background: #4a4a6a;
+      border-color: #818cf8;
+    }
+    
+    .add-tab-btn {
+      display: none; /* 默认隐藏，编辑模式下显示 */
+      background: transparent;
+      color: #818cf8;
+      border: 1.5px dashed #4a4a6a;
+      font-weight: bold;
+    }
+    #app.edit-mode .add-tab-btn {
+      display: inline-flex;
+    }
+    .add-tab-btn:hover {
+      background: rgba(129, 140, 248, 0.1);
+      border-color: #818cf8;
+    }
+
+    /* Grid Area for Tags */
+    .tags-grid-container {
+      flex: 1;
+      padding: var(--density-grid-pad);
+      overflow-y: auto;
+      background: #181825;
+    }
+
+    .tags-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: calc(var(--density-gap) * 2);
+    }
+
+    /* Tag Card */
+    .tag-card {
+      background: #181825;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.2s;
+      user-select: none;
+      position: relative;
+      overflow: hidden;  /* 编辑模式下会被覆盖为 visible */
+      max-width: 120px; /* 动态宽度上限 */
+      min-width: 50px; /* 防止过窄 */
+    }
+
+    .tag-card:hover {
+      border-color: #818cf8;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .tag-card:active {
+      transform: translateY(0);
+    }
+
+    /* Grayscale Filter for "used" tags */
+    .tag-card.used {
+      filter: grayscale(1) opacity(0.6);
+      cursor: default; /* Optional: if you still want hover effect for removing */
+    }
+
+    /* 在另一侧输入框中使用的标签 */
+    .tag-card.used-other {
+      filter: grayscale(0.5) opacity(0.4);
+      cursor: not-allowed;
+      position: relative;
+    }
+    .tag-card.used-other::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 5%;
+      right: 5%;
+      height: 2px;
+      background: #ff5555; /* 使用红色或亮色使其更明显 */
+      opacity: 0.9;
+      transform: translateY(-50%);
+      pointer-events: none;
+      z-index: 10;
+      box-shadow: 0 0 3px rgba(0,0,0,0.5); /* 增加阴影，更像真实的删除线 */
+    }
+
+    /* Upper Half (Chinese / Localized) */
+    .tag-zh-part {
+      font-size: var(--density-font-zh);
+      color: #fff;
+      font-weight: 500;
+      padding: var(--density-card-pad-v) var(--density-card-pad-h);
+      text-align: center;
+      /* Background will be set dynamically via JS from group color */
+      background: #4a4a6a; 
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Lower Half (English / Original) */
+    .tag-en-part {
+      font-size: var(--density-font-en);
+      font-weight: bold;
+      color: #e0e0e0;
+      padding: calc(var(--density-card-pad-v) + 1px) var(--density-card-pad-h);
+      text-align: center;
+      background: #2a2a3e;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Bottom Toolbar */
+    .toolbar {
+      padding: 4px 8px;
+      background: #2a2a3e;
+      border-top: 1px solid #4a4a6a;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #ccc;
+    }
+
+    .color-picker-btn {
+      position: relative;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #4a4a6a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .color-picker-btn:hover {
+      border-color: #818cf8;
+      transform: scale(1.1);
+    }
+    .color-picker-btn input[type="color"] {
+      position: absolute;
+      top: -10px; left: -10px; width: 50px; height: 50px;
+      opacity: 0;
+      cursor: pointer;
+    }
+    
+    /* 目标指示器 */
+    .target-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: #aaa;
+      background: rgba(255,255,255,0.05);
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: all 0.3s ease;
+      white-space: nowrap;
+    }
+    .target-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+      flex-shrink: 0;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0); }
+    }
+    .target-label {
+      font-weight: 500;
+      color: #ccc;
+    }
+
     .toolbar-actions {
        display: flex;
        gap: 6px;
     }
     
-    .action-btn {
+    .icon-action-btn {
       background: #3a3a55;
       color: #ccc;
       border: 1px solid #4a4a6a;
       border-radius: 4px;
-      padding: 4px 10px;
-      font-size: 11px;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.2s;
     }
     
-    .action-btn:hover {
+    .icon-action-btn:hover {
       background: #4a4a6a;
       color: #fff;
     }
@@ -444,17 +643,47 @@
     }
     #app.edit-mode .tab-btn {
       position: relative;
+      cursor: text; /* 按钮主体（中间 60%）留作文本编辑暗示 */
+    }
+    
+    /* 左右两端各 20% 区域的隐藏把手 (应用给卡片和 Tabs) */
+    #app.edit-mode .tag-card::before,
+    #app.edit-mode .tag-card::after,
+    #app.edit-mode .tab-btn::before,
+    #app.edit-mode .tab-btn::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 20%;
+      cursor: grab;
+      z-index: 5; /* 覆盖在文字上方 */
+    }
+    #app.edit-mode .tag-card::before,
+    #app.edit-mode .tab-btn::before { left: 0; }
+    #app.edit-mode .tag-card::after,
+    #app.edit-mode .tab-btn::after  { right: 0; }
+    
+    #app.edit-mode .tag-card:active::before,
+    #app.edit-mode .tag-card:active::after,
+    #app.edit-mode .tab-btn:active::before,
+    #app.edit-mode .tab-btn:active::after {
+      cursor: grabbing;
     }
 
-    /* ── Tag 卡片删除角标定位 ── */
-    .card-delete-badge {
-      top: calc(-1 * (var(--density-font-tab) + 4px) / 3);
-      right: calc(-1 * (var(--density-font-tab) + 4px) / 3);
-    }
     #app.edit-mode .tag-card {
       position: relative;
       overflow: visible; /* 允许角标溢出显示 */
+      /* 卡片基础光标为默认，由内部元素接管 */
     }
+    /* 伪类的抓手定义已经上移，和 tab-btn 共享了 */
+
+    /* 中间的 60% 为可编辑文本区，需要给它们加 text 指针 */
+    #app.edit-mode .tag-card .tag-zh-part,
+    #app.edit-mode .tag-card .tag-en-part {
+      cursor: text;
+    }
+    
     #app.edit-mode .tag-card .card-delete-badge {
       display: flex;
     }
@@ -580,13 +809,27 @@
     }
     .modal-btn.danger:hover { background: #c0392b; }
 
+    /* 编辑操作按钮定宽容器：保证 Edit 状态与 Save/Cancel 状态占用绝对一致的物理宽度，2 * 24px + 4px gap = 52px */
+    .edit-mode-container {
+      position: relative;
+      width: 52px;
+      height: 24px;
+      display: flex;
+      justify-content: center;
+    }
+    #btn-edit-group {
+      width: 100%;
+    }
+
     /* Save / Cancel 按钮组（仅编辑模式显示） */
     .edit-actions {
       display: none;
       gap: 4px;
+      width: 100%;
     }
     #app.edit-mode .edit-actions { display: flex; }
     #app.edit-mode #btn-edit-group { display: none; }
+    
     .btn-save {
       background: #10b981;
       border-color: #059669;
@@ -808,18 +1051,31 @@
 
       <div class="toolbar-actions">
          <div class="density-control" title="Adjust Display Density">
-           <span>🔍</span>
            <input type="range" id="density-slider" class="density-slider" min="0" max="100" value="50">
          </div>
-         <button class="action-btn" id="btn-edit-group" data-i18n="btn_edit">✏️ Edit</button>
-         <div class="edit-actions">
-           <button class="action-btn btn-save" id="btn-save">💾 Save</button>
-           <button class="action-btn btn-cancel" id="btn-cancel">✕ Cancel</button>
+         <button class="icon-action-btn" id="btn-export-group-tags" title="Export Tags">
+           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+         </button>
+         <button class="icon-action-btn" id="btn-import-group-tags" title="Import Tags">
+           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12" /></svg>
+         </button>
+         <div class="edit-mode-container">
+           <button class="icon-action-btn" id="btn-edit-group" title="Edit Mode">
+             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+           </button>
+           <div class="edit-actions">
+             <button class="icon-action-btn btn-save" id="btn-save" title="Save Changes">
+               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
+             </button>
+             <button class="icon-action-btn btn-cancel" id="btn-cancel" title="Cancel Edits">
+               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+             </button>
+           </div>
          </div>
       </div>
     </div>
+    <input type="file" id="import-group-tags-input" accept="application/json,.json" style="display:none;">
   </div>
-
   <!-- 弹窗 Overlay -->
   <div class="modal-overlay" id="modal-overlay">
     <div class="modal-dialog" id="modal-dialog">

@@ -1,5 +1,6 @@
 // ========== 核心数据与状态 (Phase 1) ==========
 let customGroupsData = null;
+let defaultGroupsData = { categories: [] };
 let activeCategoryIndex = 0;
 let activeGroupIndex = 0;
 let autocompleteDict = []; // 全局字典缓存
@@ -7,6 +8,9 @@ let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
 
 // ========== 密度控制逻辑 ==========
+const GROUP_TAGS_EXPORT_FORMAT = 'group-tags-export';
+const GROUP_TAGS_SCHEMA_VERSION = 1;
+
 const densitySlider = document.getElementById('density-slider');
 const root = document.documentElement;
 const STORAGE_KEY_DENSITY = 'groupTagsDensity';
@@ -119,10 +123,13 @@ const dom = {
   modalOverlay: document.getElementById('modal-overlay'),
   modalDialog: document.getElementById('modal-dialog'),
   btnEdit: document.getElementById('btn-edit-group'),
+  btnExport: document.getElementById('btn-export-group-tags'),
+  btnImport: document.getElementById('btn-import-group-tags'),
   btnSave: document.getElementById('btn-save'),
   btnCancel: document.getElementById('btn-cancel'),
   btnAddCategory: document.getElementById('btn-add-category'),
-  btnAddGroup: document.getElementById('btn-add-group')
+  btnAddGroup: document.getElementById('btn-add-group'),
+  importFileInput: document.getElementById('import-group-tags-input')
 };
 
 // ========== 拖拽排序 ==========
@@ -342,6 +349,386 @@ function exitEditMode(save) {
 // ========== ID 生成 ==========
 function generateId(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// ========== 导入导出与数据归一化 ==========
+function cloneData(data) {
+  return JSON.parse(JSON.stringify(data));
+}
+
+function sanitizeText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeColor(value) {
+  return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : '#4a4a6a';
+}
+
+function normalizeTagKey(value) {
+  return sanitizeText(value).toLowerCase();
+}
+
+function buildLegacyId(prefix, parts) {
+  const slug = parts
+    .map(part => sanitizeText(String(part || '')).toLowerCase().replace(/[^a-z0-9]+/g, '_'))
+    .map(part => part.replace(/^_+|_+$/g, ''))
+    .filter(Boolean)
+    .join('_');
+  return `${prefix}_${slug || 'item'}`;
+}
+
+function createEmptyGroupTagsData() {
+  return { categories: [] };
+}
+
+function createMergeSummary() {
+  return {
+    addedCategories: 0,
+    addedGroups: 0,
+    addedTags: 0,
+    skippedCategories: 0,
+    skippedGroups: 0,
+    skippedTags: 0,
+    skippedInvalid: 0
+  };
+}
+
+function countSummarySkipped(summary) {
+  return summary.skippedCategories + summary.skippedGroups + summary.skippedTags + summary.skippedInvalid;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeGroupTagsData(rawData) {
+  const result = createEmptyGroupTagsData();
+  const summary = createMergeSummary();
+  const categories = Array.isArray(rawData?.categories) ? rawData.categories : [];
+  const seenCategoryIds = new Set();
+
+  categories.forEach((rawCategory, categoryIndex) => {
+    if (!rawCategory || typeof rawCategory !== 'object') {
+      summary.skippedInvalid += 1;
+      return;
+    }
+
+    const categoryName = sanitizeText(rawCategory.name) || `Category ${categoryIndex + 1}`;
+    let categoryId = sanitizeText(rawCategory.id) || buildLegacyId('cat', [categoryIndex + 1, categoryName]);
+    if (seenCategoryIds.has(categoryId)) {
+      summary.skippedCategories += 1;
+      categoryId = `${categoryId}_${categoryIndex + 1}`;
+    }
+    seenCategoryIds.add(categoryId);
+
+    const normalizedCategory = {
+      id: categoryId,
+      name: categoryName,
+      groups: []
+    };
+
+    const groups = Array.isArray(rawCategory.groups) ? rawCategory.groups : [];
+    const seenGroupIds = new Set();
+    groups.forEach((rawGroup, groupIndex) => {
+      if (!rawGroup || typeof rawGroup !== 'object') {
+        summary.skippedInvalid += 1;
+        return;
+      }
+
+      const groupName = sanitizeText(rawGroup.name) || `Group ${groupIndex + 1}`;
+      let groupId = sanitizeText(rawGroup.id) || buildLegacyId('grp', [categoryId, groupIndex + 1, groupName]);
+      if (seenGroupIds.has(groupId)) {
+        summary.skippedGroups += 1;
+        groupId = `${groupId}_${groupIndex + 1}`;
+      }
+      seenGroupIds.add(groupId);
+
+      const normalizedGroup = {
+        id: groupId,
+        name: groupName,
+        color: sanitizeColor(rawGroup.color),
+        tags: []
+      };
+
+      const tags = Array.isArray(rawGroup.tags) ? rawGroup.tags : [];
+      const seenTagKeys = new Set();
+      tags.forEach(rawTag => {
+        let en = '';
+        let zh = '';
+
+        if (typeof rawTag === 'string') {
+          en = sanitizeText(rawTag);
+        } else if (rawTag && typeof rawTag === 'object') {
+          en = sanitizeText(rawTag.en);
+          zh = sanitizeText(rawTag.zh);
+        } else {
+          summary.skippedInvalid += 1;
+          return;
+        }
+
+        const tagKey = normalizeTagKey(en);
+        if (!tagKey) {
+          summary.skippedInvalid += 1;
+          return;
+        }
+
+        if (seenTagKeys.has(tagKey)) {
+          summary.skippedTags += 1;
+          return;
+        }
+
+        seenTagKeys.add(tagKey);
+        normalizedGroup.tags.push({ en, zh });
+      });
+
+      normalizedCategory.groups.push(normalizedGroup);
+    });
+
+    result.categories.push(normalizedCategory);
+  });
+
+  return { data: result, summary };
+}
+
+function mergeGroupTagsData(baseData, sourceData) {
+  const target = cloneData(baseData);
+  const summary = createMergeSummary();
+
+  sourceData.categories.forEach(sourceCategory => {
+    const targetCategory = target.categories.find(category => category.id === sourceCategory.id);
+    if (!targetCategory) {
+      target.categories.push(cloneData(sourceCategory));
+      summary.addedCategories += 1;
+      summary.addedGroups += sourceCategory.groups.length;
+      summary.addedTags += sourceCategory.groups.reduce((count, group) => count + group.tags.length, 0);
+      return;
+    }
+
+    summary.skippedCategories += 1;
+
+    sourceCategory.groups.forEach(sourceGroup => {
+      const targetGroup = targetCategory.groups.find(group => group.id === sourceGroup.id);
+      if (!targetGroup) {
+        targetCategory.groups.push(cloneData(sourceGroup));
+        summary.addedGroups += 1;
+        summary.addedTags += sourceGroup.tags.length;
+        return;
+      }
+
+      summary.skippedGroups += 1;
+      const existingTagKeys = new Set(targetGroup.tags.map(tag => normalizeTagKey(tag.en)));
+      sourceGroup.tags.forEach(sourceTag => {
+        const tagKey = normalizeTagKey(sourceTag.en);
+        if (!tagKey || existingTagKeys.has(tagKey)) {
+          summary.skippedTags += 1;
+          return;
+        }
+        existingTagKeys.add(tagKey);
+        targetGroup.tags.push(cloneData(sourceTag));
+        summary.addedTags += 1;
+      });
+    });
+  });
+
+  return { data: target, summary };
+}
+
+function extractImportData(payload) {
+  if (payload && Array.isArray(payload.categories)) return payload;
+  if (payload?.format === GROUP_TAGS_EXPORT_FORMAT && payload.data && Array.isArray(payload.data.categories)) {
+    return payload.data;
+  }
+  if (payload?.data && Array.isArray(payload.data.categories)) return payload.data;
+  throw new Error('导入文件格式无效，未找到 categories 数组');
+}
+
+function clampActiveIndices() {
+  if (!customGroupsData?.categories?.length) {
+    activeCategoryIndex = 0;
+    activeGroupIndex = 0;
+    return;
+  }
+
+  activeCategoryIndex = Math.min(activeCategoryIndex, customGroupsData.categories.length - 1);
+  activeCategoryIndex = Math.max(activeCategoryIndex, 0);
+
+  const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  if (!currentCategory?.groups?.length) {
+    activeGroupIndex = 0;
+    return;
+  }
+
+  activeGroupIndex = Math.min(activeGroupIndex, currentCategory.groups.length - 1);
+  activeGroupIndex = Math.max(activeGroupIndex, 0);
+}
+
+function getCurrentExportData() {
+  return normalizeGroupTagsData(customGroupsData).data;
+}
+
+function buildExportPayload() {
+  return {
+    format: GROUP_TAGS_EXPORT_FORMAT,
+    schemaVersion: GROUP_TAGS_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    data: getCurrentExportData()
+  };
+}
+
+function getTimestampForFilename() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
+function applyGroupTagsData(nextData) {
+  destroyAllSortables();
+  customGroupsData = nextData;
+  clampActiveIndices();
+  dataSnapshot = null;
+  isEditMode = false;
+  dom.app.classList.remove('edit-mode');
+  renderPrimaryTabs();
+  renderSecondaryTabs();
+  syncColorsToParent();
+  syncTranslationsToParent();
+}
+
+function saveGroupTagsData(nextData) {
+  return new Promise(resolve => {
+    chrome.storage.local.set({ groupTagsUserData: nextData }, () => resolve());
+  });
+}
+
+function showInfoModal(title, message) {
+  showModal(`
+    <h3>${escapeHtml(title)}</h3>
+    <div style="color:#d1d5db;font-size:12px;line-height:1.6;white-space:pre-line;">${escapeHtml(message)}</div>
+    <div class="modal-buttons">
+      <button class="modal-btn primary" id="modal-info-confirm">确定</button>
+    </div>
+  `);
+  document.getElementById('modal-info-confirm').onclick = () => hideModal();
+}
+
+function promptImportMode() {
+  return new Promise(resolve => {
+    showModal(`
+      <h3>选择导入方式</h3>
+      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">
+        覆盖：用文件内容替换当前数据，再补齐默认库新增项。<br>
+        合并：保留当前数据，只补充文件中的缺失项。
+      </div>
+      <div class="modal-buttons">
+        <button class="modal-btn" id="modal-import-cancel">取消</button>
+        <button class="modal-btn" id="modal-import-merge">合并</button>
+        <button class="modal-btn primary" id="modal-import-overwrite">覆盖</button>
+      </div>
+    `);
+
+    document.getElementById('modal-import-cancel').onclick = () => {
+      hideModal();
+      resolve(null);
+    };
+    document.getElementById('modal-import-merge').onclick = () => {
+      hideModal();
+      resolve('merge');
+    };
+    document.getElementById('modal-import-overwrite').onclick = () => {
+      hideModal();
+      resolve('overwrite');
+    };
+  });
+}
+
+async function readJsonFile(file) {
+  const text = await file.text();
+  return JSON.parse(text);
+}
+
+function buildImportSummaryMessage(mode, summary, normalizationSummary, defaultSummary) {
+  const lines = [];
+
+  if (mode === 'overwrite') {
+    lines.push('已用导入文件覆盖当前数据。');
+  } else {
+    lines.push('已将导入文件合并到当前数据。');
+    lines.push(`新增分类 ${summary.addedCategories} 个，分组 ${summary.addedGroups} 个，标签 ${summary.addedTags} 个。`);
+  }
+
+  if (defaultSummary.addedCategories || defaultSummary.addedGroups || defaultSummary.addedTags) {
+    lines.push(`默认库补增：分类 ${defaultSummary.addedCategories} 个，分组 ${defaultSummary.addedGroups} 个，标签 ${defaultSummary.addedTags} 个。`);
+  }
+
+  lines.push(`跳过重复或无效项 ${countSummarySkipped(summary) + countSummarySkipped(normalizationSummary)} 个。`);
+  return lines.join('\n');
+}
+
+async function exportGroupTagsData() {
+  if (!customGroupsData?.categories) {
+    showInfoModal('导出失败', '当前没有可导出的分组标签数据。');
+    return;
+  }
+
+  const payload = buildExportPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `group-tags-${getTimestampForFilename()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importGroupTagsData(file) {
+  if (!file) return;
+
+  if (isEditMode) {
+    showInfoModal('无法导入', '请先保存或取消当前编辑，再执行导入。');
+    return;
+  }
+
+  try {
+    const payload = await readJsonFile(file);
+    const importMode = await promptImportMode();
+    if (!importMode) return;
+
+    const rawData = extractImportData(payload);
+    const normalizedImport = normalizeGroupTagsData(rawData);
+    let nextData;
+    let importSummary = createMergeSummary();
+
+    if (importMode === 'overwrite') {
+      nextData = cloneData(normalizedImport.data);
+    } else {
+      const mergedImport = mergeGroupTagsData(getCurrentExportData(), normalizedImport.data);
+      nextData = mergedImport.data;
+      importSummary = mergedImport.summary;
+    }
+
+    const mergedWithDefault = mergeGroupTagsData(nextData, defaultGroupsData);
+    nextData = mergedWithDefault.data;
+
+    await saveGroupTagsData(nextData);
+    applyGroupTagsData(nextData);
+
+    showInfoModal(
+      '导入完成',
+      buildImportSummaryMessage(importMode, importSummary, normalizedImport.summary, mergedWithDefault.summary)
+    );
+  } catch (err) {
+    console.error('[GroupTags] Failed to import data:', err);
+    showInfoModal('导入失败', err?.message || '无法解析导入文件，请确认 JSON 格式正确。');
+  } finally {
+    dom.importFileInput.value = '';
+  }
 }
 
 // ========== 分类操作 ==========
@@ -1122,6 +1509,7 @@ async function init() {
     const jsonUrl = chrome.runtime.getURL('data/default_group_tags.json');
     const res = await fetch(jsonUrl);
     const defaultData = await res.json();
+    defaultGroupsData = normalizeGroupTagsData(defaultData).data;
     
     // 2. 从 chrome.storage.local 加载用户自定义数据
     const stored = await new Promise(resolve => {
@@ -1130,18 +1518,10 @@ async function init() {
     
     if (stored && stored.categories) {
       // 合并预设与用户数据：用户数据优先，预设仅补增
-      const userIds = new Set(stored.categories.map(c => c.id));
-      defaultData.categories.forEach(defaultCat => {
-        if (!userIds.has(defaultCat.id)) {
-          // 预设中新增的分类，追加到末尾
-          stored.categories.push(defaultCat);
-        }
-        // 已存在的分类：如果用户修改过（_modified），以用户版本为准
-        // 否则可以选择更新，但目前简单处理：以用户数据为准
-      });
-      customGroupsData = stored;
+      const normalizedStored = normalizeGroupTagsData(stored).data;
+      customGroupsData = mergeGroupTagsData(normalizedStored, defaultGroupsData).data;
     } else {
-      customGroupsData = defaultData;
+      customGroupsData = cloneData(defaultGroupsData);
     }
     
     // 3. 渲染 UI 与事件绑定
@@ -1187,8 +1567,14 @@ dom.colorPicker.addEventListener('input', (e) => {
 
 // Edit / Save / Cancel
 dom.btnEdit.addEventListener('click', () => enterEditMode());
+dom.btnExport.addEventListener('click', () => exportGroupTagsData());
+dom.btnImport.addEventListener('click', () => dom.importFileInput.click());
 dom.btnSave.addEventListener('click', () => exitEditMode(true));
 dom.btnCancel.addEventListener('click', () => exitEditMode(false));
+dom.importFileInput.addEventListener('change', (e) => {
+  const [file] = e.target.files || [];
+  importGroupTagsData(file);
+});
 
 // + 按钮（编辑模式下才可用）
 dom.btnAddCategory.addEventListener('click', () => {

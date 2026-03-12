@@ -61,6 +61,10 @@
   });
 
   // 3) inject manager panel (runs in Content Script context)
+  // 创建一个全局 Promise，让 GroupTags 能等待主面板位置恢复完毕后再执行吸附
+  let _resolveWMReady;
+  window.__wmPositionReady = new Promise(resolve => { _resolveWMReady = resolve; });
+
   function injectManagerPanel() {
     // 避免重复注入
     if (document.getElementById('wildcard-manager-container')) return;
@@ -221,6 +225,8 @@
       // Allow saving state only after we are sure initialization is done
       // and initial layout shifts have settled.
       requestAnimationFrame(() => {
+        // 此时浏览器已经计算了至少一次布局，主面板的 getBoundingClientRect() 现在能返回正确值
+        if (_resolveWMReady) _resolveWMReady();
         setTimeout(() => {
           isInitializing = false;
         }, 300);
@@ -624,11 +630,24 @@
         if (state.height) container.style.height = state.height + 'px';
         if (state.visible) container.style.display = 'flex';
 
-        // 恢复吸附状态：如果处于吸附状态，以主面板为主直接吸附，跳过独自的安全坐标强制限制（防止互相推挤位移）
+        // 恢复吸附状态：必须等主面板位置完全恢复后再执行吸附，否则会读到错误的初始坐标
         if (state.docked && getWMContainer()) {
-          dockState = state.docked;
-          applyDockedPosition();
-          startWMTracking();
+          // 先设置一个临时的 fallback 位置（使用 storage 中保存的原始坐标）
+          if (typeof state.left === 'number') {
+            container.style.left = state.left + 'px';
+            container.style.right = 'auto';
+          }
+          if (typeof state.top === 'number') {
+            container.style.top = state.top + 'px';
+          }
+          // 等待主面板就位后，再等一帧确保布局完成，然后精确吸附
+          window.__wmPositionReady.then(() => {
+            requestAnimationFrame(() => {
+              dockState = state.docked;
+              applyDockedPosition();
+              startWMTracking();
+            });
+          });
         } else {
           if (typeof state.left === 'number') {
             container.style.left = Math.max(0, Math.min(state.left, window.innerWidth - 50)) + 'px';
