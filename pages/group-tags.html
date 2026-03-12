@@ -112,6 +112,33 @@
       border-color: #6366f1;
     }
 
+    /* Tab 上的使用中标签计数器 (矩形幽灵设计) */
+    .usage-badge {
+      display: none;
+      margin-left: 6px;
+      padding: 0 4px;
+      height: 14px;
+      border-radius: 3px; /* 矩形微小圆角 */
+      background: rgba(16, 185, 129, 0.2); /* 稍微增加由于直角带来的内敛感而丢失的色彩权重 */
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      font-size: 9px;
+      font-weight: 600;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      transform: translateY(-0.5px);
+    }
+    .usage-badge.has-usage {
+      display: inline-flex;
+    }
+    /* 处于激活状态的蓝色底色 Tab 上的角标变体，避免颜色冲突 */
+    .tab-btn.active .usage-badge {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+    }
+
     .secondary-tabs .tab-btn {
       padding: calc(var(--density-tab-pad-v) - 1px) calc(var(--density-tab-pad-h) - 2px);
       font-size: calc(var(--density-font-tab) - 1px);

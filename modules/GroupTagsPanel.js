@@ -524,9 +524,33 @@ function renderPrimaryTabs() {
   dom.primaryTabs.innerHTML = '';
   
   customGroupsData.categories.forEach((cat, index) => {
+    // 统计当前大分类下所有 group 中正被使用的 tags 数量
+    let usageCount = 0;
+    if (cat.groups) {
+      cat.groups.forEach(g => {
+        if (g.tags) {
+          g.tags.forEach(t => {
+            if (activeTagsContext.includes(t.en)) usageCount++;
+          });
+        }
+      });
+    }
+
     const btn = document.createElement('button');
     btn.className = `tab-btn ${index === activeCategoryIndex ? 'active' : ''}`;
-    btn.textContent = cat.name;
+    
+    // 构建带徽章的文本内容
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = cat.name;
+    btn.appendChild(titleSpan);
+
+    if (usageCount > 0) {
+      const badgeSpan = document.createElement('span');
+      badgeSpan.className = 'usage-badge has-usage';
+      badgeSpan.textContent = usageCount > 99 ? '99+' : usageCount;
+      btn.appendChild(badgeSpan);
+    }
+
     btn.onclick = () => {
       if (index === activeCategoryIndex) return; // 已激活则跳过，避免打断双击
       activeCategoryIndex = index;
@@ -551,7 +575,7 @@ function renderPrimaryTabs() {
         const input = document.createElement('input');
         input.className = 'inline-rename-input';
         input.value = cat.name;
-        btn.textContent = '';
+        btn.innerHTML = ''; // 清除 title 和 badge
         btn.appendChild(input);
         input.focus();
         input.select();
@@ -594,9 +618,29 @@ function renderSecondaryTabs() {
   if (!currentCategory || !currentCategory.groups) return;
   
   currentCategory.groups.forEach((grp, index) => {
+    // 统计当前分组正被使用的 tags 数量
+    let usageCount = 0;
+    if (grp.tags) {
+      grp.tags.forEach(t => {
+        if (activeTagsContext.includes(t.en)) usageCount++;
+      });
+    }
+
     const btn = document.createElement('button');
     btn.className = `tab-btn ${index === activeGroupIndex ? 'active' : ''}`;
-    btn.textContent = grp.name;
+    
+    // 构建带徽章的文本内容
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = grp.name;
+    btn.appendChild(titleSpan);
+
+    if (usageCount > 0) {
+      const badgeSpan = document.createElement('span');
+      badgeSpan.className = 'usage-badge has-usage';
+      badgeSpan.textContent = usageCount > 99 ? '99+' : usageCount;
+      btn.appendChild(badgeSpan);
+    }
+
     btn.onclick = () => {
       if (index === activeGroupIndex) return; // 已激活则跳过，避免打断双击
       activeGroupIndex = index;
@@ -618,7 +662,7 @@ function renderSecondaryTabs() {
         const input = document.createElement('input');
         input.className = 'inline-rename-input';
         input.value = grp.name;
-        btn.textContent = '';
+        btn.innerHTML = ''; // 清除 title 和 badge
         btn.appendChild(input);
         input.focus();
         input.select();
@@ -824,6 +868,12 @@ window.addEventListener('message', (e) => {
     }
 
     renderTagsGrid();
+    // 根据最新同步的 active tags 更新顶部 Tab 栏上的数字角标
+    // 如果处于编辑模式下正在双击输入改名，强制刷新可能会打断焦点，所以避开
+    if (!isEditMode) {
+      renderPrimaryTabs();
+      renderSecondaryTabs();
+    }
   }
 });
 
