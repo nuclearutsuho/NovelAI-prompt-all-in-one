@@ -125,6 +125,168 @@ const dom = {
   btnAddGroup: document.getElementById('btn-add-group')
 };
 
+// ========== 拖拽排序 ==========
+let sortableRefreshFrame = null;
+const sortableInstances = {
+  primary: null,
+  secondary: null,
+  tags: null
+};
+
+function destroySortableInstance(key) {
+  const instance = sortableInstances[key];
+  if (!instance) return;
+  try {
+    instance.destroy();
+  } catch (err) {
+    console.warn(`[GroupTags] Failed to destroy ${key} sortable:`, err);
+  }
+  sortableInstances[key] = null;
+}
+
+function destroyAllSortables() {
+  if (sortableRefreshFrame !== null) {
+    cancelAnimationFrame(sortableRefreshFrame);
+    sortableRefreshFrame = null;
+  }
+  destroySortableInstance('primary');
+  destroySortableInstance('secondary');
+  destroySortableInstance('tags');
+}
+
+function moveArrayItem(list, oldIndex, newIndex) {
+  if (!Array.isArray(list)) return null;
+  if (oldIndex === newIndex) return list[oldIndex] || null;
+  if (oldIndex < 0 || newIndex < 0 || oldIndex >= list.length || newIndex >= list.length) return null;
+  const [item] = list.splice(oldIndex, 1);
+  list.splice(newIndex, 0, item);
+  return item || null;
+}
+
+function remapActiveIndex(activeIndex, oldIndex, newIndex) {
+  // 拖拽后保持“激活对象”不变，只修正它所在的新下标
+  if (oldIndex === newIndex) return activeIndex;
+  if (activeIndex === oldIndex) return newIndex;
+  if (oldIndex < newIndex && activeIndex > oldIndex && activeIndex <= newIndex) return activeIndex - 1;
+  if (oldIndex > newIndex && activeIndex >= newIndex && activeIndex < oldIndex) return activeIndex + 1;
+  return activeIndex;
+}
+
+function getSortableIndices(evt) {
+  return {
+    oldIndex: evt.oldDraggableIndex ?? evt.oldIndex,
+    newIndex: evt.newDraggableIndex ?? evt.newIndex
+  };
+}
+
+function createCommonSortableOptions() {
+  // 过滤交互控件，避免重命名输入框和删除按钮被误判为拖拽起点
+  return {
+    animation: 150,
+    fallbackTolerance: 4,
+    preventOnFilter: false,
+    filter: '.add-tab-btn, .inline-rename-input, .tab-inline-delete, .card-delete-badge'
+  };
+}
+
+function initPrimaryTabsSortable() {
+  destroySortableInstance('primary');
+  if (!isEditMode || typeof Sortable === 'undefined') return;
+  if (!dom.primaryTabs || !customGroupsData?.categories?.length) return;
+
+  sortableInstances.primary = new Sortable(dom.primaryTabs, {
+    ...createCommonSortableOptions(),
+    draggable: '.tab-btn:not(.add-tab-btn)',
+    onEnd(evt) {
+      const { oldIndex, newIndex } = getSortableIndices(evt);
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+
+      const movedCategory = moveArrayItem(customGroupsData.categories, oldIndex, newIndex);
+      if (!movedCategory) return;
+
+      movedCategory._modified = true;
+      activeCategoryIndex = remapActiveIndex(activeCategoryIndex, oldIndex, newIndex);
+      renderPrimaryTabs();
+      renderSecondaryTabs();
+    }
+  });
+}
+
+function initSecondaryTabsSortable() {
+  destroySortableInstance('secondary');
+  if (!isEditMode || typeof Sortable === 'undefined') return;
+
+  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
+  if (!dom.secondaryTabs || !currentCategory?.groups?.length) return;
+
+  sortableInstances.secondary = new Sortable(dom.secondaryTabs, {
+    ...createCommonSortableOptions(),
+    draggable: '.tab-btn:not(.add-tab-btn)',
+    onEnd(evt) {
+      const { oldIndex, newIndex } = getSortableIndices(evt);
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+
+      const movedGroup = moveArrayItem(currentCategory.groups, oldIndex, newIndex);
+      if (!movedGroup) return;
+
+      movedGroup._modified = true;
+      currentCategory._modified = true;
+      activeGroupIndex = remapActiveIndex(activeGroupIndex, oldIndex, newIndex);
+      renderSecondaryTabs();
+    }
+  });
+}
+
+function initTagsGridSortable() {
+  destroySortableInstance('tags');
+  if (!isEditMode || typeof Sortable === 'undefined') return;
+
+  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
+  const currentGroup = currentCategory?.groups?.[activeGroupIndex];
+  if (!dom.tagsGrid || !currentGroup?.tags?.length) return;
+
+  sortableInstances.tags = new Sortable(dom.tagsGrid, {
+    ...createCommonSortableOptions(),
+    draggable: '.tag-card',
+    onEnd(evt) {
+      const { oldIndex, newIndex } = getSortableIndices(evt);
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+
+      const movedTag = moveArrayItem(currentGroup.tags, oldIndex, newIndex);
+      if (!movedTag) return;
+
+      currentGroup._modified = true;
+      currentCategory._modified = true;
+      renderTagsGrid();
+    }
+  });
+}
+
+function refreshSortables() {
+  if (!isEditMode) {
+    destroyAllSortables();
+    return;
+  }
+
+  if (typeof Sortable === 'undefined') {
+    console.warn('[GroupTags] Sortable.js 未加载，跳过拖拽初始化');
+    return;
+  }
+
+  initPrimaryTabsSortable();
+  initSecondaryTabsSortable();
+  initTagsGridSortable();
+}
+
+function scheduleSortableRefresh() {
+  // 统一合并到下一帧重建，避免一次交互里反复销毁/创建实例
+  if (sortableRefreshFrame !== null) return;
+  sortableRefreshFrame = requestAnimationFrame(() => {
+    sortableRefreshFrame = null;
+    refreshSortables();
+  });
+}
+
 // ========== 弹窗工具 ==========
 function showModal(html) {
   dom.modalDialog.innerHTML = html;
@@ -155,6 +317,7 @@ function enterEditMode() {
 }
 
 function exitEditMode(save) {
+  destroyAllSortables();
   if (save) {
     // 保存到 chrome.storage.local
     chrome.storage.local.set({ groupTagsUserData: customGroupsData }, () => {
@@ -518,7 +681,10 @@ function deleteTag(tagIndex) {
 
 // ========== 渲染函数 ==========
 function renderPrimaryTabs() {
-  if (!customGroupsData || !customGroupsData.categories) return;
+  if (!customGroupsData || !customGroupsData.categories) {
+    scheduleSortableRefresh();
+    return;
+  }
   
   const addBtn = dom.primaryTabs.querySelector('#btn-add-category');
   dom.primaryTabs.innerHTML = '';
@@ -606,16 +772,23 @@ function renderPrimaryTabs() {
     dom.primaryTabs.appendChild(btn);
   });
   if (addBtn) dom.primaryTabs.appendChild(addBtn);
+  scheduleSortableRefresh();
 }
 
 function renderSecondaryTabs() {
-  if (!customGroupsData || !customGroupsData.categories.length) return;
+  if (!customGroupsData || !customGroupsData.categories.length) {
+    scheduleSortableRefresh();
+    return;
+  }
   
   const addBtn = dom.secondaryTabs.querySelector('#btn-add-group');
   dom.secondaryTabs.innerHTML = '';
   
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory || !currentCategory.groups) return;
+  if (!currentCategory || !currentCategory.groups) {
+    scheduleSortableRefresh();
+    return;
+  }
   
   currentCategory.groups.forEach((grp, index) => {
     // 统计当前分组正被使用的 tags 数量
@@ -696,17 +869,27 @@ function renderSecondaryTabs() {
   if (addBtn) dom.secondaryTabs.appendChild(addBtn);
   
   renderTagsGrid();
+  scheduleSortableRefresh();
 }
 
 function renderTagsGrid() {
-  if (!customGroupsData || !customGroupsData.categories.length) return;
+  if (!customGroupsData || !customGroupsData.categories.length) {
+    scheduleSortableRefresh();
+    return;
+  }
   dom.tagsGrid.innerHTML = '';
   
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory || !currentCategory.groups.length) return;
+  if (!currentCategory || !currentCategory.groups.length) {
+    scheduleSortableRefresh();
+    return;
+  }
   
   const currentGroup = currentCategory.groups[activeGroupIndex];
-  if (!currentGroup) return;
+  if (!currentGroup) {
+    scheduleSortableRefresh();
+    return;
+  }
 
   // 更新底部的颜色选择器
   if (dom.colorPicker) {
@@ -840,6 +1023,8 @@ function renderTagsGrid() {
 
     dom.tagsGrid.appendChild(card);
   });
+
+  scheduleSortableRefresh();
 
   // 移除之前充当占位的“+”卡片，因为现在我们有底部输入面板了
 }
