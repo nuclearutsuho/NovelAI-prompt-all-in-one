@@ -1,7 +1,8 @@
 // ========== 核心数据与状态 (Phase 1) ==========
-let customGroupsData = null; // Memory Tree: Categories -> Groups -> Tags
+let customGroupsData = null;
 let activeCategoryIndex = 0;
 let activeGroupIndex = 0;
+let autocompleteDict = []; // 全局字典缓存
 let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
 
@@ -294,62 +295,214 @@ function deleteGroup(index) {
   };
 }
 
-// ========== 标签操作 ==========
-function addTag() {
-  const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory) return;
-  const currentGroup = currentCategory.groups[activeGroupIndex];
-  if (!currentGroup) return;
+// ========== 底部内联添加面板 (Plan A) ==========
+function setupInlineAddPanel() {
+  const enInput = document.getElementById('inline-tag-en');
+  const zhInput = document.getElementById('inline-tag-zh');
+  const wrapper = document.getElementById('inline-autocomplete-wrapper');
+  const dropdown = document.getElementById('inline-autocomplete-dropdown');
+  const resizer = document.getElementById('inline-autocomplete-resizer');
+  const submitBtn = document.getElementById('inline-add-submit');
 
-  showModal(`
-    <h3>添加标签</h3>
-    <input class="modal-input" id="modal-tag-en" placeholder="英文标签 (如 sunny)" />
-    <input class="modal-input" id="modal-tag-zh" placeholder="中文翻译 (可选，自动查字典)" />
-    <div class="modal-buttons">
-      <button class="modal-btn" id="modal-tag-cancel">取消</button>
-      <button class="modal-btn primary" id="modal-tag-confirm">添加</button>
-    </div>
-  `);
-  document.getElementById('modal-tag-cancel').onclick = () => hideModal();
-  const enInput = document.getElementById('modal-tag-en');
-  const zhInput = document.getElementById('modal-tag-zh');
+  let selectedIndex = -1;
+  let currentMatches = [];
 
-  // 英文输入变化时自动查字典翻译
-  enInput.addEventListener('blur', () => {
-    if (zhInput.value.trim()) return; // 用户已手动输入，不覆盖
-    const en = enInput.value.trim();
-    if (!en) return;
-    // 通过 postMessage 请求字典查询（异步，结果可能不即时）
-    // 这里用本地简单匹配：检查 customGroupsData 中是否已有该 tag 的翻译
-    // 更完整的方案可以接入 autocomplete 字典，目前先让用户手动填写
+  // 初始化拉拽调高
+  let startY = 0;
+  let startHeight = 0;
+
+  // 读取可能的已保存高度
+  chrome.storage.local.get(['groupTagsAutocompleteHeight'], (data) => {
+    if (data.groupTagsAutocompleteHeight) {
+      wrapper.style.height = data.groupTagsAutocompleteHeight;
+    }
   });
 
-  document.getElementById('modal-tag-confirm').onclick = () => {
-    const en = enInput.value.trim();
-    if (!en) return;
-    const zh = zhInput.value.trim() || en; // 没输翻译就用英文
-    // 检查重复
-    if (currentGroup.tags.some(t => t.en === en)) {
-      enInput.style.borderColor = '#e74c3c';
-      enInput.placeholder = '该标签已存在！';
+  const onMouseMove = (e) => {
+    // 鼠标往上拖动（Y减小），拉长容器；反之缩短 (弹窗在上方，bottom固定)
+    const dy = startY - e.clientY; 
+    let newHeight = Math.max(100, startHeight + dy);
+    wrapper.style.height = `${newHeight}px`;
+  };
+
+  const onMouseUp = () => {
+    document.body.style.cursor = "";
+    resizer.classList.remove('active');
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+    chrome.storage.local.set({
+      groupTagsAutocompleteHeight: wrapper.style.height,
+    });
+  };
+
+  resizer.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // Prevent blur on input
+    startY = e.clientY;
+    startHeight = wrapper.getBoundingClientRect().height;
+    document.body.style.cursor = "row-resize";
+    resizer.classList.add('active');
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  });
+
+  const closeDropdown = () => {
+    wrapper.style.display = 'none';
+    selectedIndex = -1;
+  };
+
+  const renderDropdown = (matches, query) => {
+    if (matches.length === 0) {
+      closeDropdown();
       return;
     }
+    dropdown.innerHTML = '';
+    currentMatches = matches;
+    const formatCount = (n) => {
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+      return n + "";
+    };
+
+    matches.forEach((m, idx) => {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item';
+      if (idx === selectedIndex) item.classList.add('selected');
+      
+      const highlight = (text) => {
+        if (!query) return text;
+        return text.replace(new RegExp(query, 'gi'), match => `<strong>${match}</strong>`);
+      };
+      
+      item.innerHTML = `
+        <span class="ac-en" style="color: ${m.color}">${highlight(m.word)}</span>
+        <span class="ac-zh"><span class="autocomplete-trans">${m.zhCN ? highlight(m.zhCN) : ''}</span> <span class="autocomplete-count">(${formatCount(m.pop)})</span></span>
+      `;
+      
+      item.onclick = () => {
+        // 用户期望：只填充输入框，并将词汇中的下划线去掉换成空格，随后聚焦中文框
+        enInput.value = m.word.replace(/_/g, ' ');
+        if (m.zhCN) zhInput.value = m.zhCN;
+        closeDropdown();
+        zhInput.focus();
+      };
+      dropdown.appendChild(item);
+    });
+    // 使用绝对定位的底部拉起
+    wrapper.style.display = 'flex';
+  };
+
+  enInput.addEventListener('input', () => {
+    // 允许输入下划线，但在匹配逻辑里，将输入的下划线视为空格（与原版字典兼容）
+    let valQuery = enInput.value.trim().toLowerCase();
+    if (!valQuery) {
+      closeDropdown();
+      return;
+    }
+    const valMatch = valQuery.replace(/_/g, ' '); // 将搜索词里的下划线转为空格，对应字典格式
+    
+    // wildcards-for-novelai-diffusion 的字典中的 word 是带下划线的还是带空格的？原版 Danbooru 是下划线。
+    // 但是在 Autocomplete.js 中，字典可能被转换了，或者用户打字去掉了下划线。
+    const matches = autocompleteDict.filter(item => 
+      item.search.includes(valMatch) || item.word.toLowerCase().includes(valQuery)
+    ).slice(0, 50); // 向主页看齐，最大显示50条
+    
+    selectedIndex = -1;
+    renderDropdown(matches, valQuery); // 保持高亮原输入值
+  });
+
+  enInput.addEventListener('keydown', (e) => {
+    if (wrapper.style.display === 'flex') {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % currentMatches.length;
+        renderDropdown(currentMatches, enInput.value.trim());
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex - 1 + currentMatches.length) % currentMatches.length;
+        renderDropdown(currentMatches, enInput.value.trim());
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedIndex >= 0 && currentMatches[selectedIndex]) {
+          const m = currentMatches[selectedIndex];
+          enInput.value = m.word.replace(/_/g, ' ');
+          if (m.zhCN) zhInput.value = m.zhCN;
+          closeDropdown();
+          // 如果用户用方向键选中，只做填充并聚焦中文框，不自动提交
+          zhInput.focus();
+        } else {
+          closeDropdown();
+          if (!zhInput.value.trim()) zhInput.focus();
+          else submitTag();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeDropdown();
+      }
+    } else {
+      if (e.key === 'Enter') {
+        if (!zhInput.value.trim() && enInput.value.trim()) zhInput.focus();
+        else submitTag();
+      }
+    }
+    
+    // 从当前滚动位置让选中项可见
+    setTimeout(() => {
+      if (wrapper.style.display === 'flex') {
+        const activeItem = dropdown.querySelector('.selected');
+        if (activeItem) {
+          activeItem.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    }, 10);
+  });
+
+  zhInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitTag();
+  });
+
+  submitBtn.onclick = submitTag;
+
+  document.addEventListener('mousedown', (e) => {
+    if (!wrapper.contains(e.target) && e.target !== enInput) closeDropdown();
+  });
+
+  function submitTag() {
+    const en = enInput.value.trim();
+    if (!en) return;
+    const zh = zhInput.value.trim() || en; 
+    
+    const currentCategory = customGroupsData.categories[activeCategoryIndex];
+    if (!currentCategory) return;
+    const currentGroup = currentCategory.groups[activeGroupIndex];
+    if (!currentGroup) return;
+
+    if (currentGroup.tags.some(t => t.en === en)) {
+      enInput.style.borderColor = '#e74c3c';
+      enInput.value = '';
+      enInput.placeholder = '该标签已存在！';
+      setTimeout(() => {
+        enInput.style.borderColor = '';
+        enInput.placeholder = 'Input English Tag (e.g. sunny)';
+      }, 2000);
+      return;
+    }
+
     currentGroup.tags.push({ en, zh });
     currentGroup._modified = true;
     currentCategory._modified = true;
-    hideModal();
+    
+    // 清空重置输入框，连发模式
+    enInput.value = '';
+    zhInput.value = '';
+    enInput.focus();
     renderTagsGrid();
-  };
-
-  enInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      if (!zhInput.value.trim()) zhInput.focus();
-      else document.getElementById('modal-tag-confirm').click();
-    }
-  });
-  zhInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('modal-tag-confirm').click();
-  });
+    
+    // 让滚动条滑到底部
+    setTimeout(() => {
+      const gridContainer = document.querySelector('.tags-grid-container');
+      if (gridContainer) gridContainer.scrollTop = gridContainer.scrollHeight;
+    }, 50);
+  }
 }
 
 function deleteTag(tagIndex) {
@@ -555,6 +708,7 @@ function renderTagsGrid() {
       zhPart.ondblclick = (e) => {
         e.stopPropagation();
         
+        // 锁定原始宽度，防止撑大卡片
         const origWidth = zhPart.getBoundingClientRect().width;
         zhPart.style.width = origWidth + 'px';
         zhPart.style.boxSizing = 'border-box';
@@ -588,6 +742,45 @@ function renderTagsGrid() {
     const enPart = document.createElement('div');
     enPart.className = 'tag-en-part';
     enPart.textContent = t.en;
+    
+    // 编辑模式：双方皆可双击编辑
+    if (isEditMode) {
+      enPart.title = '双击编辑英文';
+      enPart.style.cursor = 'text';
+      enPart.ondblclick = (e) => {
+        e.stopPropagation();
+        
+        // 同样锁定原始宽度
+        const origWidth = enPart.getBoundingClientRect().width;
+        enPart.style.width = origWidth + 'px';
+        enPart.style.boxSizing = 'border-box';
+        enPart.style.paddingLeft = '0';
+        enPart.style.paddingRight = '0';
+
+        const input = document.createElement('input');
+        input.className = 'inline-rename-input';
+        input.value = t.en;
+        enPart.textContent = '';
+        enPart.appendChild(input);
+        input.focus();
+        input.select();
+        const commit = () => {
+          const newEn = input.value.trim();
+          // 防止重名或为空
+          if (newEn && newEn !== t.en && !currentGroup.tags.some(x => x.en === newEn)) {
+            t.en = newEn;
+            currentGroup._modified = true;
+            currentCategory._modified = true;
+          }
+          renderTagsGrid();
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') commit();
+          if (ev.key === 'Escape') renderTagsGrid();
+        });
+      };
+    }
 
     card.appendChild(zhPart);
     card.appendChild(enPart);
@@ -604,35 +797,7 @@ function renderTagsGrid() {
     dom.tagsGrid.appendChild(card);
   });
 
-  // 编辑模式：末尾添加 "+" 占位卡
-  if (isEditMode) {
-    const addCard = document.createElement('div');
-    addCard.className = 'tag-card tag-card-add';
-    addCard.title = '添加标签';
-    addCard.onclick = () => addTag();
-
-    // 结构与正常卡片完全一致的隐形骨架（确保无论是否换行，高度严格一致）
-    const dummyZh = document.createElement('div');
-    dummyZh.className = 'tag-zh-part';
-    dummyZh.style.visibility = 'hidden';
-    dummyZh.textContent = '增';
-    
-    const dummyEn = document.createElement('div');
-    dummyEn.className = 'tag-en-part';
-    dummyEn.style.visibility = 'hidden';
-    dummyEn.textContent = 'Add';
-    
-    addCard.appendChild(dummyZh);
-    addCard.appendChild(dummyEn);
-
-    // 绝对居中的加号图标
-    const iconOverlay = document.createElement('div');
-    iconOverlay.className = 'add-icon-overlay';
-    iconOverlay.textContent = '+';
-    addCard.appendChild(iconOverlay);
-
-    dom.tagsGrid.appendChild(addCard);
-  }
+  // 移除之前充当占位的“+”卡片，因为现在我们有底部输入面板了
 }
 
 // ========== 监听来自父窗口的消息（标签同步等） ==========
@@ -662,10 +827,63 @@ window.addEventListener('message', (e) => {
   }
 });
 
+// ========== 字典加载 ==========
+const getColor = (code) => {
+  const colorMap = { 0: "lightblue", 1: "indianred", 3: "violet", 4: "lightgreen", 5: "orange", 6: "red", 7: "lightblue", 8: "gold", 9: "gold", 10: "violet", 11: "lightgreen", 12: "tomato", 14: "whitesmoke", 15: "seagreen" };
+  return colorMap[code] || "lightblue";
+};
+
+async function loadDictionary() {
+  try {
+    const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
+    const res = await fetch(csvUrl);
+    const text = await res.text();
+    autocompleteDict = text.split(/\r?\n/)
+      .filter(Boolean)
+      .map(line => {
+        const row = [];
+        let currentField = '';
+        let inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (inQuote && line[i + 1] === '"') { currentField += '"'; i++; } 
+            else { inQuote = !inQuote; }
+          } else if (char === ',' && !inQuote) {
+            row.push(currentField);
+            currentField = '';
+          } else {
+            currentField += char;
+          }
+        }
+        row.push(currentField);
+        let [word, colorCode, popCount, aliases, zhCN] = row;
+        const parsedZhCN = zhCN ? zhCN.trim() : '';
+        const parsedWord = word ? word.trim() : '';
+        const parsedAliases = aliases ? aliases.replace(/"/g, '') : '';
+        
+        return {
+          word: parsedWord,
+          zhCN: parsedZhCN,
+          color: getColor(colorCode ? colorCode.trim() : '0'),
+          pop: popCount ? parseInt(popCount) : 0,
+          search: (parsedWord + " " + parsedAliases + " " + parsedZhCN).toLowerCase().replace(/_/g, ' ')
+        };
+      }).filter(item => item.word);
+    
+    // 按热度排序
+    autocompleteDict.sort((a, b) => b.pop - a.pop);
+    console.log('[GroupTags] Dictionary loaded, count:', autocompleteDict.length);
+  } catch (err) {
+    console.error('[GroupTags] Failed to load dictionary:', err);
+  }
+}
+
 // ========== 初始化 ==========
 async function init() {
   try {
-    // 1. 加载预设标签数据
+    // 加载字典
+    await loadDictionary();
     const jsonUrl = chrome.runtime.getURL('data/default_group_tags.json');
     const res = await fetch(jsonUrl);
     const defaultData = await res.json();
@@ -691,7 +909,8 @@ async function init() {
       customGroupsData = defaultData;
     }
     
-    // 3. 渲染 UI
+    // 3. 渲染 UI 与事件绑定
+    setupInlineAddPanel();
     renderPrimaryTabs();
     renderSecondaryTabs();
     

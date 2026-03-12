@@ -199,13 +199,14 @@
         if (state.height) container.style.height = state.height + 'px';
 
         if (typeof state.left === 'number') {
-          // Robust boundary check
-          const safeLeft = Math.max(0, Math.min(state.left, window.innerWidth - 50));
+          // 移除过严的 -50 限制，避免主面板因为自身宽大而在边缘刷新后发生强制回缩断裂。
+          // 只要还有一点点漏在屏幕里就可以（即使其大部分在屏幕外）
+          const safeLeft = Math.max(-container.offsetWidth + 20, Math.min(state.left, window.innerWidth - 20));
           container.style.left = safeLeft + 'px';
           container.style.right = 'auto';
         }
         if (typeof state.top === 'number') {
-          const safeTop = Math.max(0, Math.min(state.top, window.innerHeight - 50));
+          const safeTop = Math.max(-container.offsetHeight + 20, Math.min(state.top, window.innerHeight - 20));
           container.style.top = safeTop + 'px';
         }
 
@@ -274,26 +275,26 @@
     container.innerHTML = `
       <div id="group-tags-header" style="
         display: flex; align-items: center; justify-content: space-between;
-        padding: 6px 12px;
+        padding: 6px 10px;
         background: linear-gradient(135deg, #1a3a2e, #1e1e2e);
         border-bottom: 1px solid #4a4a6a;
         cursor: move; user-select: none; flex-shrink: 0;
       ">
-        <span style="color:#e0e0e0; font-size:14px; font-weight:600; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <span style="color:#e0e0e0; font-size:11px; font-weight:600; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
           <span style="color:#10b981;">🏷️</span> Tags Matrix
         </span>
         <div style="display:flex; gap:4px;">
           <button class="gt-min-btn" title="Minimize" style="
-            width:24px; height:24px; border:none; border-radius:4px;
+            width:18px; height:18px; border:none; border-radius:4px;
             background:transparent; color:#888; cursor:pointer;
             display:flex; align-items:center; justify-content:center;
-            font-size:16px; transition:background 0.15s,color 0.15s;
+            font-size:14px; transition:background 0.15s,color 0.15s;
           ">_</button>
           <button class="gt-close-btn" title="Close" style="
-            width:24px; height:24px; border:none; border-radius:4px;
+            width:18px; height:18px; border:none; border-radius:4px;
             background:transparent; color:#888; cursor:pointer;
             display:flex; align-items:center; justify-content:center;
-            font-size:16px; transition:background 0.15s,color 0.15s;
+            font-size:14px; transition:background 0.15s,color 0.15s;
           ">×</button>
         </div>
       </div>
@@ -621,20 +622,21 @@
       if (state) {
         if (state.width) container.style.width = state.width + 'px';
         if (state.height) container.style.height = state.height + 'px';
-        if (typeof state.left === 'number') {
-          container.style.left = Math.max(0, Math.min(state.left, window.innerWidth - 50)) + 'px';
-          container.style.right = 'auto';
-        }
-        if (typeof state.top === 'number') {
-          container.style.top = Math.max(0, Math.min(state.top, window.innerHeight - 50)) + 'px';
-        }
         if (state.visible) container.style.display = 'flex';
 
-        // 恢复吸附状态
+        // 恢复吸附状态：如果处于吸附状态，以主面板为主直接吸附，跳过独自的安全坐标强制限制（防止互相推挤位移）
         if (state.docked && getWMContainer()) {
           dockState = state.docked;
           applyDockedPosition();
           startWMTracking();
+        } else {
+          if (typeof state.left === 'number') {
+            container.style.left = Math.max(0, Math.min(state.left, window.innerWidth - 50)) + 'px';
+            container.style.right = 'auto';
+          }
+          if (typeof state.top === 'number') {
+            container.style.top = Math.max(0, Math.min(state.top, window.innerHeight - 50)) + 'px';
+          }
         }
       }
       requestAnimationFrame(() => { setTimeout(() => { isInitializing = false; }, 300); });

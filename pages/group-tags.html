@@ -359,11 +359,6 @@
 
     /* ========== 编辑模式样式 ========== */
     
-    /* 编辑模式整体提示：顶部出现橙色条纹 */
-    #app.edit-mode .tabs-container {
-      border-bottom: 2px solid #f59e0b;
-    }
-
     /* ── 删除角标基础（仅用于 Tag 卡片，方案2描边圆角正方形） ── */
     .card-delete-badge {
       display: none;
@@ -478,6 +473,18 @@
       box-sizing: border-box;
       text-align: center;
       min-width: 40px;
+      animation: inline-fade-in 0.15s ease-out forwards;
+    }
+
+    @keyframes inline-fade-in {
+      0% {
+        opacity: 0;
+        transform: scale(0.95);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
     }
 
     /* 弹窗 Overlay */
@@ -572,6 +579,150 @@
       border-color: #10b981;
     }
 
+    /* ── Inline Add Panel (Plan A) ── */
+    .inline-add-panel {
+      display: none; /* Only visible in edit mode */
+      background: #181825;
+      border-top: 1px solid #4a4a6a;
+      padding: 8px;
+      flex-shrink: 0;
+      align-items: center;
+      gap: 10px;
+      position: relative; /* For autocomplete dropdown positioning */
+    }
+    .edit-mode .inline-add-panel {
+      display: flex;
+    }
+    
+    .inline-add-input-group {
+      display: flex;
+      flex: 1; /* 占据可用的大部分空间 */
+      gap: 6px;
+    }
+    
+    .inline-add-input-group .inline-input {
+      background: #2a2a3e;
+      color: #e0e0e0;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      padding: calc(var(--density-card-pad-v) + 4px) var(--density-card-pad-h);
+      height: unset;
+      min-width: 0;   /* 覆盖 input 浏览器默认最小宽度限制 */
+      width: 0;       /* 强制使其大小完全由 flex 比例掌控 */
+      font-size: var(--density-font-en);
+      outline: none;
+      transition: border-color 0.2s, padding 0.2s, font-size 0.2s;
+    }
+    .inline-add-input-group #inline-tag-en {
+      flex: 6; /* 英文占 60% 比例空间 */
+    }
+    .inline-add-input-group #inline-tag-zh {
+      flex: 4; /* 中文占 40% 比例空间 */
+    }
+    .inline-add-input-group .inline-input:focus {
+      border-color: #818cf8;
+    }
+
+    .inline-add-btn {
+      flex-shrink: 0;
+      white-space: nowrap;
+      background: #818cf8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: calc(var(--density-card-pad-v) + 4px) calc(var(--density-card-pad-h) * 2);
+      height: unset;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: var(--density-font-zh);
+      transition: background 0.2s, padding 0.2s, font-size 0.2s;
+    }
+    .inline-add-btn:hover {
+      background: #6366f1;
+    }
+
+    /* ── Autocomplete Dropdown (Refactored for upward pop) ── */
+    .autocomplete-wrapper {
+      position: absolute;
+      bottom: calc(100% + 4px); /* Pop UPWARDS from the inline panel */
+      left: 8px;
+      width: calc(100% - 16px); /* Align with panel padding */
+      display: none;
+      flex-direction: column; /* Normal order: Resizer at top, list below */
+      background: #2a2a3e;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      box-shadow: 0 -4px 12px rgba(0,0,0,0.5); /* upward shadow */
+      z-index: 1000;
+      /* default height, can be dragged */
+      height: 60vh; 
+      max-height: calc(100vh - 80px); /* 留出一点边距 */
+      min-height: 100px;
+    }
+    .autocomplete-resizer {
+      height: 6px;
+      background: #3a3a4e;
+      cursor: row-resize;
+      flex-shrink: 0;
+      border-top-left-radius: 4px;
+      border-top-right-radius: 4px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      opacity: 0.8;
+      transition: opacity 0.2s, background 0.2s;
+    }
+    .autocomplete-resizer:hover, .autocomplete-resizer.active {
+      opacity: 1;
+      background: #818cf8;
+    }
+    .autocomplete-resizer::after {
+      content: '';
+      width: 30px;
+      height: 2px;
+      background: #6b7280;
+      border-radius: 1px;
+    }
+    .autocomplete-resizer:hover::after, .autocomplete-resizer.active::after {
+      background: #fff;
+    }
+    
+    .autocomplete-dropdown {
+      flex: 1;
+      overflow-y: auto;
+      display: block; /* let flex child handle its internal layout normally */
+    }
+    .autocomplete-item {
+      padding: calc(var(--density-card-pad-v) + 2px) var(--density-card-pad-h);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      color: #e0e0e0;
+      font-size: var(--density-font-en);
+      border-bottom: 1px solid #3a3a4e;
+    }
+    .autocomplete-item:last-child {
+      border-bottom: none;
+    }
+    .autocomplete-item:hover, .autocomplete-item.selected {
+      background: #4a4a6a;
+    }
+    .autocomplete-item .ac-en {
+      font-weight: bold;
+    }
+    .autocomplete-item .ac-zh {
+      color: #a0a0b0;
+      font-size: 12px;
+    }
+    .autocomplete-item .autocomplete-count {
+      color: #6a6a8a;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .autocomplete-item strong {
+      color: #10b981; /* 高亮匹配的部分 */
+    }
+
   </style>
 </head>
 <body>
@@ -597,6 +748,21 @@
       <div class="tags-grid" id="tags-grid">
         <!-- 动态渲染的卡片将被放在这里 -->
       </div>
+    </div>
+
+    <!-- Inline Add Panel (Visible Only in Edit Mode) -->
+    <div class="inline-add-panel" id="inline-add-panel">
+      <!-- 自动补全下拉框容器固定在面板内 -->
+      <div id="inline-autocomplete-wrapper" class="autocomplete-wrapper">
+        <div id="inline-autocomplete-resizer" class="autocomplete-resizer" title="Drag to resize"></div>
+        <div id="inline-autocomplete-dropdown" class="autocomplete-dropdown"></div>
+      </div>
+      
+      <div class="inline-add-input-group">
+        <input class="inline-input" id="inline-tag-en" placeholder="Input English Tag (e.g. sunny)" autocomplete="off" />
+        <input class="inline-input" id="inline-tag-zh" placeholder="Chinese Translation (Optional)" autocomplete="off" />
+      </div>
+      <button class="inline-add-btn" id="inline-add-submit">Add Tag</button>
     </div>
 
     <!-- Bottom Toolbar (Color Coding & Group Actions) -->
