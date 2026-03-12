@@ -868,6 +868,31 @@ function initUI() {
     }
   });
 
+  // ── 初始化时从持久化存储加载分组翻译 ──
+  chrome.storage.local.get('groupTranslationMap', (data) => {
+    if (data.groupTranslationMap && editor) {
+      editor.groupTranslationMap = data.groupTranslationMap;
+    }
+  });
+
+  // ── 实时监听翻译映射的 storage 变更（GroupTagsPanel 直接写入 storage，无需 bridge 中继） ──
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.groupTranslationMap && changes.groupTranslationMap.newValue) {
+      const newMap = changes.groupTranslationMap.newValue;
+      console.log('[Popup] Translation map updated from storage, count:', Object.keys(newMap).length);
+      if (editor) {
+        editor.groupTranslationMap = newMap;
+        editor.render();
+      }
+      charEditors.forEach(charEdObj => {
+        if (charEdObj && charEdObj.editor) {
+          charEdObj.editor.groupTranslationMap = newMap;
+          charEdObj.editor.render();
+        }
+      });
+    }
+  });
+
   // Character Prompt Add Button
   const btnAddChar = document.getElementById('btn-add-char');
   if (btnAddChar) {
@@ -1993,6 +2018,25 @@ chrome.runtime.onMessage.addListener((msg) => {
     charEditors.forEach(charEdObj => {
       if (charEdObj && charEdObj.editor) {
         charEdObj.editor.groupColorMap = msg.colorMap;
+        charEdObj.editor.render();
+      }
+    });
+  }
+
+  // 接收来自 GroupTags 面板的分组翻译映射，应用到所有 TagEditor 实例
+  if (msg.type === 'SYNC_GROUP_TRANSLATIONS' && msg.translationMap) {
+    // 持久化保存到 storage
+    chrome.storage.local.set({ groupTranslationMap: msg.translationMap });
+    
+    // 设置到 base editor
+    if (editor) {
+      editor.groupTranslationMap = msg.translationMap;
+      editor.render();
+    }
+    // 设置到所有角色 editor
+    charEditors.forEach(charEdObj => {
+      if (charEdObj && charEdObj.editor) {
+        charEdObj.editor.groupTranslationMap = msg.translationMap;
         charEdObj.editor.render();
       }
     });

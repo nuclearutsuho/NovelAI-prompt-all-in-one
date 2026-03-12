@@ -1,0 +1,51 @@
+{
+  "categories": [
+    {
+      "id": "env",
+      "name": "环境",
+      "groups": [
+        {
+          "id": "weather",
+          "name": "天气",
+          "color": "#10b981",
+          "tags": [
+            { "en": "sunny", "zh": "晴朗" },
+            { "en": "rain", "zh": "雨" },
+            { "en": "snowing", "zh": "下雪" },
+            { "en": "cloudy", "zh": "多云的" },
+            { "en": "lightning and thunderstorm", "zh": "闪电与雷暴" },
+            { "en": "foggy", "zh": "起雾" },
+            { "en": "windy", "zh": "刮风" },
+            { "en": "night", "zh": "夜晚" }
+          ]
+        },
+        {
+          "id": "indoor",
+          "name": "室内",
+          "color": "#f59e0b",
+          "tags": [
+            { "en": "indoors", "zh": "室内" },
+            { "en": "bedroom", "zh": "卧室" },
+            { "en": "classroom", "zh": "教室" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "character",
+      "name": "角色",
+      "groups": [
+        {
+          "id": "hair",
+          "name": "头发",
+          "color": "#ec4899",
+          "tags": [
+            { "en": "white hair", "zh": "白发" },
+            { "en": "long hair", "zh": "长发" },
+            { "en": "twintails", "zh": "双马尾" }
+          ]
+        }
+      ]
+    }
+  ]
+}

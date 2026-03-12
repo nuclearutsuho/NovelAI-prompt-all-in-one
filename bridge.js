@@ -813,6 +813,11 @@
       chrome.runtime.sendMessage({ type: 'SYNC_GROUP_COLORS', colorMap: e.data.colorMap });
       return;
     }
+    if (e.data?.type === '__SYNC_GROUP_TRANSLATIONS__') {
+      console.log('[Bridge] Received __SYNC_GROUP_TRANSLATIONS__');
+      chrome.runtime.sendMessage({ type: 'SYNC_GROUP_TRANSLATIONS', translationMap: e.data.translationMap });
+      return;
+    }
 
     // 只处理来自当前页面自身的消息（injector / popup 等同源通信）
     if (e.source !== window) return;

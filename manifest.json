@@ -29,6 +29,7 @@
         "injector.js",
         "modules/auto-clicker.js",
         "data/dictionary.csv",
+        "data/default_group_tags.json",
         "pages/popup.html",
         "pages/popup.js",
         "pages/group-tags.html",

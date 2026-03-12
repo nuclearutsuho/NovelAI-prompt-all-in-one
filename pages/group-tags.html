@@ -85,6 +85,7 @@
     }
 
     .tab-btn {
+      box-sizing: border-box;
       background: #181825;
       border: 1px solid #3a3a55;
       color: #999;
@@ -95,6 +96,9 @@
       transition: all 0.2s;
       font-size: var(--density-font-tab);
       white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .tab-btn:hover {
@@ -120,10 +124,14 @@
     }
     
     .add-tab-btn {
+      display: none; /* 默认隐藏，编辑模式下显示 */
       background: transparent;
       color: #818cf8;
-      border: 1px dashed #4a4a6a;
+      border: 1.5px dashed #4a4a6a;
       font-weight: bold;
+    }
+    #app.edit-mode .add-tab-btn {
+      display: inline-flex;
     }
     .add-tab-btn:hover {
       background: rgba(129, 140, 248, 0.1);
@@ -155,7 +163,7 @@
       transition: all 0.2s;
       user-select: none;
       position: relative;
-      overflow: hidden;
+      overflow: hidden;  /* 编辑模式下会被覆盖为 visible */
       max-width: 120px; /* 动态宽度上限 */
       min-width: 50px; /* 防止过窄 */
     }
@@ -243,23 +251,28 @@
       color: #ccc;
     }
 
-    input[type="color"] {
-      -webkit-appearance: none;
-      appearance: none;
-      border: none;
-      width: 24px;
-      height: 24px;
-      border-radius: 4px;
+    .color-picker-btn {
+      position: relative;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #4a4a6a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      padding: 0;
-      background: transparent;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
     }
-    input[type="color"]::-webkit-color-swatch-wrapper {
-      padding: 0;
+    .color-picker-btn:hover {
+      border-color: #818cf8;
+      transform: scale(1.1);
     }
-    input[type="color"]::-webkit-color-swatch {
-      border: 1px solid #4a4a6a;
-      border-radius: 4px;
+    .color-picker-btn input[type="color"] {
+      position: absolute;
+      top: -10px; left: -10px; width: 50px; height: 50px;
+      opacity: 0;
+      cursor: pointer;
     }
     
     /* 目标指示器 */
@@ -344,6 +357,221 @@
       background: #6366f1;
     }
 
+    /* ========== 编辑模式样式 ========== */
+    
+    /* 编辑模式整体提示：顶部出现橙色条纹 */
+    #app.edit-mode .tabs-container {
+      border-bottom: 2px solid #f59e0b;
+    }
+
+    /* ── 删除角标基础（仅用于 Tag 卡片，方案2描边圆角正方形） ── */
+    .card-delete-badge {
+      display: none;
+      position: absolute;
+      width: calc(var(--density-font-tab) + 4px);
+      height: calc(var(--density-font-tab) + 4px);
+      border-radius: 3px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20, 20, 30, 0.85);
+      color: #ff4444;
+      border: 1.5px solid #ff4444;
+      font-size: calc(var(--density-font-tab) - 1px);
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 10;
+      transition: all 0.15s ease;
+      opacity: 0;
+      pointer-events: none;
+      top: calc(-1 * (var(--density-font-tab) + 4px) / 3);
+      right: calc(-1 * (var(--density-font-tab) + 4px) / 3);
+    }
+    .card-delete-badge:hover {
+      background: #ff4444;
+      color: #fff;
+      border-color: #ff4444;
+      transform: scale(1.15);
+    }
+
+    /* ── Tab 内嵌删除图标（方案C：仅在活跃 Tab 内部右侧显示） ── */
+    .tab-inline-delete {
+      display: none;
+      margin-left: 6px;
+      width: calc(var(--density-font-tab) + 4px);
+      height: calc(var(--density-font-tab) + 4px);
+      border-radius: 4px;
+      align-items: center;
+      justify-content: center;
+      font-size: calc(var(--density-font-tab) + 1px);
+      font-weight: 800;
+      color: rgba(255, 255, 255, 0.4);
+      background: rgba(0, 0, 0, 0.15); /* 常态下一个非常微弱的暗底，划分区域 */
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-shrink: 0;
+    }
+    .tab-inline-delete:hover {
+      background: #ef4444; /* Tailwind 默认红 */
+      color: #fff;
+      transform: scale(1.1);
+      box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
+    }
+    /* 编辑模式下、且仅在活跃 Tab 中显示 */
+    #app.edit-mode .tab-btn.active .tab-inline-delete {
+      display: inline-flex;
+    }
+    #app.edit-mode .tab-btn {
+      position: relative;
+    }
+
+    /* ── Tag 卡片删除角标定位 ── */
+    .card-delete-badge {
+      top: calc(-1 * (var(--density-font-tab) + 4px) / 3);
+      right: calc(-1 * (var(--density-font-tab) + 4px) / 3);
+    }
+    #app.edit-mode .tag-card {
+      position: relative;
+      overflow: visible; /* 允许角标溢出显示 */
+    }
+    #app.edit-mode .tag-card .card-delete-badge {
+      display: flex;
+    }
+    #app.edit-mode .tag-card:hover .card-delete-badge {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* 添加标签占位卡（仅编辑模式显示） */
+    .tag-card.tag-card-add {
+      display: none;
+      background: transparent;
+      border: 1.5px dashed #4a4a6a;
+      transition: all 0.2s;
+    }
+    .tag-card.tag-card-add:hover {
+      border-color: #818cf8;
+      background: rgba(129, 140, 248, 0.1);
+    }
+    #app.edit-mode .tag-card.tag-card-add { display: flex; }
+    
+    .add-icon-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #818cf8;
+      font-size: calc(var(--density-font-en) + 8px);
+      font-weight: bold;
+      pointer-events: none;
+    }
+
+    /* Inline 重命名输入框 */
+    .inline-rename-input {
+      background: #1a1a2e;
+      border: 1px solid #818cf8;
+      color: #fff;
+      font-size: inherit;
+      padding: 1px 4px;
+      border-radius: 3px;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+      text-align: center;
+      min-width: 40px;
+    }
+
+    /* 弹窗 Overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-dialog {
+      background: #2a2a3e;
+      border: 1px solid #4a4a6a;
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 240px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .modal-dialog h3 {
+      margin: 0 0 12px 0;
+      color: #eee;
+      font-size: 14px;
+    }
+    .modal-input {
+      width: 100%;
+      background: #1a1a2e;
+      border: 1px solid #4a4a6a;
+      color: #fff;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+      margin-bottom: 8px;
+    }
+    .modal-input:focus { border-color: #818cf8; }
+    .modal-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .modal-btn {
+      padding: 5px 14px;
+      border-radius: 4px;
+      border: 1px solid #4a4a6a;
+      background: #3a3a55;
+      color: #ccc;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .modal-btn:hover { background: #4a4a6a; color: #fff; }
+    .modal-btn.primary {
+      background: #818cf8;
+      border-color: #6366f1;
+      color: #fff;
+    }
+    .modal-btn.primary:hover { background: #6366f1; }
+    .modal-btn.danger {
+      background: #e74c3c;
+      border-color: #c0392b;
+      color: #fff;
+    }
+    .modal-btn.danger:hover { background: #c0392b; }
+
+    /* Save / Cancel 按钮组（仅编辑模式显示） */
+    .edit-actions {
+      display: none;
+      gap: 4px;
+    }
+    #app.edit-mode .edit-actions { display: flex; }
+    #app.edit-mode #btn-edit-group { display: none; }
+    .btn-save {
+      background: #10b981;
+      border-color: #059669;
+      color: #fff;
+    }
+    .btn-save:hover { background: #059669; }
+    .btn-cancel {
+      background: #6b7280;
+      border-color: #4b5563;
+      color: #fff;
+    }
+    .btn-cancel:hover { background: #4b5563; }
+
+    /* 编辑模式下 + 按钮高亮 */
+    #app.edit-mode .add-tab-btn {
+      color: #10b981;
+      border-color: #10b981;
+    }
+
   </style>
 </head>
 <body>
@@ -373,10 +601,10 @@
 
     <!-- Bottom Toolbar (Color Coding & Group Actions) -->
     <div class="toolbar">
-      <div class="color-picker-wrapper">
-        <label for="group-color" data-i18n="group_color">Group Color:</label>
-        <input type="color" id="group-color" value="#10b981" title="Set background color for this group">
-        <button class="action-btn" id="btn-reset-color" title="Reset Color">↺</button>
+      <div class="color-picker-wrapper" title="Change Group Color">
+        <div class="color-picker-btn" id="color-picker-btn">
+          <input type="color" id="group-color" value="#10b981">
+        </div>
       </div>
       
       <!-- 目标指示器：显示当前标签将被追加到哪个编辑器 -->
@@ -390,8 +618,19 @@
            <span>🔍</span>
            <input type="range" id="density-slider" class="density-slider" min="0" max="100" value="50">
          </div>
-         <button class="action-btn" id="btn-edit-group" data-i18n="btn_edit">Edit Group</button>
+         <button class="action-btn" id="btn-edit-group" data-i18n="btn_edit">✏️ Edit</button>
+         <div class="edit-actions">
+           <button class="action-btn btn-save" id="btn-save">💾 Save</button>
+           <button class="action-btn btn-cancel" id="btn-cancel">✕ Cancel</button>
+         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 弹窗 Overlay -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal-dialog" id="modal-dialog">
+      <!-- 动态内容由 JS 填充 -->
     </div>
   </div>
 
