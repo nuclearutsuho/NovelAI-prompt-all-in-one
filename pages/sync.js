@@ -24,6 +24,7 @@ let selectedFolder = null;    // currently selected folder for creation
 let draggedItem = null;       // item being dragged
 let snapshotSettings = { maxSnapshots: 20, confirmDelete: true };
 let selectedSnapshots = new Set();
+let boundDirHandle = null;
 
 // ============================
 // Section 2: DOM References
@@ -153,11 +154,11 @@ async function removeDirHandle() {
     });
 }
 
-async function verifyPermission(handle) {
+async function verifyPermission(handle, request = true) {
     if (!handle) return false;
     try {
         if (await handle.queryPermission({ mode: 'readwrite' }) === 'granted') return true;
-        if (await handle.requestPermission({ mode: 'readwrite' }) === 'granted') return true;
+        if (request && await handle.requestPermission({ mode: 'readwrite' }) === 'granted') return true;
     } catch (e) { console.error('verifyPermission error:', e); }
     return false;
 }
@@ -246,7 +247,7 @@ async function createSnapshot(label, type = 'auto') {
     // Save to local .snapshots/ if directory is bound
     try {
         const handle = await getDirHandle();
-        if (handle && await verifyPermission(handle)) {
+        if (handle && await verifyPermission(handle, false)) {
             await saveSnapshotToLocal(handle, snapshot);
         }
     } catch (e) {
@@ -319,7 +320,7 @@ async function deleteSnapshotFull(id) {
     // Delete from local .snapshots/
     try {
         const handle = await getDirHandle();
-        if (handle && await verifyPermission(handle)) {
+        if (handle && await verifyPermission(handle, false)) {
             const snapDir = await handle.getDirectoryHandle(SNAPSHOT_DIR, { create: false });
             await snapDir.removeEntry(id, { recursive: true });
         }
@@ -611,10 +612,16 @@ async function removeEmptyDirs(handle, allowedDirs = new Set(), prefix = '', ski
 
 // Export: browser → local (with deletion of stale files)
 async function doExport() {
-    const handle = await getDirHandle();
-    if (!handle || !await verifyPermission(handle)) {
+    const handle = boundDirHandle || await getDirHandle();
+    if (!handle) {
         return log('请先绑定文件夹', 'error');
     }
+    if (!await verifyPermission(handle, true)) {
+        updateTopUI(handle.name, 'reauthorize');
+        return log('请先重新授权已绑定文件夹', 'error');
+    }
+    boundDirHandle = handle;
+    updateTopUI(handle.name, 'bound');
 
     log('开始导出...', 'info');
 
@@ -682,10 +689,16 @@ async function doExport() {
 
 // Import: local → browser (full replace)
 async function doImport() {
-    const handle = await getDirHandle();
-    if (!handle || !await verifyPermission(handle)) {
+    const handle = boundDirHandle || await getDirHandle();
+    if (!handle) {
         return log('请先绑定文件夹', 'error');
     }
+    if (!await verifyPermission(handle, true)) {
+        updateTopUI(handle.name, 'reauthorize');
+        return log('请先重新授权已绑定文件夹', 'error');
+    }
+    boundDirHandle = handle;
+    updateTopUI(handle.name, 'bound');
 
     log('开始导入...', 'info');
 
@@ -1284,24 +1297,39 @@ async function loadDictionary() {
 // ============================
 // Section 10: UI Setup & Events
 // ============================
-function updateTopUI(dirName) {
-    if (dirName) {
+function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
+    if (state === 'bound' && dirName) {
         statusText.textContent = `已绑定: ${dirName}`;
         statusText.classList.add('linked');
         linkBtn.style.display = 'none';
+        linkBtn.textContent = '📂 绑定文件夹';
         unlinkBtn.style.display = '';
         exportBtn.style.display = '';
         importBtn.style.display = '';
         snapshotBtn.style.display = '';
-    } else {
-        statusText.textContent = '未绑定本地文件夹';
+        return;
+    }
+
+    if (state === 'reauthorize' && dirName) {
+        statusText.textContent = `已保存目录: ${dirName}，需重新授权`;
         statusText.classList.remove('linked');
         linkBtn.style.display = '';
-        unlinkBtn.style.display = 'none';
+        linkBtn.textContent = '🔐 重新授权文件夹';
+        unlinkBtn.style.display = '';
         exportBtn.style.display = 'none';
         importBtn.style.display = 'none';
         snapshotBtn.style.display = 'none';
+        return;
     }
+
+    statusText.textContent = '未绑定本地文件夹';
+    statusText.classList.remove('linked');
+    linkBtn.style.display = '';
+    linkBtn.textContent = '📂 绑定文件夹';
+    unlinkBtn.style.display = 'none';
+    exportBtn.style.display = 'none';
+    importBtn.style.display = 'none';
+    snapshotBtn.style.display = 'none';
 }
 
 document.querySelectorAll('.bottom-tab').forEach(tab => {
@@ -1406,9 +1434,21 @@ newFolderBtn.addEventListener('click', () => {
 
 linkBtn.addEventListener('click', async () => {
     try {
+        if (boundDirHandle) {
+            if (await verifyPermission(boundDirHandle, true)) {
+                updateTopUI(boundDirHandle.name, 'bound');
+                log(`已重新授权: ${boundDirHandle.name}`, 'success');
+            } else {
+                updateTopUI(boundDirHandle.name, 'reauthorize');
+                log(`重新授权失败: ${boundDirHandle.name}`, 'error');
+            }
+            return;
+        }
+
         const dirHandle = await window.showDirectoryPicker();
         await saveDirHandle(dirHandle);
-        updateTopUI(dirHandle.name);
+        boundDirHandle = dirHandle;
+        updateTopUI(dirHandle.name, 'bound');
         log(`已绑定: ${dirHandle.name}`, 'success');
     } catch (e) {
         if (e.name === 'AbortError') log('用户取消选择', 'info');
@@ -1418,7 +1458,8 @@ linkBtn.addEventListener('click', async () => {
 
 unlinkBtn.addEventListener('click', async () => {
     await removeDirHandle();
-    updateTopUI(null);
+    boundDirHandle = null;
+    updateTopUI(null, 'unbound');
     log('已解除绑定', 'info');
 });
 
@@ -2128,16 +2169,23 @@ async function init() {
     // Restore bound directory
     try {
         const handle = await getDirHandle();
-        if (handle && await verifyPermission(handle)) {
-            updateTopUI(handle.name);
+        if (handle && await verifyPermission(handle, false)) {
+            boundDirHandle = handle;
+            updateTopUI(handle.name, 'bound');
             log(`已恢复绑定: ${handle.name}`, 'success');
+        } else if (handle) {
+            boundDirHandle = handle;
+            updateTopUI(handle.name, 'reauthorize');
+            log(`已恢复目录句柄，等待重新授权: ${handle.name}`, 'info');
         } else {
-            updateTopUI(null);
+            boundDirHandle = null;
+            updateTopUI(null, 'unbound');
             log('未绑定文件夹', 'info');
         }
     } catch (e) {
         log(`初始化错误: ${e.message}`, 'error');
-        updateTopUI(null);
+        boundDirHandle = null;
+        updateTopUI(null, 'unbound');
     }
     refreshFileTree();
     await loadDictionary();
