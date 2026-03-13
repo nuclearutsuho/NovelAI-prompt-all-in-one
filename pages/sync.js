@@ -18,6 +18,7 @@ let currentFile = null;       // key of the file being edited
 let localContent = '';        // last saved content in editor
 let editorView = null;        // CodeMirror EditorView instance
 let autocompleteDict = null;  // parsed dictionary for autocomplete
+const groupTagsDataUtils = window.GroupTagsDataUtils || {};
 let expandedFolders = new Set(); // track expanded folders in tree
 let selectedFolder = null;    // currently selected folder for creation
 let draggedItem = null;       // item being dragged
@@ -1238,24 +1239,35 @@ function saveCurrentFile() {
 // ============================
 async function loadDictionary() {
     try {
-        const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
-        const res = await fetch(csvUrl);
-        const text = await res.text();
-        autocompleteDict = text.split(/\r?\n/).filter(Boolean).map(line => {
-            const regex = /"([^"]*(?:""[^"]*)*)"|([^,]+)/g;
-            const row = [];
-            let match;
-            while ((match = regex.exec(line)) !== null) row.push(match[1] !== undefined ? match[1] : match[2]);
-            while (row.length < 5) row.push('');
-            const [tag, colorCode, popCount, aliases, zhCN] = row;
-            return {
-                tag: tag.trim(),
-                colorCode: colorCode.trim(),
-                popCount: parseInt(popCount) || 0,
-                aliases: aliases.replace(/"/g, '').split(',').map(a => a.trim()).filter(Boolean),
-                zhCN: zhCN ? zhCN.trim() : ''
-            };
-        });
+        if (groupTagsDataUtils.loadEffectiveDictionaryData) {
+            const dictionaryData = await groupTagsDataUtils.loadEffectiveDictionaryData();
+            autocompleteDict = (dictionaryData.entries || []).map(entry => ({
+                tag: entry.tag,
+                colorCode: String(entry.color || 0),
+                popCount: parseInt(entry.count, 10) || 0,
+                aliases: String(entry.aliases || '').split(',').map(a => a.trim()).filter(Boolean),
+                zhCN: entry.zhCN ? entry.zhCN.trim() : ''
+            }));
+        } else {
+            const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
+            const res = await fetch(csvUrl);
+            const text = await res.text();
+            autocompleteDict = text.split(/\r?\n/).filter(Boolean).map(line => {
+                const regex = /"([^"]*(?:""[^"]*)*)"|([^,]+)/g;
+                const row = [];
+                let match;
+                while ((match = regex.exec(line)) !== null) row.push(match[1] !== undefined ? match[1] : match[2]);
+                while (row.length < 5) row.push('');
+                const [tag, colorCode, popCount, aliases, zhCN] = row;
+                return {
+                    tag: tag.trim(),
+                    colorCode: colorCode.trim(),
+                    popCount: parseInt(popCount) || 0,
+                    aliases: aliases.replace(/"/g, '').split(',').map(a => a.trim()).filter(Boolean),
+                    zhCN: zhCN ? zhCN.trim() : ''
+                };
+            });
+        }
         log(`字典加载完成: ${autocompleteDict.length} 个标签`, 'success');
 
         // Send to worker
@@ -1575,13 +1587,19 @@ async function loadDictForEditor() {
                 zhCN: parts[4] || '', _idx: i
             });
         }
-        const stored = await new Promise(r => chrome.storage.local.get('dictOverlay', r));
-        if (stored.dictOverlay) {
-            try {
-                const parsed = JSON.parse(stored.dictOverlay);
-                dictOverlay = parsed.overlay || {};
-                dictNewEntries = parsed.newEntries || [];
-            } catch (e) { dictOverlay = {}; dictNewEntries = []; }
+        if (groupTagsDataUtils.loadStoredDictionaryOverlay) {
+            const normalizedOverlay = await groupTagsDataUtils.loadStoredDictionaryOverlay();
+            dictOverlay = normalizedOverlay.overlay || {};
+            dictNewEntries = normalizedOverlay.newEntries || [];
+        } else {
+            const stored = await new Promise(r => chrome.storage.local.get('dictOverlay', r));
+            if (stored.dictOverlay) {
+                try {
+                    const parsed = JSON.parse(stored.dictOverlay);
+                    dictOverlay = parsed.overlay || {};
+                    dictNewEntries = parsed.newEntries || [];
+                } catch (e) { dictOverlay = {}; dictNewEntries = []; }
+            }
         }
         buildMergedView();
         buildSearchIndex();
@@ -1660,8 +1678,17 @@ function filterDict(query) {
 }
 
 async function saveDictOverlay() {
-    const data = JSON.stringify({ overlay: dictOverlay, newEntries: dictNewEntries });
-    await new Promise(r => chrome.storage.local.set({ dictOverlay: data }, r));
+    if (groupTagsDataUtils.saveDictionaryOverlayData) {
+        const normalized = await groupTagsDataUtils.saveDictionaryOverlayData(dictOverlay, dictNewEntries);
+        dictOverlay = normalized.overlay || {};
+        dictNewEntries = normalized.newEntries || [];
+    } else {
+        const data = JSON.stringify({ overlay: dictOverlay, newEntries: dictNewEntries });
+        await new Promise(r => chrome.storage.local.set({ dictOverlay: data }, r));
+    }
+    if (groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary) {
+        await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
+    }
     updateDictStatus();
 }
 
@@ -1865,11 +1892,12 @@ function customPrompt(title, placeholder = '') {
 dictAddBtn.addEventListener('click', async () => {
     const tag = await customPrompt('输入新 Tag 名称', '例如: blue_sky');
     if (!tag || !tag.trim()) return;
-    if (dictMergedView.some(d => d.tag === tag.trim())) { showToast('该 Tag 已存在', 'error'); return; }
-    dictNewEntries.push({ tag: tag.trim(), color: 0, count: 0, aliases: '', zhCN: '', _new: true });
+    const canonicalTag = groupTagsDataUtils.toCanonicalTagKey ? groupTagsDataUtils.toCanonicalTagKey(tag) : tag.trim();
+    if (dictMergedView.some(d => d.tag === canonicalTag)) { showToast('该 Tag 已存在', 'error'); return; }
+    dictNewEntries.push({ tag: canonicalTag, color: 0, count: 0, aliases: '', zhCN: '', _new: true });
     saveDictOverlay();
     rebuildAndRender();
-    showToast('已添加: ' + tag.trim(), 'success');
+    showToast('已添加: ' + canonicalTag, 'success');
 });
 
 dictExportBtn.addEventListener('click', () => {
@@ -1899,7 +1927,7 @@ dictImportBtn.addEventListener('click', () => {
             const l = line.trim();
             if (!l) continue;
             const parts = parseCSVLine(l);
-            const tag = parts[0];
+            const tag = groupTagsDataUtils.toCanonicalTagKey ? groupTagsDataUtils.toCanonicalTagKey(parts[0]) : parts[0];
             if (!tag) continue;
             const existing = dictBaseData.find(d => d.tag === tag);
             if (existing) {

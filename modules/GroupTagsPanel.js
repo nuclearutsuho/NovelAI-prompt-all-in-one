@@ -124,6 +124,7 @@ function syncTranslationsToParent() {
 }
 // ========== 渲染逻辑 ==========
 let isEditMode = false;
+const pendingDictionaryUpserts = new Map();
 let dataSnapshot = null; // 编辑模式开始时的数据快照，用于取消时恢复
 
 const dom = {
@@ -336,21 +337,35 @@ function enterEditMode() {
 }
 
 function exitEditMode(save) {
+  return finalizeEditMode(save);
+}
+
+async function finalizeEditMode(save) {
   destroyAllSortables();
   if (save) {
-    // 保存到 chrome.storage.local
-    chrome.storage.local.set({ groupTagsUserData: customGroupsData }, () => {
-      console.log('[GroupTags] Data saved to storage');
-    });
-    // 同步颜色映射和翻译映射到 TagEditor
+    if (groupTagsDataUtils.saveGroupTagsStorage) {
+      customGroupsData = await groupTagsDataUtils.saveGroupTagsStorage(customGroupsData);
+    } else {
+      await new Promise(resolve => {
+        chrome.storage.local.set({ groupTagsUserData: customGroupsData }, resolve);
+      });
+    }
+
+    await flushPendingDictionaryUpserts();
+    if (groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary) {
+      const synced = await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
+      customGroupsData = synced.data || customGroupsData;
+    }
+
     syncColorsToParent();
     syncTranslationsToParent();
   } else {
-    // 取消：恢复快照
     if (dataSnapshot) {
       customGroupsData = dataSnapshot;
     }
+    pendingDictionaryUpserts.clear();
   }
+
   dataSnapshot = null;
   isEditMode = false;
   dom.app.classList.remove('edit-mode');
@@ -390,6 +405,20 @@ function normalizeTagKey(value) {
     return groupTagsDataUtils.normalizeTagKey(value);
   }
   return sanitizeText(value).toLowerCase();
+}
+
+function toCanonicalTagKey(value) {
+  if (groupTagsDataUtils.toCanonicalTagKey) {
+    return groupTagsDataUtils.toCanonicalTagKey(value);
+  }
+  return normalizeTagKey(value);
+}
+
+function toDisplayTagText(value) {
+  if (groupTagsDataUtils.canonicalToDisplayTag) {
+    return groupTagsDataUtils.canonicalToDisplayTag(value);
+  }
+  return sanitizeText(value).replace(/_/g, ' ');
 }
 
 function buildLegacyId(prefix, parts) {
@@ -701,6 +730,57 @@ function formatTagLocation(location) {
   return `${location.categoryName} > ${location.groupName}`;
 }
 
+async function loadEffectiveDictionaryData() {
+  if (groupTagsDataUtils.loadEffectiveDictionaryData) {
+    return groupTagsDataUtils.loadEffectiveDictionaryData();
+  }
+  return { entries: [], entryMap: new Map() };
+}
+
+async function upsertDictionaryEntry(tagKey, patch = {}) {
+  if (groupTagsDataUtils.upsertDictionaryEntry) {
+    return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
+  }
+  return {
+    tagKey: toCanonicalTagKey(tagKey),
+    entry: null
+  };
+}
+
+async function ensureDictionaryTagMeta(tagText, zhText) {
+  const canonicalTag = toCanonicalTagKey(tagText);
+  if (!canonicalTag) {
+    return { tagKey: '', entry: null };
+  }
+
+  const patch = {};
+  if (zhText !== undefined) {
+    patch.zhCN = sanitizeText(zhText);
+  }
+  const result = await upsertDictionaryEntry(canonicalTag, patch);
+  return {
+    tagKey: result.tagKey || canonicalTag,
+    entry: result.entry || null
+  };
+}
+
+function queueDictionaryTagMeta(tagText, zhText) {
+  const canonicalTag = toCanonicalTagKey(tagText);
+  if (!canonicalTag) return;
+  pendingDictionaryUpserts.set(canonicalTag, {
+    zhCN: sanitizeText(zhText)
+  });
+}
+
+async function flushPendingDictionaryUpserts() {
+  if (!pendingDictionaryUpserts.size) return;
+
+  for (const [tagKey, patch] of pendingDictionaryUpserts.entries()) {
+    await upsertDictionaryEntry(tagKey, patch);
+  }
+  pendingDictionaryUpserts.clear();
+}
+
 function getCurrentExportData() {
   return normalizeGroupTagsData(customGroupsData).data;
 }
@@ -736,8 +816,11 @@ function applyGroupTagsData(nextData) {
 }
 
 function saveGroupTagsData(nextData) {
+  if (groupTagsDataUtils.saveGroupTagsStorage) {
+    return groupTagsDataUtils.saveGroupTagsStorage(nextData);
+  }
   return new Promise(resolve => {
-    chrome.storage.local.set({ groupTagsUserData: nextData }, () => resolve());
+    chrome.storage.local.set({ groupTagsUserData: nextData }, () => resolve(nextData));
   });
 }
 
@@ -852,7 +935,7 @@ async function importGroupTagsData(file) {
     const mergedWithDefault = mergeGroupTagsData(nextData, defaultGroupsData);
     nextData = mergedWithDefault.data;
 
-    await saveGroupTagsData(nextData);
+    nextData = await saveGroupTagsData(nextData);
     applyGroupTagsData(nextData);
 
     showInfoModal(
@@ -1053,6 +1136,7 @@ function setupInlineAddPanel() {
       const item = document.createElement('div');
       item.className = 'autocomplete-item';
       if (idx === selectedIndex) item.classList.add('selected');
+      const displayWord = m.displayWord || toDisplayTagText(m.word);
       
       const highlight = (text) => {
         if (!query) return text;
@@ -1060,7 +1144,7 @@ function setupInlineAddPanel() {
       };
       
       item.innerHTML = `
-        <span class="ac-en" style="color: ${m.color}">${highlight(m.word)}</span>
+        <span class="ac-en" style="color: ${m.color}">${highlight(displayWord)}</span>
         <span class="ac-zh"><span class="autocomplete-trans">${m.zhCN ? highlight(m.zhCN) : ''}</span> <span class="autocomplete-count">(${formatCount(m.pop)})</span></span>
       `;
       
@@ -1152,17 +1236,19 @@ function setupInlineAddPanel() {
     if (!wrapper.contains(e.target) && e.target !== enInput) closeDropdown();
   });
 
-  function submitTag() {
-    const en = enInput.value.trim();
-    if (!en) return;
-    const zh = zhInput.value.trim() || en; 
+  async function submitTag() {
+    const displayEn = enInput.value.trim();
+    if (!displayEn) return;
+    const canonicalEn = toCanonicalTagKey(displayEn);
+    if (!canonicalEn) return;
+    const zh = zhInput.value.trim();
     
     const currentCategory = customGroupsData.categories[activeCategoryIndex];
     if (!currentCategory) return;
     const currentGroup = currentCategory.groups[activeGroupIndex];
     if (!currentGroup) return;
 
-    const existingLocation = findGlobalTagLocation(en);
+    const existingLocation = findGlobalTagLocation(canonicalEn);
     if (existingLocation) {
       enInput.style.borderColor = '#e74c3c';
       enInput.value = '';
@@ -1175,7 +1261,14 @@ function setupInlineAddPanel() {
       return;
     }
 
-    currentGroup.tags.push({ en, zh });
+    const dictionaryData = await loadEffectiveDictionaryData();
+    const existingEntry = dictionaryData.entryMap?.get(canonicalEn) || null;
+    const nextZh = zh || (existingEntry ? (existingEntry.zhCN || '') : '');
+    queueDictionaryTagMeta(canonicalEn, nextZh);
+    currentGroup.tags.push({
+      en: canonicalEn,
+      zh: nextZh
+    });
     currentGroup._modified = true;
     currentCategory._modified = true;
     
@@ -1427,23 +1520,24 @@ function renderTagsGrid() {
   currentGroup.tags.forEach((t, tagIndex) => {
     const isUsedHere = activeTagsContext.includes(t.en);
     const isUsedOther = inactiveTagsContext.includes(t.en);
+    const displayEn = toDisplayTagText(t.en);
 
     const card = document.createElement('div');
     card.className = `tag-card ${isUsedHere ? 'used' : ''} ${isUsedOther && !isUsedHere ? 'used-other' : ''}`;
-    card.title = `${t.zh}\n${t.en}`;
+    card.title = `${t.zh}\n${displayEn}`;
     
     // 点击事件：编辑模式下禁用追加/移除
     if (!isEditMode) {
       card.onclick = () => {
         if (isUsedHere) {
-          window.parent.postMessage({ type: '__REMOVE_TAG_FROM_PANEL__', tag: t.en }, '*');
+          window.parent.postMessage({ type: '__REMOVE_TAG_FROM_PANEL__', tag: displayEn }, '*');
         } else if (isUsedOther) {
           card.style.transform = 'translateX(5px)';
           setTimeout(() => card.style.transform = 'translateX(-5px)', 50);
           setTimeout(() => card.style.transform = 'translateX(5px)', 100);
           setTimeout(() => card.style.transform = 'translateX(0)', 150);
         } else {
-          window.parent.postMessage({ type: '__APPEND_TAG_FROM_PANEL__', tag: t.en, zh: t.zh }, '*');
+          window.parent.postMessage({ type: '__APPEND_TAG_FROM_PANEL__', tag: displayEn, zh: t.zh }, '*');
         }
       };
     }
@@ -1474,13 +1568,12 @@ function renderTagsGrid() {
         zhPart.appendChild(input);
         input.focus();
         input.select();
-        const commit = () => {
+        const commit = async () => {
           const newZh = input.value.trim();
-          if (newZh) {
-            t.zh = newZh;
-            currentGroup._modified = true;
-            currentCategory._modified = true;
-          }
+          queueDictionaryTagMeta(t.en, newZh);
+          t.zh = newZh;
+          currentGroup._modified = true;
+          currentCategory._modified = true;
           renderTagsGrid();
         };
         input.addEventListener('blur', commit);
@@ -1493,7 +1586,7 @@ function renderTagsGrid() {
 
     const enPart = document.createElement('div');
     enPart.className = 'tag-en-part';
-    enPart.textContent = t.en;
+    enPart.textContent = displayEn;
     
     // 编辑模式：双方皆可双击编辑
     if (isEditMode) {
@@ -1511,20 +1604,25 @@ function renderTagsGrid() {
 
         const input = document.createElement('input');
         input.className = 'inline-rename-input';
-        input.value = t.en;
+        input.value = displayEn;
         enPart.textContent = '';
         enPart.appendChild(input);
         input.focus();
         input.select();
-        const commit = () => {
-          const newEn = input.value.trim();
+        const commit = async () => {
+          const newDisplayEn = input.value.trim();
+          const newEn = toCanonicalTagKey(newDisplayEn);
           const existingLocation = findGlobalTagLocation(newEn, {
             exclude: { categoryIndex: activeCategoryIndex, groupIndex: activeGroupIndex, tagIndex }
           });
           if (existingLocation) {
             showInfoModal('标签已存在', `该标签已存在于 ${formatTagLocation(existingLocation)}，不能重复添加到多个分组。`);
           } else if (newEn && newEn !== t.en) {
+            const dictionaryData = await loadEffectiveDictionaryData();
+            const existingEntry = dictionaryData.entryMap?.get(newEn) || null;
             t.en = newEn;
+            t.zh = existingEntry ? (existingEntry.zhCN || '') : t.zh;
+            queueDictionaryTagMeta(newEn, t.zh);
             currentGroup._modified = true;
             currentCategory._modified = true;
           }
@@ -1569,7 +1667,7 @@ window.addEventListener('message', (e) => {
         while (v.startsWith('[') && v.endsWith(']')) v = v.slice(1, -1);
         const blockMatch = v.match(/^[-?\d\.]+::(.*?)\s*::$/);
         if (blockMatch) v = blockMatch[1];
-        return v;
+        return toCanonicalTagKey(v);
       }).filter(Boolean);
     };
 
@@ -1599,41 +1697,21 @@ const getColor = (code) => {
 
 async function loadDictionary() {
   try {
-    const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
-    const res = await fetch(csvUrl);
-    const text = await res.text();
-    autocompleteDict = text.split(/\r?\n/)
-      .filter(Boolean)
-      .map(line => {
-        const row = [];
-        let currentField = '';
-        let inQuote = false;
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i];
-          if (char === '"') {
-            if (inQuote && line[i + 1] === '"') { currentField += '"'; i++; } 
-            else { inQuote = !inQuote; }
-          } else if (char === ',' && !inQuote) {
-            row.push(currentField);
-            currentField = '';
-          } else {
-            currentField += char;
-          }
-        }
-        row.push(currentField);
-        let [word, colorCode, popCount, aliases, zhCN] = row;
-        const parsedZhCN = zhCN ? zhCN.trim() : '';
-        const parsedWord = word ? word.trim() : '';
-        const parsedAliases = aliases ? aliases.replace(/"/g, '') : '';
-        
-        return {
-          word: parsedWord,
-          zhCN: parsedZhCN,
-          color: getColor(colorCode ? colorCode.trim() : '0'),
-          pop: popCount ? parseInt(popCount) : 0,
-          search: (parsedWord + " " + parsedAliases + " " + parsedZhCN).toLowerCase().replace(/_/g, ' ')
-        };
-      }).filter(item => item.word);
+    const dictionaryData = await loadEffectiveDictionaryData();
+    autocompleteDict = (dictionaryData.entries || []).map(entry => {
+      const word = toCanonicalTagKey(entry.tag);
+      const aliases = sanitizeText(entry.aliases);
+      const zhCN = sanitizeText(entry.zhCN);
+      const displayWord = toDisplayTagText(word);
+      return {
+        word,
+        displayWord,
+        zhCN,
+        color: getColor(entry.color),
+        pop: Number(entry.count) || 0,
+        search: `${word} ${displayWord} ${aliases} ${zhCN}`.toLowerCase()
+      };
+    }).filter(item => item.word);
     
     // 按热度排序
     autocompleteDict.sort((a, b) => b.pop - a.pop);
@@ -1654,9 +1732,14 @@ async function init() {
     defaultGroupsData = normalizeGroupTagsData(defaultData).data;
     
     // 2. 从 chrome.storage.local 加载用户自定义数据
-    const stored = await new Promise(resolve => {
+    let stored = await new Promise(resolve => {
       chrome.storage.local.get('groupTagsUserData', (data) => resolve(data.groupTagsUserData));
     });
+    if (stored?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
+      // 初始化时自动迁移旧格式 tag，并把翻译回填到主库规范
+      const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
+      stored = migrated.data || stored;
+    }
     
     customGroupsData = resolveEffectiveGroupTagsData(stored);
     
@@ -1724,8 +1807,8 @@ dom.colorPicker.addEventListener('input', (e) => {
 dom.btnEdit.addEventListener('click', () => enterEditMode());
 dom.btnExport.addEventListener('click', () => exportGroupTagsData());
 dom.btnImport.addEventListener('click', () => dom.importFileInput.click());
-dom.btnSave.addEventListener('click', () => exitEditMode(true));
-dom.btnCancel.addEventListener('click', () => exitEditMode(false));
+dom.btnSave.addEventListener('click', () => finalizeEditMode(true));
+dom.btnCancel.addEventListener('click', () => finalizeEditMode(false));
 dom.importFileInput.addEventListener('change', (e) => {
   const [file] = e.target.files || [];
   importGroupTagsData(file);

@@ -495,13 +495,17 @@ async function loadDefaultGroupTagsData() {
 }
 
 async function loadEffectiveGroupTagsData() {
-  const storedData = await chrome.storage.local.get('groupTagsUserData');
+  let storedGroupTagsData = (await chrome.storage.local.get('groupTagsUserData')).groupTagsUserData;
+  if (storedGroupTagsData?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
+    const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
+    storedGroupTagsData = migrated.data || storedGroupTagsData;
+  }
   const defaultData = await loadDefaultGroupTagsData();
   // popup 看到的数据必须和 Group Tags 面板一致：用户数据优先，默认库只补新增
   if (groupTagsDataUtils.resolveEffectiveGroupTagsData) {
-    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultData, storedData.groupTagsUserData);
+    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultData, storedGroupTagsData);
   }
-  return storedData.groupTagsUserData?.categories ? cloneGroupTagsData(storedData.groupTagsUserData) : cloneGroupTagsData(defaultData);
+  return storedGroupTagsData?.categories ? cloneGroupTagsData(storedGroupTagsData) : cloneGroupTagsData(defaultData);
 }
 
 function buildGroupTagsColorMap(data) {
@@ -523,6 +527,37 @@ function normalizeGroupTagKey(value) {
     return groupTagsDataUtils.normalizeTagKey(value);
   }
   return String(value || '').trim().toLowerCase();
+}
+
+function toCanonicalGroupTagKey(value) {
+  if (groupTagsDataUtils.toCanonicalTagKey) {
+    return groupTagsDataUtils.toCanonicalTagKey(value);
+  }
+  return normalizeGroupTagKey(value);
+}
+
+function toDisplayGroupTagText(value) {
+  if (groupTagsDataUtils.canonicalToDisplayTag) {
+    return groupTagsDataUtils.canonicalToDisplayTag(value);
+  }
+  return String(value || '').trim().replace(/_/g, ' ');
+}
+
+async function loadEffectiveDictionaryData() {
+  if (groupTagsDataUtils.loadEffectiveDictionaryData) {
+    return groupTagsDataUtils.loadEffectiveDictionaryData();
+  }
+  return { entryMap: new Map() };
+}
+
+async function upsertDictionaryEntry(tagKey, patch = {}) {
+  if (groupTagsDataUtils.upsertDictionaryEntry) {
+    return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
+  }
+  return {
+    tagKey: toCanonicalGroupTagKey(tagKey),
+    entry: null
+  };
 }
 
 function findExistingGroupTagLocation(groupTagsData, tagText) {
@@ -602,7 +637,7 @@ function initGroupTagsPickerModal() {
 }
 
 function renderPickerTagContent(tagData) {
-  const en = String(tagData?.en || '').trim();
+  const en = toDisplayGroupTagText(String(tagData?.en || '').trim());
   const zh = String(tagData?.zh || '').trim();
 
   const container = document.createElement('div');
@@ -625,7 +660,7 @@ function renderPickerTagContent(tagData) {
         const newVal = inputEl.value.trim();
         groupTagsPickerState.tagData[fieldName] = newVal; // 更新内存状态
         
-        let displayVal = newVal;
+        let displayVal = fieldName === 'en' ? toDisplayGroupTagText(newVal) : newVal;
         if (!displayVal) {
           displayVal = fieldName === 'en' ? '...' : getLocalizedText('group_tags_picker_trans_placeholder', '输入翻译');
         }
@@ -686,6 +721,12 @@ function renderPickerTagContent(tagData) {
   
   container.appendChild(closeBtn);
   return container;
+}
+
+function formatPickerTagText(tagData) {
+  const en = toDisplayGroupTagText(String(tagData?.en || '').trim());
+  const zh = String(tagData?.zh || '').trim();
+  return zh ? `${en}  ${zh}` : en;
 }
 
 function setPickerCategory(categoryId) {
@@ -785,13 +826,19 @@ function openGroupTagsPicker(tagData, groupTagsData) {
 }
 
 async function persistGroupTagsData(groupTagsData) {
+  if (groupTagsDataUtils.saveGroupTagsStorage) {
+    groupTagsData = await groupTagsDataUtils.saveGroupTagsStorage(groupTagsData);
+  } else {
+    const colorMap = buildGroupTagsColorMap(groupTagsData);
+    const translationMap = buildGroupTagsTranslationMap(groupTagsData);
+    await chrome.storage.local.set({
+      groupTagsUserData: groupTagsData,
+      groupColorMap: colorMap,
+      groupTranslationMap: translationMap
+    });
+  }
   const colorMap = buildGroupTagsColorMap(groupTagsData);
   const translationMap = buildGroupTagsTranslationMap(groupTagsData);
-  await chrome.storage.local.set({
-    groupTagsUserData: groupTagsData,
-    groupColorMap: colorMap,
-    groupTranslationMap: translationMap
-  });
   // 写回 storage 后立刻刷新 popup 内存态，让当前编辑器马上吃到颜色和翻译
   applyGroupMapsToEditors(colorMap, translationMap);
 }
@@ -800,9 +847,11 @@ async function addTagToGroupTags(tagData) {
   const en = String(tagData?.en || '').trim();
   const zh = String(tagData?.zh || '').trim();
   if (!en) return;
+  const canonicalEn = toCanonicalGroupTagKey(en);
+  if (!canonicalEn) return;
 
   const effectiveData = await loadEffectiveGroupTagsData();
-  const existingLocation = findExistingGroupTagLocation(effectiveData, en);
+  const existingLocation = findExistingGroupTagLocation(effectiveData, canonicalEn);
   if (existingLocation) {
     // 全局唯一：同一个 tag 不允许再加入别的分组，否则颜色/翻译会变成顺序相关
     showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(existingLocation)}`);
@@ -810,14 +859,14 @@ async function addTagToGroupTags(tagData) {
   }
 
   // 因为在弹窗期间 tag 原本的值可能会被用户单击处于 input 状态修改，拿到最热数据
-  const selection = await openGroupTagsPicker({ en, zh }, effectiveData);
+  const selection = await openGroupTagsPicker({ en: toDisplayGroupTagText(canonicalEn), zh }, effectiveData);
   if (!selection) return;
 
   // 用户确认后重新读取最新有效数据，避免把弹窗打开期间的外部修改覆盖掉
   const latestData = await loadEffectiveGroupTagsData();
   
   // 取出经过弹窗内可能已被用户编辑过的新名字 (如果没编辑回退到原来传参的字)
-  const finalEn = String(selection.editedEn || en).trim();
+  const finalEn = toCanonicalGroupTagKey(String(selection.editedEn || en).trim());
   const finalZh = String(selection.editedZh || zh).trim();
 
   // 如果原本没改但原来存在，或者改了以后撞车，都要拦截
@@ -836,11 +885,17 @@ async function addTagToGroupTags(tagData) {
     return;
   }
 
-  targetGroup.tags.push({ en: finalEn, zh: finalZh });
+  const dictResult = await upsertDictionaryEntry(finalEn, { zhCN: finalZh });
+  const finalEntry = dictResult.entry || (await loadEffectiveDictionaryData()).entryMap.get(finalEn) || null;
+
+  targetGroup.tags.push({
+    en: finalEn,
+    zh: finalEntry ? (finalEntry.zhCN || '') : finalZh
+  });
   await persistGroupTagsData(latestData);
   
   const locationName = `${targetCategory.name} > ${targetGroup.name}`;
-  const enHtml = `<span style="color: #60a5fa">${escapeHtml(finalEn)}</span>`;
+  const enHtml = `<span style="color: #60a5fa">${escapeHtml(toDisplayGroupTagText(finalEn))}</span>`;
   showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added')} ${enHtml} ${getLocalizedText('group_tags_picker_added_suffix', 'to')} [${locationName}]`);
 }
 
@@ -1669,7 +1724,10 @@ function initUI() {
       const { tagData, groupTagsData } = groupTagsPickerState;
       if (tagData) {
         const tagEl = document.getElementById('group-tags-picker-tag');
-        if (tagEl) tagEl.textContent = formatPickerTagText(tagData);
+        if (tagEl) {
+          tagEl.innerHTML = '';
+          tagEl.appendChild(renderPickerTagContent(tagData));
+        }
       }
       if (tagData && groupTagsData) {
         renderGroupTagsPickerList(tagData, groupTagsData);
