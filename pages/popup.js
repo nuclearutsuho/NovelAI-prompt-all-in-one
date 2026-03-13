@@ -14,6 +14,20 @@ let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", 
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
 let maxCharacters = 6;
 let isShortMode = false;
+let currentGroupColorMap = {};
+let currentGroupTranslationMap = {};
+
+const groupTagsDataUtils = window.GroupTagsDataUtils || {};
+const EMPTY_GROUP_TAGS_DATA = { categories: [] };
+let defaultGroupTagsPromise = null;
+let popupToastTimer = null;
+let popupToastFrame = null;
+const groupTagsPickerState = {
+  resolve: null,
+  activeCategoryId: null,
+  tagData: null,
+  groupTagsData: null
+};
 
 // 焦点追踪：当前 GroupTags 面板将追加标签的目标编辑器
 // type: 'base' | 'character', charIndex: number, mode: 'positive'|'negative'|'pos'|'neg'
@@ -101,7 +115,20 @@ const translations = {
     ac_mode_on_image_title: "On Image",
     btn_group_tags: "Group Tags",
     btn_group_tags_short: "Groups",
-    btn_group_tags_title: "Open Group Tags Panel"
+    btn_group_tags_title: "Open Group Tags Panel",
+    btn_add_to_group_tags: "Add to Group Tags",
+    group_tags_picker_title: "Add to Group Tags",
+    group_tags_picker_empty: "No Group Tags groups available. Create one first.",
+    group_tags_picker_expand: "Expand category",
+    group_tags_picker_collapse: "Collapse category",
+    group_tags_picker_duplicate: "Already exists in",
+    group_tags_picker_missing: "The selected Group Tags group no longer exists.",
+    group_tags_picker_added_prefix: "Added to",
+    toast_success: "Success",
+    toast_warning: "Notice",
+    toast_error: "Error",
+    toast_close: "Close notification",
+    group_tags_picker_close: "Close panel"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -183,7 +210,20 @@ const translations = {
     ac_mode_on_image_title: "出图后再点",
     btn_group_tags: "分组标签",
     btn_group_tags_short: "分组",
-    btn_group_tags_title: "打开分组标签面板"
+    btn_group_tags_title: "打开分组标签面板",
+    btn_add_to_group_tags: "加入分组标签",
+    group_tags_picker_title: "加入分组标签",
+    group_tags_picker_empty: "当前没有可用的分组，请先在 Group Tags 中创建。",
+    group_tags_picker_expand: "展开分类",
+    group_tags_picker_collapse: "收起分类",
+    group_tags_picker_duplicate: "已存在于",
+    group_tags_picker_missing: "所选分组已不存在。",
+    group_tags_picker_added_prefix: "已加入",
+    toast_success: "成功",
+    toast_warning: "提示",
+    toast_error: "错误",
+    toast_close: "关闭通知",
+    group_tags_picker_close: "关闭面板"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -265,7 +305,20 @@ const translations = {
     ac_mode_on_image_title: "画像生成後",
     btn_group_tags: "グループタグ",
     btn_group_tags_short: "グループ",
-    btn_group_tags_title: "グループタグパネルを開く"
+    btn_group_tags_title: "グループタグパネルを開く",
+    btn_add_to_group_tags: "グループタグに追加",
+    group_tags_picker_title: "グループタグに追加",
+    group_tags_picker_empty: "利用可能なグループがありません。先に Group Tags で作成してください。",
+    group_tags_picker_expand: "カテゴリを展開",
+    group_tags_picker_collapse: "カテゴリを折りたたむ",
+    group_tags_picker_duplicate: "既に存在",
+    group_tags_picker_missing: "選択したグループは既に存在しません。",
+    group_tags_picker_added_prefix: "追加先",
+    toast_success: "成功",
+    toast_warning: "案内",
+    toast_error: "エラー",
+    toast_close: "通知を閉じる",
+    group_tags_picker_close: "パネルを閉じる"
   }
 };
 
@@ -282,6 +335,448 @@ function computeStateFingerprint(posT, negT, charD) {
     nd: (c.negTags || []).map(t => [t.value, !!t.disabled])
   })));
   return posF + negF + charsStr;
+}
+
+function cloneGroupTagsData(data) {
+  // 统一走深拷贝，避免 popup 直接修改到缓存中的默认数据对象
+  if (groupTagsDataUtils.cloneData) {
+    return groupTagsDataUtils.cloneData(data || EMPTY_GROUP_TAGS_DATA);
+  }
+  return JSON.parse(JSON.stringify(data || EMPTY_GROUP_TAGS_DATA));
+}
+
+function getPopupDict() {
+  return translations[currentLang] || translations.en;
+}
+
+function getLocalizedText(key, fallback = '') {
+  const dict = getPopupDict();
+  const fallbackDict = translations.en || {};
+  return dict[key] || fallbackDict[key] || fallback;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getAddToGroupTagsText() {
+  const dict = getPopupDict();
+  return dict.btn_add_to_group_tags || `${dict.btn_add || 'Add'} ${dict.btn_group_tags || 'Group Tags'}`.trim();
+}
+
+function getToastMeta(type) {
+  const dict = getPopupDict();
+  if (type === 'success') {
+    return {
+      title: dict.toast_success || 'Success',
+      icon: '✓',
+      duration: 1800
+    };
+  }
+  if (type === 'warning') {
+    return {
+      title: dict.toast_warning || 'Notice',
+      icon: '!',
+      duration: 2800
+    };
+  }
+  return {
+    title: dict.toast_error || 'Error',
+    icon: '×',
+    duration: 4200
+  };
+}
+
+function dismissPopupToast(immediate = false) {
+  const root = document.getElementById('popup-toast-root');
+  const toastEl = root?.querySelector('.popup-toast');
+  clearTimeout(popupToastTimer);
+  popupToastTimer = null;
+
+  if (!toastEl) return;
+  const removeToast = () => {
+    if (popupToastFrame !== null) {
+      cancelAnimationFrame(popupToastFrame);
+      popupToastFrame = null;
+    }
+    toastEl.remove();
+  };
+
+  if (immediate) {
+    removeToast();
+    return;
+  }
+
+  toastEl.classList.remove('visible');
+  window.setTimeout(removeToast, 180);
+}
+
+function showPopupToast(type, message) {
+  const root = document.getElementById('popup-toast-root');
+  if (!root) return;
+
+  dismissPopupToast(true);
+  const meta = getToastMeta(type);
+  const toastEl = document.createElement('div');
+  toastEl.className = `popup-toast ${type}`;
+
+  const closeBtnHtml = type === 'error'
+    ? `<button type="button" class="popup-toast-close" aria-label="${getLocalizedText('toast_close', 'Close notification')}">×</button>`
+    : '';
+
+  toastEl.innerHTML = `
+    <span class="popup-toast-icon" aria-hidden="true">${meta.icon}</span>
+    <div class="popup-toast-body">
+      <div class="popup-toast-title">${escapeHtml(meta.title)}</div>
+      <div class="popup-toast-message">${escapeHtml(message)}</div>
+    </div>
+    ${closeBtnHtml}
+  `;
+
+  if (type === 'error') {
+    toastEl.querySelector('.popup-toast-close')?.addEventListener('click', () => dismissPopupToast());
+  }
+
+  root.appendChild(toastEl);
+  popupToastFrame = requestAnimationFrame(() => {
+    popupToastFrame = null;
+    toastEl.classList.add('visible');
+  });
+
+  popupToastTimer = window.setTimeout(() => {
+    popupToastTimer = null;
+    dismissPopupToast();
+  }, meta.duration);
+}
+
+function applyGroupMapsToEditors(colorMap = {}, translationMap = {}, shouldRender = true) {
+  // popup 与所有角色编辑器共用同一份分组颜色/翻译映射
+  currentGroupColorMap = colorMap || {};
+  currentGroupTranslationMap = translationMap || {};
+
+  if (editor) {
+    editor.groupColorMap = currentGroupColorMap;
+    editor.groupTranslationMap = currentGroupTranslationMap;
+    if (shouldRender) editor.render();
+  }
+
+  charEditors.forEach(charEditorObj => {
+    if (!charEditorObj?.editor) return;
+    charEditorObj.editor.groupColorMap = currentGroupColorMap;
+    charEditorObj.editor.groupTranslationMap = currentGroupTranslationMap;
+    if (shouldRender) charEditorObj.editor.render();
+  });
+}
+
+async function loadDefaultGroupTagsData() {
+  if (!defaultGroupTagsPromise) {
+    // 默认库只加载一次，后续复用 Promise，避免每次点 +G 都重新 fetch
+    defaultGroupTagsPromise = fetch(chrome.runtime.getURL('data/default_group_tags.json'))
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Failed to load default Group Tags: ${response.status}`);
+        }
+        return response.json();
+      })
+      .catch(err => {
+        console.error('[Popup] Failed to load default Group Tags:', err);
+        return cloneGroupTagsData(EMPTY_GROUP_TAGS_DATA);
+      });
+  }
+
+  return cloneGroupTagsData(await defaultGroupTagsPromise);
+}
+
+async function loadEffectiveGroupTagsData() {
+  const storedData = await chrome.storage.local.get('groupTagsUserData');
+  const defaultData = await loadDefaultGroupTagsData();
+  // popup 看到的数据必须和 Group Tags 面板一致：用户数据优先，默认库只补新增
+  if (groupTagsDataUtils.resolveEffectiveGroupTagsData) {
+    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultData, storedData.groupTagsUserData);
+  }
+  return storedData.groupTagsUserData?.categories ? cloneGroupTagsData(storedData.groupTagsUserData) : cloneGroupTagsData(defaultData);
+}
+
+function buildGroupTagsColorMap(data) {
+  if (groupTagsDataUtils.buildColorMap) {
+    return groupTagsDataUtils.buildColorMap(data);
+  }
+  return {};
+}
+
+function buildGroupTagsTranslationMap(data) {
+  if (groupTagsDataUtils.buildTranslationMap) {
+    return groupTagsDataUtils.buildTranslationMap(data);
+  }
+  return {};
+}
+
+function normalizeGroupTagKey(value) {
+  if (groupTagsDataUtils.normalizeTagKey) {
+    return groupTagsDataUtils.normalizeTagKey(value);
+  }
+  return String(value || '').trim().toLowerCase();
+}
+
+function findExistingGroupTagLocation(groupTagsData, tagText) {
+  const targetKey = normalizeGroupTagKey(tagText);
+  if (!targetKey || !Array.isArray(groupTagsData?.categories)) return null;
+
+  // 颜色和翻译映射是全局 tag -> 单值表，所以这里直接按整个 Group Tags 全局查重
+  for (const category of groupTagsData.categories) {
+    const groups = Array.isArray(category.groups) ? category.groups : [];
+    for (const group of groups) {
+      const tags = Array.isArray(group.tags) ? group.tags : [];
+      const existingTag = tags.find(tag => normalizeGroupTagKey(tag.en) === targetKey);
+      if (existingTag) {
+        return {
+          categoryId: category.id,
+          categoryName: category.name,
+          groupId: group.id,
+          groupName: group.name
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function formatGroupTagLocation(location) {
+  if (!location) return '';
+  return `${location.categoryName} > ${location.groupName}`;
+}
+
+function updateGroupTagsPickerStaticText() {
+  const titleEl = document.getElementById('group-tags-picker-title');
+  const closeBtn = document.getElementById('group-tags-picker-close');
+  if (titleEl) titleEl.textContent = getLocalizedText('group_tags_picker_title', getAddToGroupTagsText());
+  if (closeBtn) closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close', 'Close panel'));
+}
+
+function closeGroupTagsPicker(selection = null) {
+  const modal = document.getElementById('group-tags-picker-modal');
+  if (modal) {
+    modal.classList.remove('visible');
+  }
+
+  groupTagsPickerState.tagData = null;
+  groupTagsPickerState.groupTagsData = null;
+
+  if (groupTagsPickerState.resolve) {
+    // 用 Promise 包装弹窗结果，避免把选择逻辑散落到多个回调里
+    const resolve = groupTagsPickerState.resolve;
+    groupTagsPickerState.resolve = null;
+    resolve(selection);
+  }
+}
+
+function initGroupTagsPickerModal() {
+  const modal = document.getElementById('group-tags-picker-modal');
+  const closeBtn = document.getElementById('group-tags-picker-close');
+
+  if (!modal || modal.dataset.bound === 'true') return;
+  modal.dataset.bound = 'true';
+
+  closeBtn?.addEventListener('click', () => closeGroupTagsPicker(null));
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeGroupTagsPicker(null);
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && modal.classList.contains('visible')) {
+      closeGroupTagsPicker(null);
+    }
+  });
+
+  updateGroupTagsPickerStaticText();
+}
+
+function renderPickerTagContent(tagData) {
+  const en = String(tagData?.en || '').trim();
+  const zh = String(tagData?.zh || '').trim();
+
+  const container = document.createElement('div');
+  container.className = 'group-tags-picker-tag-inner';
+
+  // 左半边：英文原名，更醒目
+  const enSpan = document.createElement('span');
+  enSpan.className = 'group-tags-picker-tag-en';
+  enSpan.textContent = en;
+  container.appendChild(enSpan);
+
+  // 中间：竖向分割线 + 中文翻译
+  if (zh) {
+    const divider = document.createElement('span');
+    divider.className = 'group-tags-picker-tag-divider';
+    container.appendChild(divider);
+
+    const zhSpan = document.createElement('span');
+    zhSpan.className = 'group-tags-picker-tag-zh';
+    zhSpan.textContent = zh;
+    container.appendChild(zhSpan);
+  }
+
+  // 极简关闭按钮插在最右端
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'group-tags-picker-tag-close';
+  closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close', 'Close'));
+  closeBtn.innerHTML = '×';
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeGroupTagsPicker(null);
+  });
+  
+  container.appendChild(closeBtn);
+  return container;
+}
+
+function setPickerCategory(categoryId) {
+  groupTagsPickerState.activeCategoryId = categoryId;
+}
+
+function renderGroupTagsPickerList(tagData, groupTagsData) {
+  const listEl = document.getElementById('group-tags-picker-list');
+  const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
+  const hasGroups = categories.some(category => Array.isArray(category.groups) && category.groups.length > 0);
+
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  if (!hasGroups) {
+    const emptyEl = document.createElement('div');
+    emptyEl.className = 'group-tags-picker-empty';
+    emptyEl.textContent = getLocalizedText('group_tags_picker_empty', 'No Group Tags groups available. Create one first.');
+    listEl.appendChild(emptyEl);
+    return;
+  }
+
+  // Row 1: Primary Tabs (Categories)
+  const primaryTabsEl = document.createElement('div');
+  primaryTabsEl.className = 'group-tags-picker-primary-tabs';
+
+  categories.forEach(category => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `group-tags-picker-tab-btn ${groupTagsPickerState.activeCategoryId === category.id ? 'active' : ''}`;
+    btn.textContent = category.name || category.id || 'Category';
+    btn.addEventListener('click', () => {
+      setPickerCategory(category.id);
+      renderGroupTagsPickerList(tagData, groupTagsData);
+    });
+    primaryTabsEl.appendChild(btn);
+  });
+
+  // Row 2: Secondary Tabs (Groups)
+  const secondaryTabsEl = document.createElement('div');
+  secondaryTabsEl.className = 'group-tags-picker-secondary-tabs';
+
+  const activeCategory = categories.find(c => c.id === groupTagsPickerState.activeCategoryId) || categories[0];
+  if (activeCategory) {
+    groupTagsPickerState.activeCategoryId = activeCategory.id;
+    const groups = Array.isArray(activeCategory.groups) ? activeCategory.groups : [];
+    
+    groups.forEach(group => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'group-tags-picker-group-btn';
+      button.textContent = group.name || group.id || 'Group';
+      button.addEventListener('click', () => {
+        closeGroupTagsPicker({
+          categoryId: activeCategory.id,
+          groupId: group.id
+        });
+      });
+      secondaryTabsEl.appendChild(button);
+    });
+  }
+
+  listEl.appendChild(primaryTabsEl);
+  listEl.appendChild(secondaryTabsEl);
+}
+
+function openGroupTagsPicker(tagData, groupTagsData) {
+  initGroupTagsPickerModal();
+  if (groupTagsPickerState.resolve) {
+    // 理论上同一时间只允许一个选择弹窗处于待决状态
+    closeGroupTagsPicker(null);
+  }
+
+  const modal = document.getElementById('group-tags-picker-modal');
+  const tagEl = document.getElementById('group-tags-picker-tag');
+  const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
+  groupTagsPickerState.tagData = tagData;
+  groupTagsPickerState.groupTagsData = groupTagsData;
+  groupTagsPickerState.activeCategoryId = categories[0]?.id || null;
+
+  updateGroupTagsPickerStaticText();
+  if (tagEl) {
+    tagEl.innerHTML = '';
+    tagEl.appendChild(renderPickerTagContent(tagData));
+  }
+  renderGroupTagsPickerList(tagData, groupTagsData);
+
+  modal?.classList.add('visible');
+  return new Promise(resolve => {
+    groupTagsPickerState.resolve = resolve;
+  });
+}
+
+async function persistGroupTagsData(groupTagsData) {
+  const colorMap = buildGroupTagsColorMap(groupTagsData);
+  const translationMap = buildGroupTagsTranslationMap(groupTagsData);
+  await chrome.storage.local.set({
+    groupTagsUserData: groupTagsData,
+    groupColorMap: colorMap,
+    groupTranslationMap: translationMap
+  });
+  // 写回 storage 后立刻刷新 popup 内存态，让当前编辑器马上吃到颜色和翻译
+  applyGroupMapsToEditors(colorMap, translationMap);
+}
+
+async function addTagToGroupTags(tagData) {
+  const en = String(tagData?.en || '').trim();
+  const zh = String(tagData?.zh || '').trim();
+  if (!en) return;
+
+  const effectiveData = await loadEffectiveGroupTagsData();
+  const existingLocation = findExistingGroupTagLocation(effectiveData, en);
+  if (existingLocation) {
+    // 全局唯一：同一个 tag 不允许再加入别的分组，否则颜色/翻译会变成顺序相关
+    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(existingLocation)}`);
+    return;
+  }
+
+  const selection = await openGroupTagsPicker({ en, zh }, effectiveData);
+  if (!selection) return;
+
+  // 用户确认后重新读取最新有效数据，避免把弹窗打开期间的外部修改覆盖掉
+  const latestData = await loadEffectiveGroupTagsData();
+  const latestExistingLocation = findExistingGroupTagLocation(latestData, en);
+  if (latestExistingLocation) {
+    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(latestExistingLocation)}`);
+    return;
+  }
+
+  const targetCategory = latestData.categories.find(category => category.id === selection.categoryId);
+  const targetGroup = targetCategory?.groups?.find(group => group.id === selection.groupId);
+  if (!targetGroup) {
+    // 用户打开弹窗后，目标分组可能已被别的入口删除
+    showPopupToast('error', getLocalizedText('group_tags_picker_missing', 'The selected Group Tags group no longer exists.'));
+    return;
+  }
+
+  targetGroup.tags.push({ en, zh });
+  await persistGroupTagsData(latestData);
+  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added to')}: ${targetCategory.name} > ${targetGroup.name}`);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -452,6 +947,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   // Set up Editor
   const charEditor = new TagEditor(editorContainer, {
     dict: dict, // Pass localization dict down to TagEditor
+    onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
       // 检测是否为结构性变更（tag 数量变化）
@@ -472,6 +968,8 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       }
     }
   });
+  charEditor.groupColorMap = currentGroupColorMap;
+  charEditor.groupTranslationMap = currentGroupTranslationMap;
 
   // ── 焦点追踪：点击角色编辑器容器时设为活动目标 ──
   editorContainer.addEventListener('mousedown', () => {
@@ -623,6 +1121,7 @@ function initUI() {
   // Autocomplete
   autocomplete = new Autocomplete();
   autocomplete.load();
+  initGroupTagsPickerModal();
 
   // Resolution controls
   const resWidth = document.getElementById('res-width');
@@ -839,6 +1338,7 @@ function initUI() {
   const dict = translations[currentLang] || translations.en;
   editor = new TagEditor(container, {
     dict: dict,
+    onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
     onChange: (tags) => {
       // 检测是否为结构性变更（tag 数量变化 = 增删操作）
       const prevTags = currentMode === 'positive' ? positiveTags : negativeTags;
@@ -850,6 +1350,8 @@ function initUI() {
       syncActiveTagsToPanel();
     }
   });
+  editor.groupColorMap = currentGroupColorMap;
+  editor.groupTranslationMap = currentGroupTranslationMap;
 
   // Bind Autocomplete to Editor (for inline edit)
   editor.bindAutocomplete(autocomplete);
@@ -860,37 +1362,17 @@ function initUI() {
     syncActiveTagsToPanel();
   });
 
-  // ── 初始化时从持久化存储加载分组颜色 ──
-  chrome.storage.local.get('groupColorMap', (data) => {
-    if (data.groupColorMap && editor) {
-      editor.groupColorMap = data.groupColorMap;
-      // 不立即 render，等待首次 setTags 时自然带上颜色
-    }
+  chrome.storage.local.get(['groupColorMap', 'groupTranslationMap'], (data) => {
+    applyGroupMapsToEditors(data.groupColorMap || {}, data.groupTranslationMap || {}, false);
   });
 
-  // ── 初始化时从持久化存储加载分组翻译 ──
-  chrome.storage.local.get('groupTranslationMap', (data) => {
-    if (data.groupTranslationMap && editor) {
-      editor.groupTranslationMap = data.groupTranslationMap;
-    }
-  });
-
-  // ── 实时监听翻译映射的 storage 变更（GroupTagsPanel 直接写入 storage，无需 bridge 中继） ──
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.groupTranslationMap && changes.groupTranslationMap.newValue) {
-      const newMap = changes.groupTranslationMap.newValue;
-      console.log('[Popup] Translation map updated from storage, count:', Object.keys(newMap).length);
-      if (editor) {
-        editor.groupTranslationMap = newMap;
-        editor.render();
-      }
-      charEditors.forEach(charEdObj => {
-        if (charEdObj && charEdObj.editor) {
-          charEdObj.editor.groupTranslationMap = newMap;
-          charEdObj.editor.render();
-        }
-      });
-    }
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (!changes.groupColorMap && !changes.groupTranslationMap) return;
+    // popup 只关心映射结果，不重复推导来源，保证来自 popup / GroupTags 面板的更新都能收敛到一处
+    const nextColorMap = changes.groupColorMap ? (changes.groupColorMap.newValue || {}) : currentGroupColorMap;
+    const nextTranslationMap = changes.groupTranslationMap ? (changes.groupTranslationMap.newValue || {}) : currentGroupTranslationMap;
+    applyGroupMapsToEditors(nextColorMap, nextTranslationMap);
   });
 
   // Character Prompt Add Button
@@ -1117,6 +1599,17 @@ function initUI() {
 
     // 刷新多选分辨率按钮文字
     if (typeof syncMultiResStorage === 'function') syncMultiResStorage();
+    updateGroupTagsPickerStaticText();
+    if (document.getElementById('group-tags-picker-modal')?.classList.contains('visible')) {
+      const { tagData, groupTagsData } = groupTagsPickerState;
+      if (tagData) {
+        const tagEl = document.getElementById('group-tags-picker-tag');
+        if (tagEl) tagEl.textContent = formatPickerTagText(tagData);
+      }
+      if (tagData && groupTagsData) {
+        renderGroupTagsPickerList(tagData, groupTagsData);
+      }
+    }
   };
 
   const setLanguage = (lang) => {
@@ -1628,14 +2121,6 @@ function initCommunication() {
 
     // The following block runs for RETURN_PROMPT
     if (msg.type === 'RETURN_PROMPT') {
-      // Update visual status
-      const statusEl = document.getElementById('sync-status');
-      if (statusEl) {
-        const dict = translations[currentLang] || translations.en;
-        statusEl.textContent = dict.status_linked || 'Linked';
-        statusEl.style.color = '#4caf50';
-      }
-
       lastSentPositive = tagsToString(positiveTags);
       lastSentNegative = tagsToString(negativeTags);
 
@@ -2008,38 +2493,14 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SYNC_GROUP_COLORS' && msg.colorMap) {
     // 持久化保存到 storage
     chrome.storage.local.set({ groupColorMap: msg.colorMap });
-    
-    // 设置到 base editor
-    if (editor) {
-      editor.groupColorMap = msg.colorMap;
-      editor.render();
-    }
-    // 设置到所有角色 editor
-    charEditors.forEach(charEdObj => {
-      if (charEdObj && charEdObj.editor) {
-        charEdObj.editor.groupColorMap = msg.colorMap;
-        charEdObj.editor.render();
-      }
-    });
+    applyGroupMapsToEditors(msg.colorMap, currentGroupTranslationMap);
   }
 
   // 接收来自 GroupTags 面板的分组翻译映射，应用到所有 TagEditor 实例
   if (msg.type === 'SYNC_GROUP_TRANSLATIONS' && msg.translationMap) {
     // 持久化保存到 storage
     chrome.storage.local.set({ groupTranslationMap: msg.translationMap });
-    
-    // 设置到 base editor
-    if (editor) {
-      editor.groupTranslationMap = msg.translationMap;
-      editor.render();
-    }
-    // 设置到所有角色 editor
-    charEditors.forEach(charEdObj => {
-      if (charEdObj && charEdObj.editor) {
-        charEdObj.editor.groupTranslationMap = msg.translationMap;
-        charEdObj.editor.render();
-      }
-    });
+    applyGroupMapsToEditors(currentGroupColorMap, msg.translationMap);
   }
 });
 

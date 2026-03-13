@@ -304,6 +304,304 @@
       border: 1px solid #4a4a6a;
     }
 
+    #group-tags-picker-modal {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 110;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    #group-tags-picker-modal.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .group-tags-picker-content {
+      background: #1e1e2e;
+      border-radius: 8px;
+      width: min(92%, 400px);
+      border: 1px solid #4a4a6a;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      transform: translateY(10px) scale(0.98);
+      opacity: 0;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #group-tags-picker-modal.visible .group-tags-picker-content {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+    }
+
+    /* 用户要求极致紧凑，隐藏原有无意义的标题和关闭层 */
+    .group-tags-picker-header {
+      display: none;
+    }
+
+    /* 顶部待加 Tag 高清分隔显示区 */
+    .group-tags-picker-tag {
+      margin: 12px 14px 10px;
+      padding: 0;
+      border-radius: 6px;
+      border: 1px solid #4a4a6a;
+      background: #181825;
+      overflow: hidden;
+    }
+
+    .group-tags-picker-tag-inner {
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+
+    .group-tags-picker-tag-en {
+      color: #fff;
+      font-size: 13px;
+      font-weight: bold;
+      padding: 8px 12px;
+      flex: 1; /* 撑满剩余左侧空间 */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .group-tags-picker-tag-divider {
+      width: 1px;
+      height: 16px;
+      background: #4a4a6a;
+      margin: 0 4px;
+    }
+
+    .group-tags-picker-tag-zh {
+      color: #94a3b8;
+      font-size: 11px;
+      padding: 8px 10px 8px 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 40%; /* 限制中文长度 */
+    }
+
+    .group-tags-picker-tag-close {
+      background: rgba(239, 68, 68, 0.1); /* 极弱红底 */
+      border: none;
+      border-left: 1px solid #4a4a6a; /* 用左边框区隔 */
+      color: #ef4444;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0;
+      width: 32px;
+      height: 33px; /* 约等于父级高度 */
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .group-tags-picker-tag-close:hover {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    /* 包含两行 tab 的母容器 */
+    .group-tags-picker-list {
+      display: flex;
+      flex-direction: column;
+      padding: 0 0 12px 0;
+    }
+
+    /* 第一排：分类 Category */
+    .group-tags-picker-primary-tabs {
+      display: flex;
+      gap: 2px;
+      padding: 8px 12px;
+      background: #181825;
+      border-bottom: 1px solid #3a3a55;
+      overflow-x: auto;
+    }
+    
+    .group-tags-picker-primary-tabs::-webkit-scrollbar,
+    .group-tags-picker-secondary-tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+    .group-tags-picker-primary-tabs::-webkit-scrollbar-thumb,
+    .group-tags-picker-secondary-tabs::-webkit-scrollbar-thumb {
+      background: #4a4a6a;
+      border-radius: 2px;
+    }
+
+    .group-tags-picker-tab-btn {
+      background: #181825;
+      border: 1px solid #3a3a55;
+      color: #999;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 4px;
+      white-space: nowrap;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .group-tags-picker-tab-btn:hover {
+      background: #2a2a3e;
+      color: #ddd;
+    }
+
+    .group-tags-picker-tab-btn:active {
+      transform: scale(0.95);
+    }
+
+    .group-tags-picker-tab-btn.active {
+      background: #818cf8;
+      border-color: #6366f1;
+      color: #fff;
+    }
+
+    /* 第二排：对应的分组 Groups */
+    .group-tags-picker-secondary-tabs {
+      display: flex;
+      flex-wrap: wrap; 
+      gap: 6px;
+      padding: 10px 12px;
+      max-height: 240px;
+      overflow-y: auto;
+      align-content: flex-start;
+      background: #1e1e2e;
+    }
+
+    .group-tags-picker-group-btn {
+      background: #252538;
+      border: 1px solid #4a4a6a;
+      color: #cbd5e1;
+      border-radius: 4px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .group-tags-picker-group-btn:hover {
+      background: #4a4a6a;
+      border-color: #818cf8;
+      color: #fff;
+    }
+
+    .group-tags-picker-group-btn:active {
+      transform: scale(0.95) translateY(1px);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); /* 模拟内凹阻力感 */
+    }
+
+    .group-tags-picker-empty {
+      color: #94a3b8;
+      font-size: 11px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    /* ---------------------------------
+       Toast Notifications (Solid High Contrast)
+       --------------------------------- */
+    #popup-toast-root {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 130;
+      pointer-events: none;
+    }
+
+    .popup-toast {
+      min-width: 200px;
+      max-width: min(300px, calc(100vw - 24px));
+      border-radius: 6px;
+      border: 1px solid #4a4a6a;
+      border-left-width: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      background: #1e1e2e;
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      pointer-events: auto;
+      opacity: 0;
+      transform: translateY(-8px) scale(0.96);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .popup-toast.visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .popup-toast.success { border-left-color: #10b981; }
+    .popup-toast.warning { border-left-color: #f59e0b; }
+    .popup-toast.error   { border-left-color: #ef4444; }
+
+    .popup-toast-icon {
+      font-size: 16px;
+      line-height: 1;
+      margin-top: 1px;
+      flex-shrink: 0;
+    }
+
+    .popup-toast.success .popup-toast-icon { color: #10b981; }
+    .popup-toast.warning .popup-toast-icon { color: #f59e0b; }
+    .popup-toast.error .popup-toast-icon   { color: #ef4444; }
+
+    .popup-toast-body {
+      flex: 1;
+      min-width: 0;
+      color: #e0e0e0;
+    }
+
+    .popup-toast-title {
+      font-size: 12px;
+      font-weight: bold;
+      margin-bottom: 2px;
+      color: #fff;
+    }
+
+    .popup-toast-message {
+      font-size: 11px;
+      line-height: 1.4;
+      word-break: break-word;
+      color: #cbd5e1;
+    }
+
+    .popup-toast-close {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #94a3b8;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .popup-toast-close:hover {
+      background: #2a2a3e;
+      color: #fff;
+    }
+
     .setting-group {
       margin-bottom: 15px;
     }
@@ -509,13 +807,13 @@
       .res-input { width: 38px; padding: 0 1px; }
       .res-swap-btn { width: 20px; font-size: 12px; }
       
-      /* Hide "Sync Status" text to save space */
-      #sync-status { display: none !important; }
     }
-    
+
     /* Extra Small screens: hide res-trigger text if present or shrink further */
     @media (max-width: 480px) {
       .res-select { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #popup-toast-root { left: 12px; right: 12px; }
+      .popup-toast { max-width: none; width: 100%; }
     }
   </style>
 </head>
@@ -557,8 +855,6 @@
         </div>
       </div>
       <div class="controls">
-        <span id="sync-status" data-i18n="status_ready"
-          style="font-size:0.8em; color:#666; margin-right:8px; display:flex; align-items:center;">Ready</span>
         <button id="btn-library" class="icon-btn" title="Resource Center" data-i18n-title="btn_library">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
           <span data-i18n="btn_library">资源中心</span>
@@ -695,6 +991,20 @@
     </div>
   </div>
 
+  <div id="group-tags-picker-modal">
+    <div class="group-tags-picker-content">
+      <div class="group-tags-picker-header">
+        <span id="group-tags-picker-title">Add to Group Tags</span>
+        <button id="group-tags-picker-close" class="group-tags-picker-close" aria-label="Close">×</button>
+      </div>
+      <div id="group-tags-picker-tag" class="group-tags-picker-tag"></div>
+      <div id="group-tags-picker-list" class="group-tags-picker-list"></div>
+    </div>
+  </div>
+
+  <div id="popup-toast-root"></div>
+
+  <script src="../lib/group-tags-data.js"></script>
   <script type="module" src="popup.js"></script>
 </body>
 

@@ -3,6 +3,8 @@ let customGroupsData = null;
 let defaultGroupsData = { categories: [] };
 let activeCategoryIndex = 0;
 let activeGroupIndex = 0;
+let hasInitializedGroupTagsPanel = false;
+const groupTagsDataUtils = window.GroupTagsDataUtils || {};
 let autocompleteDict = []; // 全局字典缓存
 let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
@@ -72,6 +74,11 @@ densitySlider.addEventListener('input', (e) => {
 
 // 构建全局 tag→color 的扁平映射表
 function buildColorMap() {
+  // 优先复用共享工具，确保 popup 和 Group Tags 面板生成完全一致的颜色映射
+  if (groupTagsDataUtils.buildColorMap) {
+    return groupTagsDataUtils.buildColorMap(customGroupsData);
+  }
+
   const map = {};
   if (!customGroupsData || !customGroupsData.categories) return map;
   customGroupsData.categories.forEach(cat => {
@@ -93,6 +100,11 @@ function syncColorsToParent() {
 
 // 构建全局 tag→zh 的翻译映射表
 function buildTranslationMap() {
+  // 优先复用共享工具，避免 popup / Group Tags 面板对翻译映射的规则产生漂移
+  if (groupTagsDataUtils.buildTranslationMap) {
+    return groupTagsDataUtils.buildTranslationMap(customGroupsData);
+  }
+
   const map = {};
   if (!customGroupsData || !customGroupsData.categories) return map;
   customGroupsData.categories.forEach(cat => {
@@ -353,22 +365,37 @@ function generateId(prefix) {
 
 // ========== 导入导出与数据归一化 ==========
 function cloneData(data) {
+  if (groupTagsDataUtils.cloneData) {
+    return groupTagsDataUtils.cloneData(data);
+  }
   return JSON.parse(JSON.stringify(data));
 }
 
 function sanitizeText(value) {
+  if (groupTagsDataUtils.sanitizeText) {
+    return groupTagsDataUtils.sanitizeText(value);
+  }
   return typeof value === 'string' ? value.trim() : '';
 }
 
 function sanitizeColor(value) {
+  if (groupTagsDataUtils.sanitizeColor) {
+    return groupTagsDataUtils.sanitizeColor(value);
+  }
   return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : '#4a4a6a';
 }
 
 function normalizeTagKey(value) {
+  if (groupTagsDataUtils.normalizeTagKey) {
+    return groupTagsDataUtils.normalizeTagKey(value);
+  }
   return sanitizeText(value).toLowerCase();
 }
 
 function buildLegacyId(prefix, parts) {
+  if (groupTagsDataUtils.buildLegacyId) {
+    return groupTagsDataUtils.buildLegacyId(prefix, parts);
+  }
   const slug = parts
     .map(part => sanitizeText(String(part || '')).toLowerCase().replace(/[^a-z0-9]+/g, '_'))
     .map(part => part.replace(/^_+|_+$/g, ''))
@@ -378,10 +405,16 @@ function buildLegacyId(prefix, parts) {
 }
 
 function createEmptyGroupTagsData() {
+  if (groupTagsDataUtils.createEmptyGroupTagsData) {
+    return groupTagsDataUtils.createEmptyGroupTagsData();
+  }
   return { categories: [] };
 }
 
 function createMergeSummary() {
+  if (groupTagsDataUtils.createMergeSummary) {
+    return groupTagsDataUtils.createMergeSummary();
+  }
   return {
     addedCategories: 0,
     addedGroups: 0,
@@ -394,6 +427,9 @@ function createMergeSummary() {
 }
 
 function countSummarySkipped(summary) {
+  if (groupTagsDataUtils.countSummarySkipped) {
+    return groupTagsDataUtils.countSummarySkipped(summary);
+  }
   return summary.skippedCategories + summary.skippedGroups + summary.skippedTags + summary.skippedInvalid;
 }
 
@@ -407,6 +443,10 @@ function escapeHtml(text) {
 }
 
 function normalizeGroupTagsData(rawData) {
+  if (groupTagsDataUtils.normalizeGroupTagsData) {
+    return groupTagsDataUtils.normalizeGroupTagsData(rawData);
+  }
+
   const result = createEmptyGroupTagsData();
   const summary = createMergeSummary();
   const categories = Array.isArray(rawData?.categories) ? rawData.categories : [];
@@ -496,6 +536,10 @@ function normalizeGroupTagsData(rawData) {
 }
 
 function mergeGroupTagsData(baseData, sourceData) {
+  if (groupTagsDataUtils.mergeGroupTagsData) {
+    return groupTagsDataUtils.mergeGroupTagsData(baseData, sourceData);
+  }
+
   const target = cloneData(baseData);
   const summary = createMergeSummary();
 
@@ -567,6 +611,96 @@ function clampActiveIndices() {
   activeGroupIndex = Math.max(activeGroupIndex, 0);
 }
 
+function getActiveSelectionIds() {
+  // 外部刷新前记住当前选中的分类/分组，避免刷新后总是跳回第一个
+  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
+  const currentGroup = currentCategory?.groups?.[activeGroupIndex];
+  return {
+    categoryId: currentCategory?.id || null,
+    groupId: currentGroup?.id || null
+  };
+}
+
+function restoreActiveSelectionByIds(selection) {
+  if (!selection?.categoryId || !customGroupsData?.categories?.length) {
+    clampActiveIndices();
+    return;
+  }
+
+  const nextCategoryIndex = customGroupsData.categories.findIndex(category => category.id === selection.categoryId);
+  if (nextCategoryIndex >= 0) {
+    activeCategoryIndex = nextCategoryIndex;
+  }
+
+  const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  if (!selection.groupId || !currentCategory?.groups?.length) {
+    clampActiveIndices();
+    return;
+  }
+
+  const nextGroupIndex = currentCategory.groups.findIndex(group => group.id === selection.groupId);
+  if (nextGroupIndex >= 0) {
+    activeGroupIndex = nextGroupIndex;
+  }
+
+  clampActiveIndices();
+}
+
+function resolveEffectiveGroupTagsData(storedData) {
+  // Group Tags 面板与 popup 共用同一套“用户数据优先，默认库补新增”的合并规则
+  if (groupTagsDataUtils.resolveEffectiveGroupTagsData) {
+    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultGroupsData, storedData);
+  }
+
+  if (storedData && storedData.categories) {
+    const normalizedStored = normalizeGroupTagsData(storedData).data;
+    return mergeGroupTagsData(normalizedStored, defaultGroupsData).data;
+  }
+  return cloneData(defaultGroupsData);
+}
+
+function findGlobalTagLocation(tagText, options = {}) {
+  const normalizedTarget = normalizeTagKey(tagText);
+  if (!normalizedTarget || !customGroupsData?.categories) return null;
+
+  // 全局查重：同一个英文 tag 只允许在整个 Group Tags 中出现一次
+  const exclude = options.exclude || null;
+  for (let categoryIndex = 0; categoryIndex < customGroupsData.categories.length; categoryIndex += 1) {
+    const category = customGroupsData.categories[categoryIndex];
+    const groups = Array.isArray(category.groups) ? category.groups : [];
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const group = groups[groupIndex];
+      const tags = Array.isArray(group.tags) ? group.tags : [];
+      for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
+        if (
+          exclude &&
+          exclude.categoryIndex === categoryIndex &&
+          exclude.groupIndex === groupIndex &&
+          exclude.tagIndex === tagIndex
+        ) {
+          continue;
+        }
+
+        if (normalizeTagKey(tags[tagIndex].en) === normalizedTarget) {
+          return {
+            categoryIndex,
+            groupIndex,
+            tagIndex,
+            categoryName: category.name,
+            groupName: group.name
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function formatTagLocation(location) {
+  if (!location) return '';
+  return `${location.categoryName} > ${location.groupName}`;
+}
+
 function getCurrentExportData() {
   return normalizeGroupTagsData(customGroupsData).data;
 }
@@ -588,8 +722,10 @@ function getTimestampForFilename() {
 
 function applyGroupTagsData(nextData) {
   destroyAllSortables();
+  const previousSelection = getActiveSelectionIds();
   customGroupsData = nextData;
-  clampActiveIndices();
+  // 导入、覆盖等全量应用数据时，尽量保留用户当前浏览位置
+  restoreActiveSelectionByIds(previousSelection);
   dataSnapshot = null;
   isEditMode = false;
   dom.app.classList.remove('edit-mode');
@@ -1026,10 +1162,12 @@ function setupInlineAddPanel() {
     const currentGroup = currentCategory.groups[activeGroupIndex];
     if (!currentGroup) return;
 
-    if (currentGroup.tags.some(t => t.en === en)) {
+    const existingLocation = findGlobalTagLocation(en);
+    if (existingLocation) {
       enInput.style.borderColor = '#e74c3c';
       enInput.value = '';
-      enInput.placeholder = '该标签已存在！';
+      // 这里直接提示已有位置，避免用户再去猜到底是哪个分组占用了该 tag
+      enInput.placeholder = `已存在于 ${formatTagLocation(existingLocation)}`;
       setTimeout(() => {
         enInput.style.borderColor = '';
         enInput.placeholder = 'Input English Tag (e.g. sunny)';
@@ -1380,8 +1518,12 @@ function renderTagsGrid() {
         input.select();
         const commit = () => {
           const newEn = input.value.trim();
-          // 防止重名或为空
-          if (newEn && newEn !== t.en && !currentGroup.tags.some(x => x.en === newEn)) {
+          const existingLocation = findGlobalTagLocation(newEn, {
+            exclude: { categoryIndex: activeCategoryIndex, groupIndex: activeGroupIndex, tagIndex }
+          });
+          if (existingLocation) {
+            showInfoModal('标签已存在', `该标签已存在于 ${formatTagLocation(existingLocation)}，不能重复添加到多个分组。`);
+          } else if (newEn && newEn !== t.en) {
             t.en = newEn;
             currentGroup._modified = true;
             currentCategory._modified = true;
@@ -1516,13 +1658,7 @@ async function init() {
       chrome.storage.local.get('groupTagsUserData', (data) => resolve(data.groupTagsUserData));
     });
     
-    if (stored && stored.categories) {
-      // 合并预设与用户数据：用户数据优先，预设仅补增
-      const normalizedStored = normalizeGroupTagsData(stored).data;
-      customGroupsData = mergeGroupTagsData(normalizedStored, defaultGroupsData).data;
-    } else {
-      customGroupsData = cloneData(defaultGroupsData);
-    }
+    customGroupsData = resolveEffectiveGroupTagsData(stored);
     
     // 3. 渲染 UI 与事件绑定
     setupInlineAddPanel();
@@ -1532,6 +1668,7 @@ async function init() {
     // 4. 推送颜色映射和翻译映射
     syncColorsToParent();
     syncTranslationsToParent();
+    hasInitializedGroupTagsPanel = true;
     
     console.log('[GroupTags] Initialized, categories:', customGroupsData.categories.length);
   } catch (err) {
@@ -1543,6 +1680,24 @@ async function init() {
 }
 
 init();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.groupTagsUserData || !hasInitializedGroupTagsPanel) return;
+  if (isEditMode) {
+    // 编辑模式下不自动覆盖，避免把用户未保存的本地修改冲掉
+    console.info('[GroupTags] 检测到外部数据更新，当前处于编辑模式，暂不自动刷新。');
+    return;
+  }
+
+  const previousSelection = getActiveSelectionIds();
+  // 非编辑模式下允许响应 popup 的 +G 写入，并沿用默认库补增规则重新生成有效数据
+  customGroupsData = resolveEffectiveGroupTagsData(changes.groupTagsUserData.newValue);
+  restoreActiveSelectionByIds(previousSelection);
+  renderPrimaryTabs();
+  renderSecondaryTabs();
+  syncColorsToParent();
+  syncTranslationsToParent();
+});
 
 // ========== 按钮事件绑定 ==========
 
