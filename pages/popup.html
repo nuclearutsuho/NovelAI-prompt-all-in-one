@@ -371,6 +371,9 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      cursor: text;
+      transition: background 0.2s ease;
+      border-radius: 4px;
     }
 
     .group-tags-picker-tag-divider {
@@ -388,6 +391,33 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 40%; /* 限制中文长度 */
+      cursor: text;
+      transition: background 0.2s ease;
+      border-radius: 4px;
+    }
+
+    /* 赋予可点击处的暗示 */
+    .group-tags-picker-tag-en:hover,
+    .group-tags-picker-tag-zh:hover {
+      background: #2a2a3e;
+    }
+
+    /* 无缝切换为输入框时的样式重置 */
+    input.group-tags-picker-tag-en.editing,
+    input.group-tags-picker-tag-zh.editing {
+      background: #2a2a3e;
+      border: 1px solid #6366f1;
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+      font-family: inherit;
+      padding: 7px 11px; /* 微调抵消 border */
+      margin: 0;
+      color: #fff;
+      cursor: text;
+    }
+
+    input.group-tags-picker-tag-zh.editing {
+      padding: 7px 9px 7px 5px;
     }
 
     .group-tags-picker-tag-close {

@@ -448,10 +448,24 @@
       color: #e0e0e0;
       padding: calc(var(--density-card-pad-v) + 1px) var(--density-card-pad-h);
       text-align: center;
-      background: #2a2a3e;
+      /* Background is dark */
+      background: #181825;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      word-break: break-all;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    /* 修复空翻译/空标签情况下的排版塌陷，填入隐秘的破折号占位符撑开 line-height */
+    .tag-zh-part:empty::after,
+    .tag-en-part:empty::after {
+      content: '—';
+      opacity: 0.7; /* 降低透明度避免喧宾夺主 */
+      font-weight: 400;
     }
 
     /* Bottom Toolbar */

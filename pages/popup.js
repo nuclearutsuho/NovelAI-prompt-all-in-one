@@ -128,7 +128,8 @@ const translations = {
     toast_warning: "Notice",
     toast_error: "Error",
     toast_close: "Close notification",
-    group_tags_picker_close: "Close panel"
+    group_tags_picker_close: "Close panel",
+    group_tags_picker_trans_placeholder: "Enter translation"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -223,7 +224,8 @@ const translations = {
     toast_warning: "提示",
     toast_error: "错误",
     toast_close: "关闭通知",
-    group_tags_picker_close: "关闭面板"
+    group_tags_picker_close: "关闭面板",
+    group_tags_picker_trans_placeholder: "输入翻译"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -606,23 +608,70 @@ function renderPickerTagContent(tagData) {
   const container = document.createElement('div');
   container.className = 'group-tags-picker-tag-inner';
 
-  // 左半边：英文原名，更醒目
-  const enSpan = document.createElement('span');
-  enSpan.className = 'group-tags-picker-tag-en';
-  enSpan.textContent = en;
+  // 辅助函数：创建无缝内联编辑元素
+  const createEditableText = (initialText, className, fieldName) => {
+    const textEl = document.createElement('span');
+    textEl.className = className;
+    textEl.textContent = initialText;
+
+    textEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.className = `${className} editing`;
+      inputEl.value = groupTagsPickerState.tagData[fieldName] || '';
+
+      const finishEditing = () => {
+        const newVal = inputEl.value.trim();
+        groupTagsPickerState.tagData[fieldName] = newVal; // 更新内存状态
+        
+        let displayVal = newVal;
+        if (!displayVal) {
+          displayVal = fieldName === 'en' ? '...' : getLocalizedText('group_tags_picker_trans_placeholder', '输入翻译');
+        }
+        textEl.textContent = displayVal;
+        
+        if (inputEl.parentNode) {
+          inputEl.parentNode.replaceChild(textEl, inputEl);
+        }
+      };
+
+      inputEl.addEventListener('blur', finishEditing);
+      inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          inputEl.blur();
+        } else if (e.key === 'Escape') {
+          // ESC 放弃修改
+          e.preventDefault();
+          e.stopPropagation(); // 防止冒泡关闭整个模态框
+          inputEl.value = groupTagsPickerState.tagData[fieldName] || '';
+          inputEl.blur();
+        }
+      });
+
+      textEl.parentNode.replaceChild(inputEl, textEl);
+      inputEl.focus();
+      // 让光标出现在文字末尾
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    });
+
+    return textEl;
+  };
+
+  // 左半边：英文原名 (可击穿编辑)
+  const enSpan = createEditableText(en || '...', 'group-tags-picker-tag-en', 'en');
   container.appendChild(enSpan);
 
-  // 中间：竖向分割线 + 中文翻译
-  if (zh) {
-    const divider = document.createElement('span');
-    divider.className = 'group-tags-picker-tag-divider';
-    container.appendChild(divider);
+  // 中间分割线
+  const divider = document.createElement('span');
+  divider.className = 'group-tags-picker-tag-divider';
+  container.appendChild(divider);
 
-    const zhSpan = document.createElement('span');
-    zhSpan.className = 'group-tags-picker-tag-zh';
-    zhSpan.textContent = zh;
-    container.appendChild(zhSpan);
-  }
+  // 右侧：中文翻译 (可击穿编辑)
+  // 如果当前没翻译，也填充给个底子使得它能被点到
+  const zhSpan = createEditableText(zh || getLocalizedText('group_tags_picker_trans_placeholder', '输入翻译'), 'group-tags-picker-tag-zh', 'zh');
+  container.appendChild(zhSpan);
 
   // 极简关闭按钮插在最右端
   const closeBtn = document.createElement('button');
@@ -690,9 +739,14 @@ function renderGroupTagsPickerList(tagData, groupTagsData) {
       button.className = 'group-tags-picker-group-btn';
       button.textContent = group.name || group.id || 'Group';
       button.addEventListener('click', () => {
+        // 在正式加入前，确保所有的 input focus 已经被保存同步到了 tagData
+        // 因为 activeElement blur 存在时间差，这里直接读取最新的 state 作为最终值返回
         closeGroupTagsPicker({
           categoryId: activeCategory.id,
-          groupId: group.id
+          groupId: group.id,
+          // 附带返回被编辑过的最新 Tag 内容给外部处理函数
+          editedEn: groupTagsPickerState.tagData?.en,
+          editedZh: groupTagsPickerState.tagData?.zh
         });
       });
       secondaryTabsEl.appendChild(button);
@@ -755,12 +809,20 @@ async function addTagToGroupTags(tagData) {
     return;
   }
 
+  // 因为在弹窗期间 tag 原本的值可能会被用户单击处于 input 状态修改，拿到最热数据
   const selection = await openGroupTagsPicker({ en, zh }, effectiveData);
   if (!selection) return;
 
   // 用户确认后重新读取最新有效数据，避免把弹窗打开期间的外部修改覆盖掉
   const latestData = await loadEffectiveGroupTagsData();
-  const latestExistingLocation = findExistingGroupTagLocation(latestData, en);
+  
+  // 取出经过弹窗内可能已被用户编辑过的新名字 (如果没编辑回退到原来传参的字)
+  const finalEn = String(selection.editedEn || en).trim();
+  const finalZh = String(selection.editedZh || zh).trim();
+
+  // 如果原本没改但原来存在，或者改了以后撞车，都要拦截
+  if (!finalEn) return; 
+  const latestExistingLocation = findExistingGroupTagLocation(latestData, finalEn);
   if (latestExistingLocation) {
     showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(latestExistingLocation)}`);
     return;
@@ -774,9 +836,12 @@ async function addTagToGroupTags(tagData) {
     return;
   }
 
-  targetGroup.tags.push({ en, zh });
+  targetGroup.tags.push({ en: finalEn, zh: finalZh });
   await persistGroupTagsData(latestData);
-  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added to')}: ${targetCategory.name} > ${targetGroup.name}`);
+  
+  const locationName = `${targetCategory.name} > ${targetGroup.name}`;
+  const enHtml = `<span style="color: #60a5fa">${escapeHtml(finalEn)}</span>`;
+  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added')} ${enHtml} ${getLocalizedText('group_tags_picker_added_suffix', 'to')} [${locationName}]`);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
