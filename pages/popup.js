@@ -331,12 +331,23 @@ let hasReceivedInitialChars = false;
 function computeStateFingerprint(posT, negT, charD) {
   const posF = JSON.stringify((posT || []).map(t => [t.value, !!t.disabled]));
   const negF = JSON.stringify((negT || []).map(t => [t.value, !!t.disabled]));
-  const charsStr = JSON.stringify((charD || []).map(c => ({
+  const charsStr = JSON.stringify(getMeaningfulCharacterHistoryData(charD).map(c => ({
     p: c.posPrompt || '', n: c.negPrompt || '',
     pd: (c.posTags || []).map(t => [t.value, !!t.disabled]),
     nd: (c.negTags || []).map(t => [t.value, !!t.disabled])
   })));
   return posF + negF + charsStr;
+}
+
+function hasMeaningfulCharacterHistoryContent(character) {
+  if (!character) return false;
+  const posPrompt = normalizePrompt(character.posPrompt || tagsToString(character.posTags || []));
+  const negPrompt = normalizePrompt(character.negPrompt || tagsToString(character.negTags || []));
+  return !!posPrompt || !!negPrompt;
+}
+
+function getMeaningfulCharacterHistoryData(characters) {
+  return (characters || []).filter(character => hasMeaningfulCharacterHistoryContent(character));
 }
 
 function cloneGroupTagsData(data) {
@@ -2437,9 +2448,15 @@ async function _commitSnapshot() {
 
   const posStr = tagsToString(positiveTags);
   const negStr = tagsToString(negativeTags);
+  const meaningfulCharacters = getMeaningfulCharacterHistoryData(characterPromptsData);
+  const hasMeaningfulState = positiveTags.length > 0 || negativeTags.length > 0 || meaningfulCharacters.length > 0;
 
   // 去重：使用提取好的统合指纹函数，与上次实际写入的记录完全相同时跳过
   const fingerprint = computeStateFingerprint(positiveTags, negativeTags, characterPromptsData);
+  if (!hasMeaningfulState) {
+    _lastRecordedFingerprint = fingerprint;
+    return;
+  }
   if (fingerprint === _lastRecordedFingerprint) return;
   _lastRecordedFingerprint = fingerprint;
 
@@ -2453,7 +2470,7 @@ async function _commitSnapshot() {
     // [v2] 保存原始 tag 对象数组，用于完整还原禁用状态、换行、复合组等
     positiveTags: positiveTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
     negativeTags: negativeTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
-    characters: characterPromptsData.map(c => ({
+    characters: meaningfulCharacters.map(c => ({
       posPrompt: c.posPrompt || '',
       negPrompt: c.negPrompt || '',
       posTags: (c.posTags || []).map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
