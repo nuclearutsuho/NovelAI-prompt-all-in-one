@@ -2497,19 +2497,18 @@ async function restoreFromSnapshot(snapshot) {
       rawNegative = snapshot.negative || '';
       negativeTags = snapshot.negativeTags ? JSON.parse(JSON.stringify(snapshot.negativeTags)) : parsePromptToTags(rawNegative);
       if (currentMode === 'negative') editor.setTags(negativeTags);
-    } else if (pt.startsWith('character-')) {
-      const charIdx = parseInt(pt.split('-')[1]);
-      const srcChars = snapshot.characters || [];
-      const srcChar = srcChars[0] || srcChars[charIdx];
-      if (srcChar && charIdx < characterPromptsData.length) {
-        characterPromptsData[charIdx] = {
+    } else if (pt === 'character' || pt.startsWith('character-')) {
+      const srcChar = (snapshot.characters || [])[0];
+      if (srcChar) {
+        // 角色片段恢复时统一追加到末尾，让用户后续手动调整顺序。
+        characterPromptsData.push({
           posPrompt: srcChar.posPrompt || '',
           posTags: srcChar.posTags ? JSON.parse(JSON.stringify(srcChar.posTags)) : parsePromptToTags(srcChar.posPrompt || ''),
           negPrompt: srcChar.negPrompt || '',
           negTags: srcChar.negTags ? JSON.parse(JSON.stringify(srcChar.negTags)) : parsePromptToTags(srcChar.negPrompt || ''),
           gender: srcChar.gender || 'other',
           activeTab: srcChar.activeTab || 'positive'
-        };
+        });
         rebuildCharacterPromptsUI();
       }
     }

@@ -1846,7 +1846,7 @@ const MODAL_ID = 'nai-history-modal';
             iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon pos" style="color: #a855f7; margin-right: 8px; flex-shrink: 0;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
           } else if (snapshot.partialType === 'negative') {
             iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon neg" style="color: #f59e0b; margin-right: 8px; flex-shrink: 0;"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>`;
-          } else if (snapshot.partialType && snapshot.partialType.startsWith('character-')) {
+          } else if (snapshot.partialType === 'character' || (snapshot.partialType && snapshot.partialType.startsWith('character-'))) {
             iconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nhm-item-icon char" style="color: #14b8a6; margin-right: 8px; flex-shrink: 0;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
           }
         }
@@ -1974,7 +1974,7 @@ const MODAL_ID = 'nai-history-modal';
       clone.id = 'fav-part-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
       clone.isFavorite = true;
       clone.isPartial = true;
-      clone.partialType = partialType; // 'positive' | 'negative' | 'character-0' ...
+      clone.partialType = partialType && partialType.startsWith('character-') ? 'character' : partialType; // 'positive' | 'negative' | 'character'
       clone.originId = snapshot.id;
 
       // 根据 partialType 清除无关数据
@@ -1992,7 +1992,7 @@ const MODAL_ID = 'nai-history-modal';
         clone.positive = ''; clone.positiveTags = [];
         clone.negative = ''; clone.negativeTags = [];
         clone.characters = targetChar ? [JSON.parse(JSON.stringify(targetChar))] : [];
-        clone.name = clone.name || `角色 #${charIdx + 1} 片段`;
+        clone.name = clone.name || '角色片段';
       }
 
       clone.timestamp = Date.now();
@@ -2003,7 +2003,7 @@ const MODAL_ID = 'nai-history-modal';
     function restorePartial(snapshot, partialType) {
       const partial = JSON.parse(JSON.stringify(snapshot));
       partial.isPartial = true;
-      partial.partialType = partialType;
+      partial.partialType = partialType && partialType.startsWith('character-') ? 'character' : partialType;
       window.postMessage({ type: '__RESTORE_HISTORY__', snapshot: partial }, '*');
       closeModal();
     }
@@ -2072,16 +2072,17 @@ const MODAL_ID = 'nai-history-modal';
       // 如果是局部快照，在 meta 中追加标记
       let metaText = `记录于 ${formatTime(snapshot.timestamp)} · ${charCount} 个角色`;
       if (snapshot.isPartial) {
-        const typeLabels = { positive: '正面', negative: '负面' };
+        const typeLabels = { positive: '正面', negative: '负面', character: '角色' };
         const label = typeLabels[snapshot.partialType] || snapshot.partialType;
         metaText += ` · 📌 局部片段 (${label})`;
       }
       meta.textContent = metaText;
 
       // 判断是否需要渲染各区块（局部快照仅渲染对应区块）
+      const isCharacterPartial = snapshot.isPartial && (snapshot.partialType === 'character' || (snapshot.partialType && snapshot.partialType.startsWith('character-')));
       const showPositive = !snapshot.isPartial || snapshot.partialType === 'positive';
       const showNegative = !snapshot.isPartial || snapshot.partialType === 'negative';
-      const showCharacters = !snapshot.isPartial || (snapshot.partialType && snapshot.partialType.startsWith('character-'));
+      const showCharacters = !snapshot.isPartial || isCharacterPartial;
 
       // 正向
       if (showPositive) {
@@ -2111,12 +2112,12 @@ const MODAL_ID = 'nai-history-modal';
       if (showCharacters && snapshot.characters && snapshot.characters.length > 0) {
         snapshot.characters.forEach((char, idx) => {
           if (!char.posPrompt && !char.negPrompt) return;
-          // 如果是局部快照且指定了 character-N，只渲染对应角色
-          if (snapshot.isPartial && snapshot.partialType !== `character-${idx}`) return;
+          // 角色片段收藏只保留一个角色，详情里始终渲染第一个角色即可。
+          if (isCharacterPartial && idx > 0) return;
 
           const charSection = document.createElement('div');
           charSection.className = 'nhm-section';
-          charSection.appendChild(buildSectionHeader(`👤 角色 #${idx + 1}`, 'char', snapshot, `character-${idx}`));
+          charSection.appendChild(buildSectionHeader(`👤 角色 #${idx + 1}`, 'char', snapshot, 'character'));
           if (char.posPrompt) {
             const p = document.createElement('div');
             p.style.marginBottom = '6px';
