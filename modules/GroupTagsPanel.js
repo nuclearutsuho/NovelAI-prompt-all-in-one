@@ -5,9 +5,18 @@ let activeCategoryIndex = 0;
 let activeGroupIndex = 0;
 let hasInitializedGroupTagsPanel = false;
 const groupTagsDataUtils = window.GroupTagsDataUtils || {};
+const groupTagsFavoritesUtils = window.GroupTagsFavoritesUtils || {};
+const SPECIAL_FAVORITES_CATEGORY_ID = groupTagsFavoritesUtils.SPECIAL_CATEGORY_ID || '__group_tags_favorites__';
+const SPECIAL_FAVORITES_CATEGORY_NAME = groupTagsFavoritesUtils.SPECIAL_CATEGORY_NAME || '收藏片段';
+const SPECIAL_FAVORITES_ROOT_GROUP_ID = groupTagsFavoritesUtils.ROOT_GROUP_ID || '__favorites_unfiled__';
 let autocompleteDict = []; // 全局字典缓存
 let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
+let specialCategoryPosition = 0;
+let draggedFavoriteItemId = null;
+let favoritePreviewPopover = null;
+let favoritesHistorySnapshot = null;
+let favoritePreviewHideTimer = null;
 
 // ========== 密度控制逻辑 ==========
 const GROUP_TAGS_EXPORT_FORMAT = 'group-tags-export';
@@ -41,6 +50,13 @@ function applyDensity(value) {
   const fontEn = 14 - (4 * r);
   // Grid Padding: 16px -> 4px
   const gridPad = 16 - (12 * r);
+  const previewWidth = 320 - (90 * r);
+  const previewHeight = 360 - (110 * r);
+  const previewPad = 12 - (4 * r);
+  const previewTitleFont = 13 - (2 * r);
+  const previewLabelFont = 11 - (1 * r);
+  const previewTextFont = 12 - (2 * r);
+  const previewGap = 10 - (4 * r);
 
   root.style.setProperty('--density-gap', `${gap}px`);
   root.style.setProperty('--density-pad-v', `${padV}px`);
@@ -53,6 +69,13 @@ function applyDensity(value) {
   root.style.setProperty('--density-font-en', `${fontEn}px`);
   
   root.style.setProperty('--density-grid-pad', `${gridPad}px`);
+  root.style.setProperty('--favorites-preview-width', `${previewWidth}px`);
+  root.style.setProperty('--favorites-preview-max-height', `${previewHeight}px`);
+  root.style.setProperty('--favorites-preview-pad', `${previewPad}px`);
+  root.style.setProperty('--favorites-preview-title-font', `${previewTitleFont}px`);
+  root.style.setProperty('--favorites-preview-label-font', `${previewLabelFont}px`);
+  root.style.setProperty('--favorites-preview-text-font', `${previewTextFont}px`);
+  root.style.setProperty('--favorites-preview-gap', `${previewGap}px`);
 }
 
 // 初始化读取存储
@@ -82,9 +105,9 @@ function buildColorMap() {
   const map = {};
   if (!customGroupsData || !customGroupsData.categories) return map;
   customGroupsData.categories.forEach(cat => {
-    cat.groups.forEach(group => {
+    (cat.groups || []).forEach(group => {
       const color = group.color || '#4a4a6a';
-      group.tags.forEach(t => {
+      (group.tags || []).forEach(t => {
         map[t.en] = color;
       });
     });
@@ -108,8 +131,8 @@ function buildTranslationMap() {
   const map = {};
   if (!customGroupsData || !customGroupsData.categories) return map;
   customGroupsData.categories.forEach(cat => {
-    cat.groups.forEach(group => {
-      group.tags.forEach(t => {
+    (cat.groups || []).forEach(group => {
+      (group.tags || []).forEach(t => {
         if (t.en && t.zh) map[t.en] = t.zh;
       });
     });
@@ -132,7 +155,9 @@ const dom = {
   primaryTabs: document.getElementById('primary-tabs-container'),
   secondaryTabs: document.getElementById('secondary-tabs-container'),
   tagsGrid: document.getElementById('tags-grid'),
+  inlineAddPanel: document.getElementById('inline-add-panel'),
   colorPicker: document.getElementById('group-color'),
+  colorPickerWrapper: document.querySelector('.color-picker-wrapper'),
   modalOverlay: document.getElementById('modal-overlay'),
   modalDialog: document.getElementById('modal-dialog'),
   btnEdit: document.getElementById('btn-edit-group'),
@@ -144,6 +169,163 @@ const dom = {
   btnAddGroup: document.getElementById('btn-add-group'),
   importFileInput: document.getElementById('import-group-tags-input')
 };
+
+function isSpecialFavoritesCategory(category) {
+  return category?.id === SPECIAL_FAVORITES_CATEGORY_ID || category?.isSpecialFavoritesCategory;
+}
+
+function isSpecialFavoritesActive() {
+  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
+  return isSpecialFavoritesCategory(currentCategory);
+}
+
+function getSpecialFavoritesIndex(data = customGroupsData) {
+  return data?.categories?.findIndex?.(category => isSpecialFavoritesCategory(category)) ?? -1;
+}
+
+function stripSpecialFavoritesCategory(data) {
+  const nextData = cloneData(data || { categories: [] });
+  nextData.categories = Array.isArray(nextData.categories)
+    ? nextData.categories.filter(category => !isSpecialFavoritesCategory(category))
+    : [];
+  return nextData;
+}
+
+function getPersistableGroupTagsData(data = customGroupsData) {
+  return stripSpecialFavoritesCategory(data);
+}
+
+async function loadSpecialCategoryPosition() {
+  if (groupTagsFavoritesUtils.loadSpecialCategoryPosition) {
+    specialCategoryPosition = await groupTagsFavoritesUtils.loadSpecialCategoryPosition();
+  } else {
+    specialCategoryPosition = 0;
+  }
+  return specialCategoryPosition;
+}
+
+async function saveSpecialCategoryPosition() {
+  const specialIndex = getSpecialFavoritesIndex();
+  if (specialIndex < 0) return;
+  specialCategoryPosition = specialIndex;
+  if (groupTagsFavoritesUtils.saveSpecialCategoryPosition) {
+    await groupTagsFavoritesUtils.saveSpecialCategoryPosition(specialCategoryPosition);
+  }
+}
+
+async function buildSpecialFavoritesCategory() {
+  if (groupTagsFavoritesUtils.loadFavoritesCategoryView) {
+    const view = await groupTagsFavoritesUtils.loadFavoritesCategoryView();
+    specialCategoryPosition = view.position ?? specialCategoryPosition;
+    return view.category || {
+      id: SPECIAL_FAVORITES_CATEGORY_ID,
+      name: SPECIAL_FAVORITES_CATEGORY_NAME,
+      isSpecialFavoritesCategory: true,
+      groups: []
+    };
+  }
+
+  return {
+    id: SPECIAL_FAVORITES_CATEGORY_ID,
+    name: SPECIAL_FAVORITES_CATEGORY_NAME,
+    isSpecialFavoritesCategory: true,
+    groups: []
+  };
+}
+
+async function injectSpecialFavoritesCategory(baseData) {
+  const nextData = stripSpecialFavoritesCategory(baseData);
+  const specialCategory = await buildSpecialFavoritesCategory();
+  const categories = Array.isArray(nextData.categories) ? nextData.categories : [];
+  const insertIndex = Math.max(0, Math.min(specialCategoryPosition, categories.length));
+  categories.splice(insertIndex, 0, specialCategory);
+  nextData.categories = categories;
+  return nextData;
+}
+
+async function rebuildWithSpecialFavorites(baseData, options = {}) {
+  const nextData = await injectSpecialFavoritesCategory(baseData);
+  if (options.apply !== false) {
+    customGroupsData = nextData;
+  }
+  return nextData;
+}
+
+function getFavoriteItemsCount(category) {
+  if (!isSpecialFavoritesCategory(category)) return 0;
+  return (category.groups || []).reduce((total, group) => total + ((group.items || []).length), 0);
+}
+
+function getCurrentSpecialFavoritesGroup() {
+  if (!isSpecialFavoritesActive()) return null;
+  return customGroupsData?.categories?.[activeCategoryIndex]?.groups?.[activeGroupIndex] || null;
+}
+
+function ensureFavoritePreviewPopover() {
+  if (favoritePreviewPopover) return favoritePreviewPopover;
+  favoritePreviewPopover = document.createElement('div');
+  favoritePreviewPopover.className = 'favorites-preview-popover';
+  favoritePreviewPopover.addEventListener('wheel', (event) => {
+    const body = favoritePreviewPopover?.querySelector('.favorites-preview-body');
+    if (!body || body.scrollHeight <= body.clientHeight) return;
+    // 预览浮层是 fixed 元素，这里主动接管滚轮，避免事件落回底层网格导致看得见却滚不动。
+    event.preventDefault();
+    event.stopPropagation();
+    body.scrollTop += event.deltaY;
+  }, { passive: false });
+  favoritePreviewPopover.addEventListener('mouseenter', () => {
+    if (favoritePreviewHideTimer) {
+      clearTimeout(favoritePreviewHideTimer);
+      favoritePreviewHideTimer = null;
+    }
+  });
+  favoritePreviewPopover.addEventListener('mouseleave', () => {
+    hideFavoritePreviewPopover();
+  });
+  document.body.appendChild(favoritePreviewPopover);
+  return favoritePreviewPopover;
+}
+
+function hideFavoritePreviewPopover() {
+  if (favoritePreviewHideTimer) {
+    clearTimeout(favoritePreviewHideTimer);
+    favoritePreviewHideTimer = null;
+  }
+  if (!favoritePreviewPopover) return;
+  favoritePreviewPopover.classList.remove('visible');
+}
+
+function scheduleHideFavoritePreviewPopover() {
+  if (favoritePreviewHideTimer) {
+    clearTimeout(favoritePreviewHideTimer);
+  }
+  // 给鼠标从卡片移动到浮层预留一点时间，避免刚想滚动就被立刻隐藏。
+  favoritePreviewHideTimer = setTimeout(() => {
+    favoritePreviewHideTimer = null;
+    hideFavoritePreviewPopover();
+  }, 120);
+}
+
+function clampPreviewPosition(value, min, max) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function updateSpecialCategoryControls() {
+  const specialActive = isSpecialFavoritesActive();
+  if (dom.app) {
+    dom.app.classList.toggle('special-favorites-mode', specialActive);
+  }
+  if (dom.inlineAddPanel) {
+    // 收藏片段分类不支持直接新增收藏项，因此沿用现有面板时直接隐藏普通 tag 新增区。
+    dom.inlineAddPanel.style.display = specialActive ? 'none' : '';
+  }
+  if (dom.colorPickerWrapper) {
+    dom.colorPickerWrapper.style.display = specialActive ? 'none' : '';
+  }
+  if (dom.btnAddGroup) {
+    dom.btnAddGroup.title = specialActive ? 'Add Folder' : 'Add Group';
+  }
+}
 
 // ========== 拖拽排序 ==========
 let sortableRefreshFrame = null;
@@ -224,8 +406,13 @@ function initPrimaryTabsSortable() {
       const movedCategory = moveArrayItem(customGroupsData.categories, oldIndex, newIndex);
       if (!movedCategory) return;
 
-      movedCategory._modified = true;
+      if (!isSpecialFavoritesCategory(movedCategory)) {
+        movedCategory._modified = true;
+      }
       activeCategoryIndex = remapActiveIndex(activeCategoryIndex, oldIndex, newIndex);
+      if (getSpecialFavoritesIndex() >= 0) {
+        saveSpecialCategoryPosition();
+      }
       renderPrimaryTabs();
       renderSecondaryTabs();
     }
@@ -238,10 +425,11 @@ function initSecondaryTabsSortable() {
 
   const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
   if (!dom.secondaryTabs || !currentCategory?.groups?.length) return;
+  const isSpecialCategory = isSpecialFavoritesCategory(currentCategory);
 
   sortableInstances.secondary = new Sortable(dom.secondaryTabs, {
     ...createCommonSortableOptions(),
-    draggable: '.tab-btn:not(.add-tab-btn)',
+    draggable: isSpecialCategory ? '.tab-btn.special-folder-tab' : '.tab-btn:not(.add-tab-btn)',
     onEnd(evt) {
       const { oldIndex, newIndex } = getSortableIndices(evt);
       if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
@@ -249,8 +437,19 @@ function initSecondaryTabsSortable() {
       const movedGroup = moveArrayItem(currentCategory.groups, oldIndex, newIndex);
       if (!movedGroup) return;
 
-      movedGroup._modified = true;
-      currentCategory._modified = true;
+      if (!isSpecialCategory) {
+        movedGroup._modified = true;
+        currentCategory._modified = true;
+      } else if (groupTagsFavoritesUtils.reorderFavoriteFolders) {
+        // 特殊分类的二级分组直接映射收藏文件夹顺序，拖拽后立即回写到 promptHistory。
+        const folderIds = currentCategory.groups
+          .filter(group => group.id !== SPECIAL_FAVORITES_ROOT_GROUP_ID)
+          .map(group => group.id);
+        groupTagsFavoritesUtils.reorderFavoriteFolders(folderIds).then(async () => {
+          customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+          renderSecondaryTabs();
+        });
+      }
       activeGroupIndex = remapActiveIndex(activeGroupIndex, oldIndex, newIndex);
       renderSecondaryTabs();
     }
@@ -263,7 +462,38 @@ function initTagsGridSortable() {
 
   const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
   const currentGroup = currentCategory?.groups?.[activeGroupIndex];
-  if (!dom.tagsGrid || !currentGroup?.tags?.length) return;
+  if (!dom.tagsGrid) return;
+
+  if (isSpecialFavoritesCategory(currentCategory)) {
+    if (!currentGroup?.items?.length) return;
+
+    sortableInstances.tags = new Sortable(dom.tagsGrid, {
+      ...createCommonSortableOptions(),
+      draggable: '.tag-card',
+      onStart(evt) {
+        draggedFavoriteItemId = evt.item?.dataset?.favoriteId || null;
+      },
+      onEnd(evt) {
+        const { oldIndex, newIndex } = getSortableIndices(evt);
+        draggedFavoriteItemId = null;
+        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+
+        moveArrayItem(currentGroup.items, oldIndex, newIndex);
+        const orderedIds = currentGroup.items.map(item => item.id);
+        if (groupTagsFavoritesUtils.reorderFavoriteItemsInGroup) {
+          groupTagsFavoritesUtils.reorderFavoriteItemsInGroup(currentGroup.id, orderedIds).then(async () => {
+            customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+            renderTagsGrid();
+          });
+        } else {
+          renderTagsGrid();
+        }
+      }
+    });
+    return;
+  }
+
+  if (!currentGroup?.tags?.length) return;
 
   sortableInstances.tags = new Sortable(dom.tagsGrid, {
     ...createCommonSortableOptions(),
@@ -327,10 +557,15 @@ dom.modalOverlay.addEventListener('click', (e) => {
 });
 
 // ========== 编辑模式切换 ==========
-function enterEditMode() {
+async function enterEditMode() {
   isEditMode = true;
-  // 保存当前数据快照（深拷贝），取消时可恢复
-  dataSnapshot = JSON.parse(JSON.stringify(customGroupsData));
+  // 收藏片段分类的数据直接来自 promptHistory，取消编辑时只回滚普通 Group Tags 数据。
+  dataSnapshot = JSON.parse(JSON.stringify(getPersistableGroupTagsData(customGroupsData)));
+  if (groupTagsFavoritesUtils.loadPromptHistory) {
+    favoritesHistorySnapshot = await groupTagsFavoritesUtils.loadPromptHistory();
+  } else {
+    favoritesHistorySnapshot = null;
+  }
   dom.app.classList.add('edit-mode');
   renderPrimaryTabs();
   renderSecondaryTabs();
@@ -343,30 +578,40 @@ function exitEditMode(save) {
 async function finalizeEditMode(save) {
   destroyAllSortables();
   if (save) {
+    const persistableData = getPersistableGroupTagsData(customGroupsData);
+
     if (groupTagsDataUtils.saveGroupTagsStorage) {
-      customGroupsData = await groupTagsDataUtils.saveGroupTagsStorage(customGroupsData);
+      await groupTagsDataUtils.saveGroupTagsStorage(persistableData);
     } else {
       await new Promise(resolve => {
-        chrome.storage.local.set({ groupTagsUserData: customGroupsData }, resolve);
+        chrome.storage.local.set({ groupTagsUserData: persistableData }, resolve);
       });
     }
+
+    await saveSpecialCategoryPosition();
 
     await flushPendingDictionaryUpserts();
     if (groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary) {
       const synced = await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
-      customGroupsData = synced.data || customGroupsData;
+      customGroupsData = await rebuildWithSpecialFavorites(synced.data || persistableData, { apply: false });
+    } else {
+      customGroupsData = await rebuildWithSpecialFavorites(persistableData, { apply: false });
     }
 
     syncColorsToParent();
     syncTranslationsToParent();
   } else {
+    if (favoritesHistorySnapshot && groupTagsFavoritesUtils.savePromptHistory) {
+      await groupTagsFavoritesUtils.savePromptHistory(favoritesHistorySnapshot);
+    }
     if (dataSnapshot) {
-      customGroupsData = dataSnapshot;
+      customGroupsData = await rebuildWithSpecialFavorites(dataSnapshot, { apply: false });
     }
     pendingDictionaryUpserts.clear();
   }
 
   dataSnapshot = null;
+  favoritesHistorySnapshot = null;
   isEditMode = false;
   dom.app.classList.remove('edit-mode');
   renderPrimaryTabs();
@@ -782,7 +1027,7 @@ async function flushPendingDictionaryUpserts() {
 }
 
 function getCurrentExportData() {
-  return normalizeGroupTagsData(customGroupsData).data;
+  return normalizeGroupTagsData(getPersistableGroupTagsData(customGroupsData)).data;
 }
 
 function buildExportPayload() {
@@ -816,11 +1061,12 @@ function applyGroupTagsData(nextData) {
 }
 
 function saveGroupTagsData(nextData) {
+  const persistableData = getPersistableGroupTagsData(nextData);
   if (groupTagsDataUtils.saveGroupTagsStorage) {
-    return groupTagsDataUtils.saveGroupTagsStorage(nextData);
+    return groupTagsDataUtils.saveGroupTagsStorage(persistableData);
   }
   return new Promise(resolve => {
-    chrome.storage.local.set({ groupTagsUserData: nextData }, () => resolve(nextData));
+    chrome.storage.local.set({ groupTagsUserData: persistableData }, () => resolve(persistableData));
   });
 }
 
@@ -936,6 +1182,7 @@ async function importGroupTagsData(file) {
     nextData = mergedWithDefault.data;
 
     nextData = await saveGroupTagsData(nextData);
+    nextData = await rebuildWithSpecialFavorites(nextData, { apply: false });
     applyGroupTagsData(nextData);
 
     showInfoModal(
@@ -1010,18 +1257,33 @@ function deleteCategory(index) {
 function addGroup() {
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
   if (!currentCategory) return;
+  const isSpecialCategory = isSpecialFavoritesCategory(currentCategory);
+  const dialogTitle = isSpecialCategory ? '新建文件夹' : '新建分组';
+  const inputPlaceholder = isSpecialCategory ? '文件夹名称' : '分组名称';
   showModal(`
-    <h3>新建分组</h3>
-    <input class="modal-input" id="modal-grp-name" placeholder="分组名称" />
+    <h3>${dialogTitle}</h3>
+    <input class="modal-input" id="modal-grp-name" placeholder="${inputPlaceholder}" />
     <div class="modal-buttons">
       <button class="modal-btn" id="modal-grp-cancel">取消</button>
       <button class="modal-btn primary" id="modal-grp-confirm">确认</button>
     </div>
   `);
   document.getElementById('modal-grp-cancel').onclick = () => hideModal();
-  document.getElementById('modal-grp-confirm').onclick = () => {
+  document.getElementById('modal-grp-confirm').onclick = async () => {
     const name = document.getElementById('modal-grp-name').value.trim();
     if (!name) return;
+    if (isSpecialFavoritesCategory(currentCategory)) {
+      if (!groupTagsFavoritesUtils.createFavoriteFolder) return;
+      await groupTagsFavoritesUtils.createFavoriteFolder(name);
+      customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+      const specialCategory = customGroupsData.categories[activeCategoryIndex];
+      if (specialCategory?.groups?.length) {
+        activeGroupIndex = specialCategory.groups.length - 1;
+      }
+      hideModal();
+      renderSecondaryTabs();
+      return;
+    }
     currentCategory.groups.push({
       id: generateId('grp'),
       name,
@@ -1042,6 +1304,29 @@ function addGroup() {
 function deleteGroup(index) {
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
   if (!currentCategory) return;
+  if (isSpecialFavoritesCategory(currentCategory)) {
+    const specialGroup = currentCategory.groups[index];
+    if (!specialGroup || specialGroup.id === SPECIAL_FAVORITES_ROOT_GROUP_ID || !groupTagsFavoritesUtils.deleteFavoriteFolder) return;
+    hideFavoritePreviewPopover();
+    showModal(`
+      <h3>确认删除文件夹</h3>
+      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除文件夹 <strong>${escapeHtml(specialGroup.name)}</strong> 吗？文件夹内收藏会回到未归档分组，这项修改在当前编辑态下可通过取消恢复。</div>
+      <div class="modal-buttons">
+        <button class="modal-btn" id="modal-special-group-cancel">取消</button>
+        <button class="modal-btn danger" id="modal-special-group-confirm">删除</button>
+      </div>
+    `);
+    document.getElementById('modal-special-group-cancel').onclick = () => hideModal();
+    document.getElementById('modal-special-group-confirm').onclick = () => {
+      hideModal();
+      groupTagsFavoritesUtils.deleteFavoriteFolder(specialGroup.id).then(async () => {
+        customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+        activeGroupIndex = Math.max(0, Math.min(activeGroupIndex, (customGroupsData.categories[activeCategoryIndex]?.groups?.length || 1) - 1));
+        renderSecondaryTabs();
+      });
+    };
+    return;
+  }
   const grp = currentCategory.groups[index];
   if (!grp) return;
   showModal(`
@@ -1239,6 +1524,7 @@ function setupInlineAddPanel() {
   async function submitTag() {
     const displayEn = enInput.value.trim();
     if (!displayEn) return;
+    if (isSpecialFavoritesActive()) return;
     const canonicalEn = toCanonicalTagKey(displayEn);
     if (!canonicalEn) return;
     const zh = zhInput.value.trim();
@@ -1297,6 +1583,313 @@ function deleteTag(tagIndex) {
   renderTagsGrid();
 }
 
+function escapeHtmlText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildFavoritePreviewHtml(item) {
+  const preview = item?.preview || { sections: [] };
+  const sectionsHtml = (preview.sections || []).map(section => `
+    <div class="favorites-preview-section">
+      <div class="favorites-preview-label">${escapeHtmlText(section.label)}</div>
+      <div class="favorites-preview-text">${escapeHtmlText(section.text)}</div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="favorites-preview-title">
+      <div>
+        <div>${escapeHtmlText(item.name)}</div>
+        <div class="favorites-preview-meta">${escapeHtmlText(groupTagsFavoritesUtils.formatTime ? groupTagsFavoritesUtils.formatTime(item.timestamp) : '')}</div>
+      </div>
+      <span class="favorite-type-badge ${escapeHtmlText(item.typeClass)}">${escapeHtmlText(item.typeLabel)}</span>
+    </div>
+    <div class="favorites-preview-body">
+      ${sectionsHtml || '<div class="favorites-preview-section"><div class="favorites-preview-text">暂无内容</div></div>'}
+    </div>
+  `;
+}
+
+function positionFavoritePreviewPopover(anchorRect) {
+  if (!favoritePreviewPopover) return;
+  if (!anchorRect) return;
+  const offset = 14;
+  favoritePreviewPopover.style.maxWidth = '';
+  favoritePreviewPopover.style.maxHeight = '';
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const space = {
+    right: Math.max(0, viewportWidth - anchorRect.right - offset - 12),
+    left: Math.max(0, anchorRect.left - offset - 12),
+    bottom: Math.max(0, viewportHeight - anchorRect.bottom - offset - 12),
+    top: Math.max(0, anchorRect.top - offset - 12)
+  };
+  const naturalRect = favoritePreviewPopover.getBoundingClientRect();
+  const preferredOrder = ['right', 'left', 'bottom', 'top'].sort((a, b) => space[b] - space[a]);
+  let placement = preferredOrder[0];
+
+  for (const direction of preferredOrder) {
+    if ((direction === 'right' || direction === 'left') && space[direction] >= 220) {
+      placement = direction;
+      break;
+    }
+    if ((direction === 'bottom' || direction === 'top') && space[direction] >= 180) {
+      placement = direction;
+      break;
+    }
+  }
+
+  if (placement === 'right' || placement === 'left') {
+    favoritePreviewPopover.style.maxWidth = `${Math.max(220, space[placement])}px`;
+    favoritePreviewPopover.style.maxHeight = `${Math.max(160, viewportHeight - 24)}px`;
+  } else {
+    favoritePreviewPopover.style.maxWidth = `${Math.max(220, viewportWidth - 24)}px`;
+    favoritePreviewPopover.style.maxHeight = `${Math.max(160, space[placement])}px`;
+  }
+
+  const rect = favoritePreviewPopover.getBoundingClientRect();
+  const maxLeft = Math.max(12, viewportWidth - rect.width - 12);
+  const maxTop = Math.max(12, viewportHeight - rect.height - 12);
+
+  let left = 12;
+  let top = 12;
+
+  if (placement === 'right') {
+    left = clampPreviewPosition(anchorRect.right + offset, 12, maxLeft);
+    top = clampPreviewPosition(anchorRect.top + ((anchorRect.height - rect.height) / 2), 12, maxTop);
+  } else if (placement === 'left') {
+    left = clampPreviewPosition(anchorRect.left - rect.width - offset, 12, maxLeft);
+    top = clampPreviewPosition(anchorRect.top + ((anchorRect.height - rect.height) / 2), 12, maxTop);
+  } else if (placement === 'bottom') {
+    left = clampPreviewPosition(anchorRect.left + ((anchorRect.width - rect.width) / 2), 12, maxLeft);
+    top = clampPreviewPosition(anchorRect.bottom + offset, 12, maxTop);
+  } else {
+    left = clampPreviewPosition(anchorRect.left + ((anchorRect.width - rect.width) / 2), 12, maxLeft);
+    top = clampPreviewPosition(anchorRect.top - rect.height - offset, 12, maxTop);
+  }
+
+  favoritePreviewPopover.style.left = `${left}px`;
+  favoritePreviewPopover.style.top = `${top}px`;
+}
+
+function bindFavoritePreview(card, item) {
+  const updatePosition = () => positionFavoritePreviewPopover(card.getBoundingClientRect());
+
+  card.addEventListener('mouseenter', () => {
+    if (favoritePreviewHideTimer) {
+      clearTimeout(favoritePreviewHideTimer);
+      favoritePreviewHideTimer = null;
+    }
+    const popover = ensureFavoritePreviewPopover();
+    popover.innerHTML = buildFavoritePreviewHtml(item);
+    popover.classList.add('visible');
+    updatePosition();
+  });
+
+  card.addEventListener('mousemove', () => {
+    updatePosition();
+  });
+
+  card.addEventListener('mouseleave', () => {
+    scheduleHideFavoritePreviewPopover();
+  });
+}
+
+function requestRestoreFavoriteSnapshot(snapshot) {
+  if (chrome?.runtime?.sendMessage) {
+    chrome.runtime.sendMessage({ type: 'RESTORE_HISTORY_SNAPSHOT', snapshot });
+    return;
+  }
+  window.parent.postMessage({ type: '__RESTORE_HISTORY__', snapshot }, '*');
+}
+
+function requestAppendFavoriteSnippet(snapshot, target) {
+  if (chrome?.runtime?.sendMessage) {
+    chrome.runtime.sendMessage({ type: 'APPEND_HISTORY_SNIPPET', snapshot, target });
+    return;
+  }
+  window.parent.postMessage({ type: '__APPEND_HISTORY_SNIPPET__', snapshot, target }, '*');
+}
+
+function openFavoriteActionModal(item) {
+  hideFavoritePreviewPopover();
+  const snapshot = cloneData(item.snapshot);
+  if (!snapshot) return;
+
+  if (item.type === 'full') {
+    showModal(`
+      <h3>恢复整条收藏</h3>
+      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认恢复 <strong>${escapeHtml(item.name)}</strong> 的完整提示词状态？</div>
+      <div class="modal-buttons">
+        <button class="modal-btn" id="modal-fav-cancel">取消</button>
+        <button class="modal-btn primary" id="modal-fav-restore">确认恢复</button>
+      </div>
+    `);
+    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
+    document.getElementById('modal-fav-restore').onclick = () => {
+      hideModal();
+      requestRestoreFavoriteSnapshot(snapshot);
+    };
+    return;
+  }
+
+  if (item.type === 'positive' || item.type === 'negative') {
+    const targetLabel = item.type === 'positive' ? '正面' : '负面';
+    showModal(`
+      <h3>${escapeHtml(item.name)}</h3>
+      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">选择对 ${targetLabel} 提示词执行的动作。</div>
+      <div class="modal-buttons">
+        <button class="modal-btn" id="modal-fav-cancel">取消</button>
+        <button class="modal-btn" id="modal-fav-append">追加到${targetLabel}</button>
+        <button class="modal-btn primary" id="modal-fav-restore">局部恢复${targetLabel}</button>
+      </div>
+    `);
+    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
+    document.getElementById('modal-fav-append').onclick = () => {
+      hideModal();
+      requestAppendFavoriteSnippet(snapshot, item.type === 'positive' ? 'positive' : 'negative');
+    };
+    document.getElementById('modal-fav-restore').onclick = () => {
+      hideModal();
+      requestRestoreFavoriteSnapshot(snapshot);
+    };
+    return;
+  }
+
+  if (item.type === 'character') {
+    showModal(`
+      <h3>${escapeHtml(item.name)}</h3>
+      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">角色片段仅支持局部恢复到对应角色块。</div>
+      <div class="modal-buttons">
+        <button class="modal-btn" id="modal-fav-cancel">取消</button>
+        <button class="modal-btn primary" id="modal-fav-restore">局部恢复角色片段</button>
+      </div>
+    `);
+    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
+    document.getElementById('modal-fav-restore').onclick = () => {
+      hideModal();
+      requestRestoreFavoriteSnapshot(snapshot);
+    };
+  }
+}
+
+function bindFavoriteDropOnGroupTab(button, groupId, groupIndex) {
+  if (!isEditMode || !isSpecialFavoritesActive()) return;
+
+  button.addEventListener('dragover', (event) => {
+    if (!draggedFavoriteItemId) return;
+    event.preventDefault();
+    button.classList.add('special-favorites-drop-target');
+  });
+
+  button.addEventListener('dragleave', () => {
+    button.classList.remove('special-favorites-drop-target');
+  });
+
+  button.addEventListener('drop', async (event) => {
+    if (!draggedFavoriteItemId || !groupTagsFavoritesUtils.moveFavoriteItemToGroup) return;
+    event.preventDefault();
+    button.classList.remove('special-favorites-drop-target');
+    await groupTagsFavoritesUtils.moveFavoriteItemToGroup(draggedFavoriteItemId, groupId);
+    draggedFavoriteItemId = null;
+    customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+    activeGroupIndex = groupIndex;
+    renderSecondaryTabs();
+  });
+}
+
+function renderSpecialFavoritesGrid(currentCategory, currentGroup) {
+  const items = currentGroup?.items || [];
+  dom.tagsGrid.innerHTML = '';
+
+  if (dom.colorPicker) {
+    dom.colorPicker.value = '#4a4a6a';
+  }
+  const colorBtn = document.getElementById('color-picker-btn');
+  if (colorBtn) {
+    colorBtn.style.backgroundColor = '#2f3346';
+  }
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-grid-tip';
+    empty.textContent = '当前分组没有收藏项';
+    dom.tagsGrid.appendChild(empty);
+    scheduleSortableRefresh();
+    return;
+  }
+
+  items.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'tag-card special-favorite-card';
+    card.dataset.favoriteId = item.id;
+    card.dataset.favoriteGroupId = currentGroup.id;
+
+    const zhPart = document.createElement('div');
+    zhPart.className = 'tag-zh-part';
+    zhPart.style.backgroundColor = '#374151';
+    zhPart.innerHTML = `
+      <span>${escapeHtmlText(item.name)}</span>
+      <span class="favorite-type-badge ${escapeHtmlText(item.typeClass)}">${escapeHtmlText(item.typeLabel)}</span>
+    `;
+
+    const enPart = document.createElement('div');
+    enPart.className = 'tag-en-part';
+    enPart.textContent = item.subtitle || '';
+
+    if (!isEditMode) {
+      card.onclick = () => openFavoriteActionModal(item);
+    }
+
+    if (isEditMode) {
+      // 收藏项在编辑模式下允许拖拽排序，同时仍支持拖到分组 Tab 完成跨文件夹移动。
+      card.draggable = true;
+      card.addEventListener('dragstart', () => {
+        draggedFavoriteItemId = item.id;
+      });
+      card.addEventListener('dragend', () => {
+        draggedFavoriteItemId = null;
+      });
+
+      const badge = document.createElement('span');
+      badge.className = 'card-delete-badge';
+      badge.textContent = '×';
+      badge.onclick = (event) => {
+        event.stopPropagation();
+        hideFavoritePreviewPopover();
+        if (!groupTagsFavoritesUtils.deleteFavoriteItem) return;
+        showModal(`
+          <h3>确认删除收藏片段</h3>
+          <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除 <strong>${escapeHtml(item.name)}</strong> 吗？这项修改在当前编辑态下可通过取消恢复。</div>
+          <div class="modal-buttons">
+            <button class="modal-btn" id="modal-favorite-delete-cancel">取消</button>
+            <button class="modal-btn danger" id="modal-favorite-delete-confirm">删除</button>
+          </div>
+        `);
+        document.getElementById('modal-favorite-delete-cancel').onclick = () => hideModal();
+        document.getElementById('modal-favorite-delete-confirm').onclick = async () => {
+          hideModal();
+          await groupTagsFavoritesUtils.deleteFavoriteItem(item.id);
+          customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+          renderTagsGrid();
+        };
+      };
+      card.appendChild(badge);
+    }
+
+    card.appendChild(zhPart);
+    card.appendChild(enPart);
+    bindFavoritePreview(card, item);
+    dom.tagsGrid.appendChild(card);
+  });
+
+  scheduleSortableRefresh();
+}
+
 // ========== 渲染函数 ==========
 function renderPrimaryTabs() {
   if (!customGroupsData || !customGroupsData.categories) {
@@ -1308,9 +1901,12 @@ function renderPrimaryTabs() {
   dom.primaryTabs.innerHTML = '';
   
   customGroupsData.categories.forEach((cat, index) => {
-    // 统计当前大分类下所有 group 中正被使用的 tags 数量
+    const isSpecialCategory = isSpecialFavoritesCategory(cat);
+    // 普通分类显示使用中的 tag 数量，特殊分类显示收藏总数。
     let usageCount = 0;
-    if (cat.groups) {
+    if (isSpecialCategory) {
+      usageCount = getFavoriteItemsCount(cat);
+    } else if (cat.groups) {
       cat.groups.forEach(g => {
         if (g.tags) {
           g.tags.forEach(t => {
@@ -1322,6 +1918,9 @@ function renderPrimaryTabs() {
 
     const btn = document.createElement('button');
     btn.className = `tab-btn ${index === activeCategoryIndex ? 'active' : ''}`;
+    if (isSpecialCategory) {
+      btn.classList.add('special-category-tab');
+    }
     
     // 构建带徽章的文本内容
     const titleSpan = document.createElement('span');
@@ -1344,7 +1943,7 @@ function renderPrimaryTabs() {
     };
 
     // 编辑模式：双击重命名 + 悬浮提示
-    if (isEditMode) {
+    if (isEditMode && !isSpecialCategory) {
       btn.title = '双击重命名';
       btn.style.cursor = 'text';
       btn.ondblclick = (e) => {
@@ -1394,7 +1993,9 @@ function renderPrimaryTabs() {
 }
 
 function renderSecondaryTabs() {
+  hideFavoritePreviewPopover();
   if (!customGroupsData || !customGroupsData.categories.length) {
+    updateSpecialCategoryControls();
     scheduleSortableRefresh();
     return;
   }
@@ -1403,15 +2004,19 @@ function renderSecondaryTabs() {
   dom.secondaryTabs.innerHTML = '';
   
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  const isSpecialCategory = isSpecialFavoritesCategory(currentCategory);
+  updateSpecialCategoryControls();
   if (!currentCategory || !currentCategory.groups) {
     scheduleSortableRefresh();
     return;
   }
   
   currentCategory.groups.forEach((grp, index) => {
-    // 统计当前分组正被使用的 tags 数量
+    // 普通分组显示使用中的 tag 数量，收藏分组显示当前组项目数。
     let usageCount = 0;
-    if (grp.tags) {
+    if (isSpecialCategory) {
+      usageCount = (grp.items || []).length;
+    } else if (grp.tags) {
       grp.tags.forEach(t => {
         if (activeTagsContext.includes(t.en)) usageCount++;
       });
@@ -1419,6 +2024,15 @@ function renderSecondaryTabs() {
 
     const btn = document.createElement('button');
     btn.className = `tab-btn ${index === activeGroupIndex ? 'active' : ''}`;
+    if (isSpecialCategory) {
+      btn.classList.add('special-favorites-group-tab');
+    }
+    if (isSpecialCategory && grp.id !== SPECIAL_FAVORITES_ROOT_GROUP_ID) {
+      btn.classList.add('special-folder-tab');
+    }
+    if (isSpecialCategory && grp.id === SPECIAL_FAVORITES_ROOT_GROUP_ID) {
+      btn.classList.add('special-root-tab');
+    }
     
     // 构建带徽章的文本内容
     const titleSpan = document.createElement('span');
@@ -1439,7 +2053,7 @@ function renderSecondaryTabs() {
     };
 
     // 编辑模式：双击重命名 + 悬浮提示
-    if (isEditMode) {
+    if (isEditMode && !isSpecialCategory) {
       btn.title = '双击重命名';
       btn.style.cursor = 'text';
       btn.ondblclick = (e) => {
@@ -1482,6 +2096,66 @@ function renderSecondaryTabs() {
       }
     }
 
+    if (isEditMode && isSpecialCategory) {
+      if (grp.id !== SPECIAL_FAVORITES_ROOT_GROUP_ID) {
+        btn.title = '双击重命名文件夹';
+        btn.style.cursor = 'text';
+        btn.ondblclick = (event) => {
+          event.stopPropagation();
+          const input = document.createElement('input');
+          input.className = 'inline-rename-input';
+          input.value = grp.name;
+          btn.innerHTML = '';
+          btn.appendChild(input);
+          input.focus();
+          input.select();
+          const commit = async () => {
+            const nextName = input.value.trim();
+            if (nextName && groupTagsFavoritesUtils.renameFavoriteFolder) {
+              await groupTagsFavoritesUtils.renameFavoriteFolder(grp.id, nextName);
+              customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+            }
+            renderSecondaryTabs();
+          };
+          input.addEventListener('blur', commit);
+          input.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') commit();
+            if (ev.key === 'Escape') renderSecondaryTabs();
+          });
+        };
+
+        if (index === activeGroupIndex) {
+          const del = document.createElement('span');
+          del.className = 'tab-inline-delete';
+          del.textContent = '×';
+          del.onclick = (event) => {
+            event.stopPropagation();
+            hideFavoritePreviewPopover();
+            if (!groupTagsFavoritesUtils.deleteFavoriteFolder) return;
+            showModal(`
+              <h3>确认删除文件夹</h3>
+              <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除文件夹 <strong>${escapeHtml(grp.name)}</strong> 吗？文件夹内收藏会回到未归档分组，这项修改在当前编辑态下可通过取消恢复。</div>
+              <div class="modal-buttons">
+                <button class="modal-btn" id="modal-folder-delete-cancel">取消</button>
+                <button class="modal-btn danger" id="modal-folder-delete-confirm">删除</button>
+              </div>
+            `);
+            document.getElementById('modal-folder-delete-cancel').onclick = () => hideModal();
+            document.getElementById('modal-folder-delete-confirm').onclick = async () => {
+              hideModal();
+              await groupTagsFavoritesUtils.deleteFavoriteFolder(grp.id);
+              customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+              activeGroupIndex = Math.max(0, activeGroupIndex - 1);
+              renderSecondaryTabs();
+            };
+          };
+          btn.appendChild(del);
+        }
+      }
+
+      bindFavoriteDropOnGroupTab(btn, grp.id, index);
+    }
+
     dom.secondaryTabs.appendChild(btn);
   });
   if (addBtn) dom.secondaryTabs.appendChild(addBtn);
@@ -1491,13 +2165,16 @@ function renderSecondaryTabs() {
 }
 
 function renderTagsGrid() {
+  hideFavoritePreviewPopover();
   if (!customGroupsData || !customGroupsData.categories.length) {
+    updateSpecialCategoryControls();
     scheduleSortableRefresh();
     return;
   }
   dom.tagsGrid.innerHTML = '';
   
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  updateSpecialCategoryControls();
   if (!currentCategory || !currentCategory.groups.length) {
     scheduleSortableRefresh();
     return;
@@ -1506,6 +2183,11 @@ function renderTagsGrid() {
   const currentGroup = currentCategory.groups[activeGroupIndex];
   if (!currentGroup) {
     scheduleSortableRefresh();
+    return;
+  }
+
+  if (isSpecialFavoritesCategory(currentCategory)) {
+    renderSpecialFavoritesGrid(currentCategory, currentGroup);
     return;
   }
 
@@ -1726,6 +2408,7 @@ async function init() {
   try {
     // 加载字典
     await loadDictionary();
+    await loadSpecialCategoryPosition();
     const jsonUrl = chrome.runtime.getURL('data/default_group_tags.json');
     const res = await fetch(jsonUrl);
     const defaultData = await res.json();
@@ -1741,7 +2424,8 @@ async function init() {
       stored = migrated.data || stored;
     }
     
-    customGroupsData = resolveEffectiveGroupTagsData(stored);
+    const resolvedData = resolveEffectiveGroupTagsData(stored);
+    customGroupsData = await rebuildWithSpecialFavorites(resolvedData, { apply: false });
     
     // 3. 渲染 UI 与事件绑定
     setupInlineAddPanel();
@@ -1756,7 +2440,7 @@ async function init() {
     console.log('[GroupTags] Initialized, categories:', customGroupsData.categories.length);
   } catch (err) {
     console.error('[GroupTags] Failed to init:', err);
-    customGroupsData = { categories: [] };
+    customGroupsData = await rebuildWithSpecialFavorites({ categories: [] }, { apply: false });
     renderPrimaryTabs();
     renderSecondaryTabs();
   }
@@ -1764,17 +2448,24 @@ async function init() {
 
 init();
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !changes.groupTagsUserData || !hasInitializedGroupTagsPanel) return;
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local' || !hasInitializedGroupTagsPanel) return;
   if (isEditMode) {
     // 编辑模式下不自动覆盖，避免把用户未保存的本地修改冲掉
-    console.info('[GroupTags] 检测到外部数据更新，当前处于编辑模式，暂不自动刷新。');
+    if (changes.groupTagsUserData || changes.promptHistory || changes.groupTagsSpecialCategoryPosition) {
+      console.info('[GroupTags] 检测到外部数据更新，当前处于编辑模式，暂不自动刷新。');
+    }
     return;
   }
 
+  if (!changes.groupTagsUserData && !changes.promptHistory && !changes.groupTagsSpecialCategoryPosition) return;
+
   const previousSelection = getActiveSelectionIds();
   // 非编辑模式下允许响应 popup 的 +G 写入，并沿用默认库补增规则重新生成有效数据
-  customGroupsData = resolveEffectiveGroupTagsData(changes.groupTagsUserData.newValue);
+  const persistableData = changes.groupTagsUserData
+    ? resolveEffectiveGroupTagsData(changes.groupTagsUserData.newValue)
+    : stripSpecialFavoritesCategory(customGroupsData);
+  customGroupsData = await rebuildWithSpecialFavorites(persistableData, { apply: false });
   restoreActiveSelectionByIds(previousSelection);
   renderPrimaryTabs();
   renderSecondaryTabs();
@@ -1786,6 +2477,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // 颜色选择器
 dom.colorPicker.addEventListener('input', (e) => {
+  if (isSpecialFavoritesActive()) return;
   const newColor = e.target.value;
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
   if (!currentCategory) return;

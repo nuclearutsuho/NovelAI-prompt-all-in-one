@@ -904,6 +904,14 @@
       });
     }
 
+    if (e.data?.type === '__APPEND_HISTORY_SNIPPET__') {
+      chrome.runtime.sendMessage({
+        type: 'APPEND_HISTORY_SNIPPET',
+        snapshot: e.data.snapshot,
+        target: e.data.target
+      });
+    }
+
   });
 
   // Relay from Popup to Injector

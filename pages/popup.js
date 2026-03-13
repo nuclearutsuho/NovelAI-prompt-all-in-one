@@ -394,6 +394,17 @@ function getToastMeta(type) {
   };
 }
 
+function getSafeToastMeta(type) {
+  const meta = getToastMeta(type) || {};
+  if (type === 'success') {
+    return { ...meta, icon: '✓' };
+  }
+  if (type === 'error') {
+    return { ...meta, icon: '×' };
+  }
+  return { ...meta, icon: '!' };
+}
+
 function dismissPopupToast(immediate = false) {
   const root = document.getElementById('popup-toast-root');
   const toastEl = root?.querySelector('.popup-toast');
@@ -423,7 +434,7 @@ function showPopupToast(type, message) {
   if (!root) return;
 
   dismissPopupToast(true);
-  const meta = getToastMeta(type);
+  const meta = getSafeToastMeta(type);
   const toastEl = document.createElement('div');
   toastEl.className = `popup-toast ${type}`;
 
@@ -440,8 +451,13 @@ function showPopupToast(type, message) {
     ${closeBtnHtml}
   `;
 
+  const iconEl = toastEl.querySelector('.popup-toast-icon');
+  if (iconEl) iconEl.textContent = meta.icon;
+  const closeBtn = toastEl.querySelector('.popup-toast-close');
+  if (closeBtn) closeBtn.textContent = '×';
+
   if (type === 'error') {
-    toastEl.querySelector('.popup-toast-close')?.addEventListener('click', () => dismissPopupToast());
+    closeBtn?.addEventListener('click', () => dismissPopupToast());
   }
 
   root.appendChild(toastEl);
@@ -895,8 +911,8 @@ async function addTagToGroupTags(tagData) {
   await persistGroupTagsData(latestData);
   
   const locationName = `${targetCategory.name} > ${targetGroup.name}`;
-  const enHtml = `<span style="color: #60a5fa">${escapeHtml(toDisplayGroupTagText(finalEn))}</span>`;
-  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added')} ${enHtml} ${getLocalizedText('group_tags_picker_added_suffix', 'to')} [${locationName}]`);
+  const displayTag = toDisplayGroupTagText(finalEn);
+  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added')}: ${displayTag} -> ${locationName}`);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2578,9 +2594,101 @@ async function restoreFromSnapshot(snapshot) {
 }
 
 // 监听跨组件通讯指令（通过 bridge 中转）
+function cloneSnippetTags(tags, promptText) {
+  if (Array.isArray(tags) && tags.length) {
+    return JSON.parse(JSON.stringify(tags));
+  }
+  return parsePromptToTags(promptText || '');
+}
+
+async function broadcastPromptStateAndRecord(source = 'restore') {
+  const posStr = tagsToString(positiveTags);
+  const negStr = tagsToString(negativeTags);
+  lastSentPositive = posStr;
+  lastSentNegative = negStr;
+
+  clearTimeout(_popupDebounceTimer);
+  clearTimeout(_webpageDebounceTimer);
+  _popupDebounceTimer = null;
+  _webpageDebounceTimer = null;
+
+  await recordHistory(source);
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]) return;
+
+    chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'SET_PROMPT',
+      data: { positive: posStr, negative: negStr }
+    });
+
+    const payload = characterPromptsData.map(c => ({
+      positive: c.posPrompt,
+      negative: c.negPrompt,
+      gender: c.gender,
+      activeTab: c.activeTab
+    }));
+
+    chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'SET_CHARACTER_PROMPTS',
+      data: payload
+    });
+  });
+}
+
+async function appendHistorySnippet(snapshot, target) {
+  if (!snapshot || (target !== 'positive' && target !== 'negative')) return;
+
+  // 片段追加只改目标侧，避免误覆盖另一侧内容。
+  const sourceTags = target === 'positive'
+    ? cloneSnippetTags(snapshot.positiveTags, snapshot.positive)
+    : cloneSnippetTags(snapshot.negativeTags, snapshot.negative);
+
+  if (!sourceTags.length) return;
+
+  if (activeEditorTarget.type === 'character') {
+    const index = activeEditorTarget.charIndex;
+    const charData = characterPromptsData[index];
+    const charEditorObj = charEditors[index];
+    if (!charData) return;
+
+    if (target === 'positive') {
+      charData.posTags = [...(charData.posTags || []), ...sourceTags];
+      charData.posPrompt = tagsToString(charData.posTags);
+      if (charEditorObj?.activeTab === 'pos') {
+        charEditorObj.editor.setTags(charData.posTags);
+      }
+    } else {
+      charData.negTags = [...(charData.negTags || []), ...sourceTags];
+      charData.negPrompt = tagsToString(charData.negTags);
+      if (charEditorObj?.activeTab === 'neg') {
+        charEditorObj.editor.setTags(charData.negTags);
+      }
+    }
+  } else if (target === 'positive') {
+    positiveTags = [...positiveTags, ...sourceTags];
+    rawPositive = tagsToString(positiveTags);
+    if (currentMode === 'positive' && editor) {
+      editor.setTags(positiveTags);
+    }
+  } else {
+    negativeTags = [...negativeTags, ...sourceTags];
+    rawNegative = tagsToString(negativeTags);
+    if (currentMode === 'negative' && editor) {
+      editor.setTags(negativeTags);
+    }
+  }
+
+  await broadcastPromptStateAndRecord('restore');
+}
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
     restoreFromSnapshot(msg.snapshot);
+  }
+
+  if (msg.type === 'APPEND_HISTORY_SNIPPET' && msg.snapshot && msg.target) {
+    appendHistorySnippet(msg.snapshot, msg.target);
   }
   
   if (msg.type === 'APPEND_TAG_FROM_PANEL' && msg.tag) {
