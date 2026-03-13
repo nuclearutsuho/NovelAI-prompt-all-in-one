@@ -25,6 +25,8 @@
     {
       "resources": [
         "lib/Sortable.umd.js",
+        "lib/group-tags-data.js",
+        "lib/group-tags-favorites.js",
         "modules/history-favorites-panel.js",
         "injector.js",
         "modules/auto-clicker.js",
