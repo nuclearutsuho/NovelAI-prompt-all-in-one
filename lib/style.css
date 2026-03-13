@@ -305,19 +305,24 @@
 }
 
 .tbtn-fav {
-    color: #555;
-    /* Dim by default */
-    filter: grayscale(1);
+    color: #a5b4fc;
+    background: rgba(129, 140, 248, 0.1);
+    border: 1px dashed rgba(129, 140, 248, 0.5) !important;
+    box-sizing: border-box;
+    transition: all 0.2s ease;
 }
 
 .tbtn-fav:hover {
-    filter: grayscale(0.5);
-    color: #f1c40f;
+    color: #fff;
+    background: rgba(129, 140, 248, 0.25);
+    border: 1px solid #818cf8 !important;
+    filter: drop-shadow(0 0 4px rgba(129, 140, 248, 0.6));
 }
 
 .tbtn-fav.active {
-    color: #ffd700;
-    text-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+    color: #6366f1;
+    border: 1px solid #6366f1 !important;
+    text-shadow: 0 0 5px rgba(99, 102, 241, 0.5);
 }
 
 .fav-star {
