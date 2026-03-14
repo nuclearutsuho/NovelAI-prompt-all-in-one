@@ -129,7 +129,8 @@ const translations = {
     toast_error: "Error",
     toast_close: "Close notification",
     group_tags_picker_close: "Close panel",
-    group_tags_picker_trans_placeholder: "Enter translation"
+    group_tags_picker_trans_placeholder: "Enter translation",
+    setting_storage_usage: "Storage Usage"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -225,7 +226,8 @@ const translations = {
     toast_error: "错误",
     toast_close: "关闭通知",
     group_tags_picker_close: "关闭面板",
-    group_tags_picker_trans_placeholder: "输入翻译"
+    group_tags_picker_trans_placeholder: "输入翻译",
+    setting_storage_usage: "存储空间占用"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -320,7 +322,8 @@ const translations = {
     toast_warning: "案内",
     toast_error: "エラー",
     toast_close: "通知を閉じる",
-    group_tags_picker_close: "パネルを閉じる"
+    group_tags_picker_close: "パネルを閉じる",
+    setting_storage_usage: "ストレージ使用量"
   }
 };
 
@@ -1857,8 +1860,48 @@ function initUI() {
   const modal = document.getElementById('settings-modal');
   const closeSettings = document.getElementById('close-settings');
 
-  btnSettings.addEventListener('click', () => { modal.style.display = 'flex'; });
+  btnSettings.addEventListener('click', () => {
+    modal.style.display = 'flex';
+    updateStorageMonitor();
+  });
+  
   closeSettings.addEventListener('click', () => { modal.style.display = 'none'; });
+
+  // Update Chrome Storage Monitor
+  function updateStorageMonitor() {
+    const barFill = document.getElementById('storage-bar-fill');
+    const textDesc = document.getElementById('storage-usage-text');
+    if (!barFill || !textDesc) return;
+
+    chrome.storage.local.getBytesInUse(null, (bytesInUse) => {
+      chrome.runtime.lastError; // Ignore errors silently
+      const usageMb = bytesInUse / (1024 * 1024);
+      
+      // 动态推导软上限档位，因为插件声明了 unlimitedStorage 权限
+      let limitMb = 10;
+      if (usageMb > 500) limitMb = 1024;
+      else if (usageMb > 100) limitMb = 500;
+      else if (usageMb > 50) limitMb = 100;
+      else if (usageMb > 10) limitMb = 50;
+
+      const maxBytes = limitMb * 1024 * 1024;
+      let percentage = (bytesInUse / maxBytes) * 100;
+      
+      // Cap at 100% just in case 
+      percentage = Math.min(percentage, 100);
+
+      textDesc.textContent = `${usageMb.toFixed(2)} / ${limitMb} MB (${percentage.toFixed(1)}%)`;
+      barFill.style.width = `${percentage}%`;
+
+      // Visual warnings
+      barFill.classList.remove('warning', 'critical');
+      if (percentage >= 90) {
+        barFill.classList.add('critical');
+      } else if (percentage >= 70) {
+        barFill.classList.add('warning');
+      }
+    });
+  }
 
   // History & Favorites Modal trigger
   const btnHistory = document.getElementById('btn-history');

@@ -402,6 +402,7 @@
     const UNDOCK_THRESHOLD = 20; // 脱离距离（px）
     let dockState = null; // null | 'left' | 'right' | 'top' | 'bottom'
     let wmObserver = null; // MutationObserver for wildcard-manager
+    let lastWMRect = null; // 用于记录上一帧主面板的位置，以计算位移差
 
     // 获取 wildcard-manager 容器的引用
     function getWMContainer() {
@@ -409,8 +410,8 @@
     }
 
     // 根据当前吸附方向，计算 group-tags 应处的位置
-    // 左右吸附时：只锁定水平轴（left），top 保持当前值（用户可上下自由拖动）
-    // 上下吸附时：只锁定垂直轴（top），left 保持当前值
+    // 左右吸附时：只锁定水平轴（left），top 保持当前值（用户可上下自由拖动） + 跟随主面板垂直位移 (dy)
+    // 上下吸附时：只锁定垂直轴（top），left 保持当前值 + 跟随主面板水平位移 (dx)
     function calcDockedPosition(dockDir) {
       const wm = getWMContainer();
       if (!wm) return null;
@@ -418,23 +419,33 @@
       const gtRect = container.getBoundingClientRect();
       const gtW = container.offsetWidth;
       const gtH = container.offsetHeight;
+      
+      let dx = 0;
+      let dy = 0;
+      if (lastWMRect) {
+        dx = wmRect.left - lastWMRect.left;
+        dy = wmRect.top - lastWMRect.top;
+      }
+      // 更新 lastWMRect
+      lastWMRect = { left: wmRect.left, top: wmRect.top };
+
       let left, top;
 
       switch (dockDir) {
-        case 'right': // 水平锁定：贴右边，垂直自由
+        case 'right': // 水平锁定：贴右边，垂直跟随
           left = wmRect.right;
-          top = gtRect.top; // 保持当前 top
+          top = gtRect.top + dy;
           break;
-        case 'left': // 水平锁定：贴左边，垂直自由
+        case 'left': // 水平锁定：贴左边，垂直跟随
           left = wmRect.left - gtW;
-          top = gtRect.top;
+          top = gtRect.top + dy;
           break;
-        case 'bottom': // 垂直锁定：贴下方，水平自由
-          left = gtRect.left; // 保持当前 left
+        case 'bottom': // 垂直锁定：贴下方，水平跟随
+          left = gtRect.left + dx;
           top = wmRect.bottom;
           break;
-        case 'top': // 垂直锁定：贴上方，水平自由
-          left = gtRect.left;
+        case 'top': // 垂直锁定：贴上方，水平跟随
+          left = gtRect.left + dx;
           top = wmRect.top - gtH;
           break;
       }
@@ -461,6 +472,8 @@
       const wm = getWMContainer();
       if (!wm) return;
 
+      lastWMRect = wm.getBoundingClientRect(); // 初始化
+
       // MutationObserver 监听 style 属性变化（拖拽改变 left/top）
       wmObserver = new MutationObserver(() => {
         applyDockedPosition();
@@ -471,6 +484,7 @@
     // 停止监听
     function stopWMTracking() {
       if (wmObserver) { wmObserver.disconnect(); wmObserver = null; }
+      lastWMRect = null; // 清理
     }
 
     // 吸附入场
