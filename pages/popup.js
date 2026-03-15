@@ -130,7 +130,8 @@ const translations = {
     toast_close: "Close notification",
     group_tags_picker_close: "Close panel",
     group_tags_picker_trans_placeholder: "Enter translation",
-    setting_storage_usage: "Storage Usage"
+    setting_storage_usage: "Storage Usage",
+    btn_toggle_char_prompts: "Toggle Character Prompts"
   },
   zh: {
     tab_positive: "正向提示词",
@@ -227,7 +228,8 @@ const translations = {
     toast_close: "关闭通知",
     group_tags_picker_close: "关闭面板",
     group_tags_picker_trans_placeholder: "输入翻译",
-    setting_storage_usage: "存储空间占用"
+    setting_storage_usage: "存储空间占用",
+    btn_toggle_char_prompts: "切换角色提示词显示"
   },
   jp: {
     tab_positive: "ポジティブプロンプト",
@@ -323,7 +325,8 @@ const translations = {
     toast_error: "エラー",
     toast_close: "通知を閉じる",
     group_tags_picker_close: "パネルを閉じる",
-    setting_storage_usage: "ストレージ使用量"
+    setting_storage_usage: "ストレージ使用量",
+    btn_toggle_char_prompts: "キャラクタープロンプトの表示切替"
   }
 };
 
@@ -1528,6 +1531,7 @@ function initUI() {
   // Character Prompt Add Button
   const btnAddChar = document.getElementById('btn-add-char');
   if (btnAddChar) {
+    btnAddChar.addEventListener('mousedown', (e) => e.stopPropagation());
     btnAddChar.addEventListener('click', () => {
       if (characterPromptsData.length < maxCharacters) {
         characterPromptsData.push({ 
@@ -1544,6 +1548,8 @@ function initUI() {
   // Resizer Logic
   const resizer = document.getElementById('resizer');
   const charSection = document.getElementById('character-prompts-section');
+  const btnMinChar = document.getElementById('btn-min-char');
+
   if (resizer && charSection) {
     let startY = 0;
     let startHeight = 0;
@@ -1558,6 +1564,7 @@ function initUI() {
     const onMouseUp = () => {
       document.body.style.cursor = '';
       resizer.classList.remove('active');
+      charSection.classList.remove('resizing');
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
       // Save user preference
@@ -1565,18 +1572,35 @@ function initUI() {
     };
 
     resizer.addEventListener('mousedown', (e) => {
+      if (charSection.classList.contains('minimized')) return;
       startY = e.clientY;
       startHeight = charSection.getBoundingClientRect().height;
       document.body.style.cursor = 'row-resize';
       resizer.classList.add('active');
+      charSection.classList.add('resizing');
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
     });
+
+    if (btnMinChar) {
+      btnMinChar.addEventListener('mousedown', (e) => e.stopPropagation());
+      btnMinChar.addEventListener('click', () => {
+        const isMinimized = charSection.classList.toggle('minimized');
+        btnMinChar.textContent = isMinimized ? '+' : '_';
+        resizer.classList.toggle('disabled', isMinimized);
+        chrome.storage.local.set({ charSectionMinimized: isMinimized });
+      });
+    }
     
-    // Initialize saved height
-    chrome.storage.local.get(['charSectionHeight'], (data) => {
-        if(data.charSectionHeight) {
+    // Initialize saved state
+    chrome.storage.local.get(['charSectionHeight', 'charSectionMinimized'], (data) => {
+        if (data.charSectionHeight) {
             charSection.style.height = data.charSectionHeight;
+        }
+        if (data.charSectionMinimized) {
+            charSection.classList.add('minimized');
+            if (btnMinChar) btnMinChar.textContent = '+';
+            resizer.classList.add('disabled');
         }
     });
   }
