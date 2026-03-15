@@ -1,3 +1,14 @@
+:root {
+    /* Tag Editor Density Variables */
+    --te-density-gap: 6px;
+    --te-density-pad-v: 2px;
+    --te-density-pad-h: 8px;
+    --te-density-min-height: 28px;
+    --te-density-font-en: 13px;
+    --te-density-font-zh: 11px;
+    --te-density-btn-size: 24px;
+}
+
 /* TagEditor Styles */
 .tag-editor-container {
     padding: 0;
@@ -13,7 +24,7 @@
     margin: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--te-density-gap);
     align-content: flex-start;
 }
 
@@ -46,11 +57,11 @@
     background: #3b3b4f;
     border: 1px solid #4a4a6a;
     border-radius: 6px;
-    padding: 2px 8px;
+    padding: var(--te-density-pad-v) var(--te-density-pad-h);
     color: #eee;
-    font-size: 13px;
+    font-size: var(--te-density-font-en);
     position: relative;
-    min-height: 28px;
+    min-height: var(--te-density-min-height);
     box-sizing: border-box;
     transition: all 0.2s;
 }
@@ -94,7 +105,7 @@
 
 /* Tag Main Content */
 .tag-zh-row {
-    font-size: 11px;
+    font-size: var(--te-density-font-zh);
     color: #888;
     line-height: 1.2;
     text-align: center;
@@ -278,8 +289,8 @@
     border: none;
     color: #eee;
     cursor: pointer;
-    width: 24px;
-    height: 24px;
+    width: var(--te-density-btn-size);
+    height: var(--te-density-btn-size);
     display: flex;
     align-items: center;
     justify-content: center;

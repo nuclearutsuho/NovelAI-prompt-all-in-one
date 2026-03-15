@@ -1818,7 +1818,8 @@ function initUI() {
     'triggerSpace',
     'triggerTab',
     'renderNewlines',
-    'hideAutoClicker'
+    'hideAutoClicker',
+    'tagEditorDensity'
   ];
 
   // Load Settings
@@ -1853,6 +1854,12 @@ function initUI() {
         });
       }
     });
+
+    if (data.tagEditorDensity !== undefined) {
+      applyTagEditorDensity(data.tagEditorDensity);
+    } else {
+      applyTagEditorDensity(50);
+    }
   });
 
   // Settings Modal
@@ -2793,4 +2800,36 @@ chrome.runtime.onMessage.addListener((msg) => {
     applyGroupMapsToEditors(currentGroupColorMap, msg.translationMap);
   }
 });
+
+function applyTagEditorDensity(value) {
+    // value ranges from 0 to 100
+    // Density calculation logic based on linear interpolation
+    const ratio = value / 100;
+    
+    // min constraints at 0, max at 100
+    const gap = 2 + (8 * ratio);          // 2px -> 10px
+    const padV = 0 + (4 * ratio);         // 0px -> 4px
+    const padH = 4 + (8 * ratio);         // 4px -> 12px
+    const minHeight = 20 + (12 * ratio);  // 20px -> 32px
+    const fontEn = 11 + (4 * ratio);      // 11px -> 15px
+    const fontZh = 10 + (3 * ratio);      // 10px -> 13px
+    const btnSize = 18 + (10 * ratio);    // 18px -> 28px
+    
+    document.documentElement.style.setProperty('--te-density-gap', `${gap}px`);
+    document.documentElement.style.setProperty('--te-density-pad-v', `${padV}px`);
+    document.documentElement.style.setProperty('--te-density-pad-h', `${padH}px`);
+    document.documentElement.style.setProperty('--te-density-min-height', `${minHeight}px`);
+    document.documentElement.style.setProperty('--te-density-font-en', `${fontEn}px`);
+    document.documentElement.style.setProperty('--te-density-font-zh', `${fontZh}px`);
+    document.documentElement.style.setProperty('--te-density-btn-size', `${btnSize}px`);
+}
+
+// 监听跨 iframe 传来的 Density Slider 信号
+window.addEventListener('message', (e) => {
+    if (e.data?.type === '__UPDATE_TE_DENSITY__') {
+        applyTagEditorDensity(e.data.value);
+    }
+});
+
+init();
 

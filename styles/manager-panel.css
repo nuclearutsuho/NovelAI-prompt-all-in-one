@@ -98,14 +98,54 @@
     color: #fff;
 }
 
+#wildcard-manager-header .controls .min-btn {
+    border: 1px solid #4a4a6a;
+    background: rgba(255, 255, 255, 0.05);
+    color: #aaa;
+    width: 20px;
+    height: 20px;
+}
+
 #wildcard-manager-header .controls .min-btn:hover {
     background: rgba(99, 102, 241, 0.2);
+    border-color: #818cf8;
     color: #818cf8;
 }
 
-#wildcard-manager-header .controls .close-btn:hover {
-    background: #e53935;
-    color: #fff;
+/* 关闭按钮已移除 */
+
+/* Density Slider */
+#wildcard-manager-header .density-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #999;
+    font-size: 11px;
+}
+#wildcard-manager-header .density-slider {
+    width: 60px;
+    height: 2px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #4a4a6a;
+    border-radius: 1px;
+    outline: none;
+    border: none;
+    padding: 0;
+}
+#wildcard-manager-header .density-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #818cf8;
+    cursor: pointer;
+    border: none;
+}
+#wildcard-manager-header .density-slider::-webkit-slider-thumb:hover {
+    background: #6366f1;
+    transform: scale(1.2);
 }
 
 #wildcard-manager-iframe {

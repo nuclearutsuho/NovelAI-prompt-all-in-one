@@ -97,9 +97,11 @@
     container.innerHTML = `
       <div id="wildcard-manager-header">
         <span class="title">🎴 NovelAI-prompt-all-in-one</span>
-        <div class="controls">
+        <div class="controls" style="align-items: center;">
+          <div class="density-control" style="margin-right: 8px;" title="Adjust Label Density">
+            <input type="range" id="te-density-slider" class="density-slider" min="0" max="100" value="50">
+          </div>
           <button class="min-btn" title="Minimize">_</button>
-          <button class="close-btn" title="Close">×</button>
         </div>
       </div>
       <iframe id="wildcard-manager-iframe" src="${popupUrl}"></iframe>
@@ -107,7 +109,6 @@
     document.body.appendChild(container);
 
     const header = container.querySelector('#wildcard-manager-header');
-    const closeBtn = container.querySelector('.close-btn');
     const minBtn = container.querySelector('.min-btn');
 
     // 显示/隐藏面板
@@ -127,8 +128,26 @@
     }
 
     toggleBtn.addEventListener('click', togglePanel);
-    closeBtn.addEventListener('click', hidePanel);
     minBtn.addEventListener('click', toggleMinimize);
+
+    // 密度控制逻辑 (Density Slider)
+    const densitySlider = container.querySelector('#te-density-slider');
+    densitySlider.addEventListener('input', (e) => {
+      const val = e.target.value;
+      chrome.storage.local.set({ tagEditorDensity: val });
+      // 如果 iframe 已经加载完，可以选择主动 postMessage，
+      // 但其实 popup.js 如果自己监听 chrome.storage.onChanged 也能接收到。
+      // 为了稳定起见且遵守架构，依靠 background/popup 自己监听 storage 变化或直接广播
+      const iframe = container.querySelector('#wildcard-manager-iframe');
+      if (iframe && iframe.contentWindow) {
+         iframe.contentWindow.postMessage({ type: '__UPDATE_TE_DENSITY__', value: val }, '*');
+      }
+    });
+
+    // 防止在滑块上按下由于 header 拖拽导致滑块无法正常滑动
+    densitySlider.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+    });
 
     // 拖拽功能
     let isDragging = false;
@@ -195,8 +214,15 @@
     }
 
     // 恢复面板状态
-    chrome.storage.local.get(STORAGE_KEY, data => {
+    chrome.storage.local.get([STORAGE_KEY, 'tagEditorDensity'], data => {
       const state = data[STORAGE_KEY];
+      const density = data['tagEditorDensity'];
+
+      if (density !== undefined) {
+         const densitySlider = container.querySelector('#te-density-slider');
+         if (densitySlider) densitySlider.value = density;
+      }
+      
       if (state) {
         // Apply dimensions and position while hidden
         if (state.width) container.style.width = state.width + 'px';
@@ -291,17 +317,11 @@
         </span>
         <div style="display:flex; gap:4px;">
           <button class="gt-min-btn" title="Minimize" style="
-            width:18px; height:18px; border:none; border-radius:4px;
-            background:transparent; color:#888; cursor:pointer;
+            width:20px; height:20px; border:1px solid #4a4a6a; border-radius:4px;
+            background:rgba(255,255,255,0.05); color:#aaa; cursor:pointer;
             display:flex; align-items:center; justify-content:center;
-            font-size:14px; transition:background 0.15s,color 0.15s;
+            font-size:14px; transition:all 0.15s;
           ">_</button>
-          <button class="gt-close-btn" title="Close" style="
-            width:18px; height:18px; border:none; border-radius:4px;
-            background:transparent; color:#888; cursor:pointer;
-            display:flex; align-items:center; justify-content:center;
-            font-size:14px; transition:background 0.15s,color 0.15s;
-          ">×</button>
         </div>
       </div>
       <iframe id="group-tags-iframe" src="${panelUrl}" style="flex:1; width:100%; border:none; background:transparent;"></iframe>
@@ -309,19 +329,18 @@
     document.body.appendChild(container);
 
     const header = container.querySelector('#group-tags-header');
-    const closeBtn = container.querySelector('.gt-close-btn');
     const minBtn = container.querySelector('.gt-min-btn');
 
     // hover 效果
-    [closeBtn, minBtn].forEach(btn => {
-      btn.addEventListener('mouseenter', () => {
-        btn.style.background = btn === closeBtn ? '#e53935' : '#4a4a6a';
-        btn.style.color = '#fff';
-      });
-      btn.addEventListener('mouseleave', () => {
-        btn.style.background = 'transparent';
-        btn.style.color = '#888';
-      });
+    minBtn.addEventListener('mouseenter', () => {
+      minBtn.style.background = 'rgba(99, 102, 241, 0.2)';
+      minBtn.style.borderColor = '#818cf8';
+      minBtn.style.color = '#818cf8';
+    });
+    minBtn.addEventListener('mouseleave', () => {
+      minBtn.style.background = 'rgba(255, 255, 255, 0.05)';
+      minBtn.style.borderColor = '#4a4a6a';
+      minBtn.style.color = '#aaa';
     });
 
     let isInitializing = true;
@@ -335,12 +354,10 @@
       container.style.display = 'none';
       saveState();
     };
-    closeBtn.addEventListener('click', () => window.hideGroupTagsPanel());
 
     // 最小化逻辑
     function toggleGTMinimize() {
       container.classList.toggle('minimized');
-      saveState();
     }
     minBtn.addEventListener('click', toggleGTMinimize);
 
