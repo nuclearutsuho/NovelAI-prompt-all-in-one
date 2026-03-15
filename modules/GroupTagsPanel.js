@@ -26,15 +26,14 @@ const densitySlider = document.getElementById('density-slider');
 const root = document.documentElement;
 const STORAGE_KEY_DENSITY = 'groupTagsDensity';
 
-// 基于 0-100 滑块值，映射到具体的 CSS 变量（0=最稀疏/大，100=最密集/紧凑）
+// 基于 0-100 滑块值，映射到具体的 CSS 变量
 function applyDensity(value) {
-  // ratio: 0 (稀疏) -> 1 (密集)
-  const r = value / 100;
+  // 反转逻辑：value 越大 (向右滑) -> r 越小 -> 对应尺寸越大 (稀疏)
+  const r = (100 - value) / 100;
   
   // Interpolate values
   // Gap: 6px -> 1px
   const gap = 6 - (5 * r);
-  // PadV (Tabs): 10px -> 4px
   const padV = 10 - (6 * r);
   // PadH (Tabs): 14px -> 6px
   const padH = 14 - (8 * r);
