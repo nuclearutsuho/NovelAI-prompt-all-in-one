@@ -8,12 +8,16 @@
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "https://image.novelai.net/*"
+    "https://image.novelai.net/*",
+    "https://novelai.net/image*",
+    "https://novelai.net/image/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "*://*.novelai.net/*"
+        "https://image.novelai.net/*",
+        "https://novelai.net/image*",
+        "https://novelai.net/image/*"
       ],
       "js": [
         "bridge.js"
@@ -27,6 +31,7 @@
         "lib/Sortable.umd.js",
         "lib/group-tags-data.js",
         "lib/group-tags-favorites.js",
+        "lib/injected/prompt-storage-shim.js",
         "modules/history-favorites-panel.js",
         "injector.js",
         "modules/auto-clicker.js",

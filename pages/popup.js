@@ -9,6 +9,8 @@ let rawPositive = '';
 let rawNegative = '';
 let positiveTags = [];
 let negativeTags = [];
+const isEmbeddedPopup = window !== window.top;
+const popupHostSessionId = new URLSearchParams(window.location.search).get('hostSession') || '';
 // State now stores an object per character with both positive and negative prompts
 let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", negTags: [], gender: "other" }]
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
@@ -16,6 +18,7 @@ let maxCharacters = 6;
 let isShortMode = false;
 let currentGroupColorMap = {};
 let currentGroupTranslationMap = {};
+let currentSequentialCounters = {};
 
 const groupTagsDataUtils = window.GroupTagsDataUtils || {};
 const EMPTY_GROUP_TAGS_DATA = { categories: [] };
@@ -938,9 +941,64 @@ document.addEventListener('DOMContentLoaded', async () => {
   initCommunication();
 });
 
+function applySequentialCountersToEditors(counters) {
+  currentSequentialCounters = counters || {};
+  if (editor) {
+    editor.setSequentialCounters(currentSequentialCounters);
+  }
+  charEditors.forEach((charEditorObj) => {
+    if (charEditorObj?.editor) {
+      charEditorObj.editor.setSequentialCounters(currentSequentialCounters);
+    }
+  });
+}
+
+function getActiveTab() {
+  return new Promise((resolve) => {
+    if (!chrome.tabs) {
+      resolve(null);
+      return;
+    }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      resolve(tabs && tabs[0] ? tabs[0] : null);
+    });
+  });
+}
+
+function getSequentialCountersFromTab(tabId) {
+  return new Promise((resolve) => {
+    if (!chrome.tabs || !tabId) {
+      resolve({});
+      return;
+    }
+    chrome.tabs.sendMessage(tabId, { type: 'GET_SEQUENTIAL_COUNTERS' }, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({});
+        return;
+      }
+      resolve(response?.sequentialCounters || {});
+    });
+  });
+}
+
+async function refreshSequentialCountersFromActiveTab() {
+  const activeTab = await getActiveTab();
+  if (!activeTab?.id) {
+    applySequentialCountersToEditors({});
+    return;
+  }
+  applySequentialCountersToEditors(await getSequentialCountersFromTab(activeTab.id));
+}
+
+function shouldIgnoreRuntimeMessage(msg) {
+  if (!isEmbeddedPopup) return false;
+  if (!msg?.hostSessionId) return false;
+  return msg.hostSessionId !== popupHostSessionId;
+}
+
 async function initData() {
-  const data = await chrome.storage.local.get(['sequentialCounters', 'promptHistory']);
-  if (data.promptHistory && data.promptHistory.length > 0) {
+  const data = await chrome.storage.local.get(['promptHistory']);
+  if (!isEmbeddedPopup && data.promptHistory && data.promptHistory.length > 0) {
     // 应该找最近的一条非收藏、非文件夹的普通真实历史记录，作为最后状态
     const s = data.promptHistory.find(item => !item.isFavorite && !item.isFolder) || data.promptHistory[0];
     
@@ -967,16 +1025,11 @@ async function initData() {
     }
   }
 
-  if (editor && data.sequentialCounters) {
-    editor.setSequentialCounters(data.sequentialCounters);
-  }
+  await refreshSequentialCountersFromActiveTab();
 
   // Listen for storage changes to keep counters in sync and hot-reload dictionary
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
-      if (changes.sequentialCounters) {
-        if (editor) editor.setSequentialCounters(changes.sequentialCounters.newValue);
-      }
       if ((changes.dictOverlay || changes.wildcards) && autocomplete) {
         // Hot-reload dictionary and wildcards
         autocomplete.loaded = false;
@@ -1123,6 +1176,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   });
   charEditor.groupColorMap = currentGroupColorMap;
   charEditor.groupTranslationMap = currentGroupTranslationMap;
+  charEditor.setSequentialCounters(currentSequentialCounters);
 
   // ── 焦点追踪：点击角色编辑器容器时设为活动目标 ──
   editorContainer.addEventListener('mousedown', () => {
@@ -2212,6 +2266,19 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
 
 function initCommunication() {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (shouldIgnoreRuntimeMessage(msg)) return;
+    if (msg.type === 'SEQUENTIAL_COUNTERS_UPDATED') {
+      const senderTabId = sender?.tab?.id;
+      if (senderTabId) {
+        getActiveTab().then((activeTab) => {
+          if (activeTab?.id === senderTabId) {
+            applySequentialCountersToEditors(msg.counters || {});
+          }
+        });
+      }
+      return;
+    }
+
     if (msg.type === 'RETURN_PROMPT') {
       const { positive, negative } = msg.data;
 
@@ -2773,6 +2840,7 @@ async function appendHistorySnippet(snapshot, target) {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (shouldIgnoreRuntimeMessage(msg)) return;
   if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
     restoreFromSnapshot(msg.snapshot);
   }

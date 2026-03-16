@@ -1,5 +1,58 @@
 // bridge.js
 (async () => {
+  const SESSION_COUNTERS_KEY = '__nai_aio_sequentialCounters__';
+  const HOST_SESSION_KEY = '__nai_aio_host_session__';
+
+  const promptStorageShimReady = new Promise((resolve) => {
+    const shimScript = document.createElement('script');
+    shimScript.src = chrome.runtime.getURL('lib/injected/prompt-storage-shim.js');
+    shimScript.onload = () => { shimScript.remove(); resolve(); };
+    (document.head || document.documentElement).appendChild(shimScript);
+  });
+
+  function loadScopedSequentialCounters() {
+    try {
+      const raw = window.sessionStorage.getItem(SESSION_COUNTERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      console.warn('[Bridge] Failed to load scoped sequential counters:', e);
+      return {};
+    }
+  }
+
+  function saveScopedSequentialCounters(nextCounters) {
+    try {
+      window.sessionStorage.setItem(SESSION_COUNTERS_KEY, JSON.stringify(nextCounters || {}));
+    } catch (e) {
+      console.warn('[Bridge] Failed to save scoped sequential counters:', e);
+    }
+  }
+
+  function notifySequentialCounterUpdate(nextCounters) {
+    chrome.runtime.sendMessage({
+      type: 'SEQUENTIAL_COUNTERS_UPDATED',
+      counters: nextCounters || {},
+      hostSessionId
+    }).catch(() => {});
+  }
+
+  function getHostSessionId() {
+    try {
+      let id = window.sessionStorage.getItem(HOST_SESSION_KEY);
+      if (!id) {
+        id = `host_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        window.sessionStorage.setItem(HOST_SESSION_KEY, id);
+      }
+      return id;
+    } catch (e) {
+      return `host_fallback_${Math.random().toString(36).slice(2, 8)}`;
+    }
+  }
+
+  const hostSessionId = getHostSessionId();
+
+  await promptStorageShimReady;
   // 1) get settings from storage  ← preservePrompt 포함 (包含 preservePrompt)
   let {
     wildcards = {},
@@ -8,11 +61,11 @@
     alternativeDanbooruAutocomplete = true,
     triggerTab = false,
     triggerSpace = true,
-    sequentialCounters = {},
     multiResConfig = null,
     hideAutoClicker = false,
     autoClickerI18n = null
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'sequentialCounters', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n']);
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n']);
+  let sequentialCounters = loadScopedSequentialCounters();
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
   const sortableScript = document.createElement('script');
@@ -70,7 +123,7 @@
     if (document.getElementById('wildcard-manager-container')) return;
 
     const STORAGE_KEY = 'wildcardPanelState';
-    const popupUrl = chrome.runtime.getURL('pages/popup.html');
+    const popupUrl = chrome.runtime.getURL(`pages/popup.html?hostSession=${encodeURIComponent(hostSessionId)}`);
     const cssUrl = chrome.runtime.getURL('styles/manager-panel.css');
 
     // Inject CSS
@@ -777,8 +830,8 @@
     if (e.data?.type === '__UPDATE_SEQUENTIAL_COUNTER__') {
       const { name, value } = e.data;
       sequentialCounters[name] = value;
-      // Debounce could be added if needed, but generation is relatively slow
-      chrome.storage.local.set({ sequentialCounters });
+      saveScopedSequentialCounters(sequentialCounters);
+      notifySequentialCounterUpdate(sequentialCounters);
     }
     if (e.data?.type === '__CLEAN_NUMERIC_PREFIXES__') {
       chrome.runtime.sendMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' });
@@ -852,12 +905,12 @@
     // ── 来自 GroupTags iframe 的指令（e.source 是 iframe window，不等于当前 window）──
     if (e.data?.type === '__APPEND_TAG_FROM_PANEL__') {
       console.log('[Bridge] Received __APPEND_TAG_FROM_PANEL__:', e.data.tag);
-      chrome.runtime.sendMessage({ type: 'APPEND_TAG_FROM_PANEL', tag: e.data.tag, zh: e.data.zh });
+      chrome.runtime.sendMessage({ type: 'APPEND_TAG_FROM_PANEL', tag: e.data.tag, zh: e.data.zh, hostSessionId });
       return;
     }
     if (e.data?.type === '__REMOVE_TAG_FROM_PANEL__') {
       console.log('[Bridge] Received __REMOVE_TAG_FROM_PANEL__:', e.data.tag);
-      chrome.runtime.sendMessage({ type: 'REMOVE_TAG_FROM_PANEL', tag: e.data.tag });
+      chrome.runtime.sendMessage({ type: 'REMOVE_TAG_FROM_PANEL', tag: e.data.tag, hostSessionId });
       return;
     }
     if (e.data?.type === '__SYNC_GROUP_COLORS__') {
@@ -908,7 +961,8 @@
       // Relay back to popup
       chrome.runtime.sendMessage({
         type: 'RETURN_PROMPT',
-        data: e.data.data
+        data: e.data.data,
+        hostSessionId
       });
     }
 
@@ -916,14 +970,16 @@
       console.log('[Bridge] Received __RETURN_CHARACTER_PROMPTS__, relaying to popup');
       chrome.runtime.sendMessage({
         type: 'RETURN_CHARACTER_PROMPTS',
-        data: e.data.data
+        data: e.data.data,
+        hostSessionId
       });
     }
     
     if (e.data?.type === '__SYNC_TAB__') {
       chrome.runtime.sendMessage({
         type: 'SYNC_TAB',
-        data: e.data.data
+        data: e.data.data,
+        hostSessionId
       });
     }
 
@@ -931,7 +987,8 @@
     if (e.data?.type === '__RESTORE_HISTORY__') {
       chrome.runtime.sendMessage({
         type: 'RESTORE_HISTORY_SNAPSHOT',
-        snapshot: e.data.snapshot
+        snapshot: e.data.snapshot,
+        hostSessionId
       });
     }
 
@@ -939,7 +996,8 @@
       chrome.runtime.sendMessage({
         type: 'APPEND_HISTORY_SNIPPET',
         snapshot: e.data.snapshot,
-        target: e.data.target
+        target: e.data.target,
+        hostSessionId
       });
     }
 
@@ -999,6 +1057,9 @@
           targetLabel: request.targetLabel
         }, '*');
       }
+    }
+    if (request.type === 'GET_SEQUENTIAL_COUNTERS') {
+      sendResponse({ sequentialCounters });
     }
     
     // Return true if we want to sendResponse asynchronously, but here we use runtime.sendMessage for return.
