@@ -14,6 +14,7 @@ let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
 let specialCategoryPosition = 0;
 let draggedFavoriteItemId = null;
+let draggedTagInfo = null; // 普通标签拖拽状态：{ tag, sourceCategoryIndex, sourceGroupIndex, sourceTagIndex }
 let favoritePreviewPopover = null;
 let favoritesHistorySnapshot = null;
 let favoritePreviewHideTimer = null;
@@ -497,8 +498,22 @@ function initTagsGridSortable() {
   sortableInstances.tags = new Sortable(dom.tagsGrid, {
     ...createCommonSortableOptions(),
     draggable: '.tag-card',
+    onStart(evt) {
+      // 同步设置 draggedTagInfo，使 Sortable 拖拽也能触发跨分组 drop
+      const tagIndex = evt.oldDraggableIndex ?? evt.oldIndex;
+      const tag = currentGroup.tags?.[tagIndex];
+      if (tag) {
+        draggedTagInfo = {
+          tag: { en: tag.en, zh: tag.zh },
+          sourceCategoryIndex: activeCategoryIndex,
+          sourceGroupIndex: activeGroupIndex,
+          sourceTagIndex: tagIndex
+        };
+      }
+    },
     onEnd(evt) {
       const { oldIndex, newIndex } = getSortableIndices(evt);
+      draggedTagInfo = null; // 拖拽结束时清除状态
       if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
 
       const movedTag = moveArrayItem(currentGroup.tags, oldIndex, newIndex);
@@ -1801,6 +1816,131 @@ function bindFavoriteDropOnGroupTab(button, groupId, groupIndex) {
   });
 }
 
+// ========== 普通标签跨分组/跨分类拖拽 ==========
+// 将标签卡片拖到二级分组 Tab 上时，把标签从原分组移到目标分组
+function bindTagDropOnGroupTab(button, targetCategoryIndex, targetGroupIndex) {
+  if (!isEditMode) return;
+  // 不在特殊分类的分组上绑定普通标签拖放
+  const targetCategory = customGroupsData?.categories?.[targetCategoryIndex];
+  if (!targetCategory || isSpecialFavoritesCategory(targetCategory)) return;
+
+  button.addEventListener('dragover', (event) => {
+    if (!draggedTagInfo) return; // 只接受普通标签的拖拽，不接受收藏卡片
+    event.preventDefault();
+    button.classList.add('tag-drop-target');
+  });
+
+  button.addEventListener('dragleave', () => {
+    button.classList.remove('tag-drop-target');
+  });
+
+  button.addEventListener('drop', (event) => {
+    if (!draggedTagInfo) return;
+    event.preventDefault();
+    button.classList.remove('tag-drop-target');
+
+    const { tag, sourceCategoryIndex, sourceGroupIndex, sourceTagIndex } = draggedTagInfo;
+    const sourceCategory = customGroupsData?.categories?.[sourceCategoryIndex];
+    const sourceGroup = sourceCategory?.groups?.[sourceGroupIndex];
+    const targetGroup = targetCategory.groups?.[targetGroupIndex];
+
+    // 不允许放到自身所在的同一分组
+    if (sourceCategoryIndex === targetCategoryIndex && sourceGroupIndex === targetGroupIndex) {
+      draggedTagInfo = null;
+      return;
+    }
+
+    if (!sourceGroup?.tags || !targetGroup) {
+      draggedTagInfo = null;
+      return;
+    }
+
+    // 从源分组移除标签
+    sourceGroup.tags.splice(sourceTagIndex, 1);
+    sourceGroup._modified = true;
+    sourceCategory._modified = true;
+
+    // 添加到目标分组末尾
+    if (!targetGroup.tags) targetGroup.tags = [];
+    targetGroup.tags.push({ en: tag.en, zh: tag.zh });
+    targetGroup._modified = true;
+    targetCategory._modified = true;
+
+    draggedTagInfo = null;
+
+    // 切换到目标分组并刷新界面
+    if (activeCategoryIndex !== targetCategoryIndex) {
+      activeCategoryIndex = targetCategoryIndex;
+      renderPrimaryTabs();
+    }
+    activeGroupIndex = targetGroupIndex;
+    renderSecondaryTabs();
+  });
+}
+
+// 将标签卡片拖到一级分类 Tab 上时，把标签移动到目标分类的第一个分组中
+function bindTagDropOnPrimaryTab(button, targetCategoryIndex) {
+  if (!isEditMode) return;
+  const targetCategory = customGroupsData?.categories?.[targetCategoryIndex];
+  if (!targetCategory || isSpecialFavoritesCategory(targetCategory)) return;
+
+  button.addEventListener('dragover', (event) => {
+    if (!draggedTagInfo) return;
+    // 目标分类必须有至少一个分组才能接受放置
+    if (!targetCategory.groups?.length) return;
+    event.preventDefault();
+    button.classList.add('tag-drop-target');
+  });
+
+  button.addEventListener('dragleave', () => {
+    button.classList.remove('tag-drop-target');
+  });
+
+  button.addEventListener('drop', (event) => {
+    if (!draggedTagInfo) return;
+    event.preventDefault();
+    button.classList.remove('tag-drop-target');
+
+    const { tag, sourceCategoryIndex, sourceGroupIndex, sourceTagIndex } = draggedTagInfo;
+    const sourceCategory = customGroupsData?.categories?.[sourceCategoryIndex];
+    const sourceGroup = sourceCategory?.groups?.[sourceGroupIndex];
+
+    // 默认放到目标分类的第一个分组
+    const targetGroupIndex = 0;
+    const targetGroup = targetCategory.groups?.[targetGroupIndex];
+
+    // 如果拖放的目标就是原分类的第一个分组，忽略
+    if (sourceCategoryIndex === targetCategoryIndex && sourceGroupIndex === targetGroupIndex) {
+      draggedTagInfo = null;
+      return;
+    }
+
+    if (!sourceGroup?.tags || !targetGroup) {
+      draggedTagInfo = null;
+      return;
+    }
+
+    // 从源分组移除标签
+    sourceGroup.tags.splice(sourceTagIndex, 1);
+    sourceGroup._modified = true;
+    sourceCategory._modified = true;
+
+    // 添加到目标分组末尾
+    if (!targetGroup.tags) targetGroup.tags = [];
+    targetGroup.tags.push({ en: tag.en, zh: tag.zh });
+    targetGroup._modified = true;
+    targetCategory._modified = true;
+
+    draggedTagInfo = null;
+
+    // 切换到目标分类的第一个分组并刷新
+    activeCategoryIndex = targetCategoryIndex;
+    activeGroupIndex = targetGroupIndex;
+    renderPrimaryTabs();
+    renderSecondaryTabs();
+  });
+}
+
 function renderSpecialFavoritesGrid(currentCategory, currentGroup) {
   const items = currentGroup?.items || [];
   dom.tagsGrid.innerHTML = '';
@@ -1985,6 +2125,10 @@ function renderPrimaryTabs() {
       }
     }
 
+    // 编辑模式下为非特殊分类 Tab 绑定普通标签拖放接收
+    if (isEditMode && !isSpecialCategory) {
+      bindTagDropOnPrimaryTab(btn, index);
+    }
     dom.primaryTabs.appendChild(btn);
   });
   if (addBtn) dom.primaryTabs.appendChild(addBtn);
@@ -2155,6 +2299,11 @@ function renderSecondaryTabs() {
       bindFavoriteDropOnGroupTab(btn, grp.id, index);
     }
 
+    // 编辑模式下为非特殊分类的分组 Tab 绑定普通标签拖放接收
+    if (isEditMode && !isSpecialCategory) {
+      bindTagDropOnGroupTab(btn, activeCategoryIndex, index);
+    }
+
     dom.secondaryTabs.appendChild(btn);
   });
   if (addBtn) dom.secondaryTabs.appendChild(addBtn);
@@ -2320,8 +2469,22 @@ function renderTagsGrid() {
     card.appendChild(zhPart);
     card.appendChild(enPart);
 
-    // 编辑模式：× 删除角标
+    // 编辑模式：拖拽 + × 删除角标
     if (isEditMode) {
+      // 允许拖拽到其他分组或分类的 Tab 上来跨组移动
+      card.draggable = true;
+      card.addEventListener('dragstart', () => {
+        draggedTagInfo = {
+          tag: { en: t.en, zh: t.zh },
+          sourceCategoryIndex: activeCategoryIndex,
+          sourceGroupIndex: activeGroupIndex,
+          sourceTagIndex: tagIndex
+        };
+      });
+      card.addEventListener('dragend', () => {
+        draggedTagInfo = null;
+      });
+
       const badge = document.createElement('span');
       badge.className = 'card-delete-badge';
       badge.textContent = '×';
