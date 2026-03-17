@@ -548,6 +548,138 @@
   let autocompleteDict = [];
   let autocompleteMap = null;
   let isSyncingFromPopup = false;
+
+  const PROMPT_META_SESSION_KEY = '__nai_aio_prompt_tag_meta__';
+
+  // 用页面级 sessionStorage 缓存结构化 tag 元数据，保证同一标签页内可以无损回读。
+  function clonePromptMeta(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function createEmptyPromptMetaCache() {
+    return {
+      base: {},
+      characters: []
+    };
+  }
+
+  function readPromptMetaCache() {
+    try {
+      const raw = window.sessionStorage.getItem(PROMPT_META_SESSION_KEY);
+      if (!raw) return createEmptyPromptMetaCache();
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return createEmptyPromptMetaCache();
+      if (!parsed.base || typeof parsed.base !== 'object') parsed.base = {};
+      if (!Array.isArray(parsed.characters)) parsed.characters = [];
+      return parsed;
+    } catch (e) {
+      console.warn('[AI Translate] 读取 prompt 元数据缓存失败:', e);
+      return createEmptyPromptMetaCache();
+    }
+  }
+
+  function writePromptMetaCache(cache) {
+    try {
+      window.sessionStorage.setItem(PROMPT_META_SESSION_KEY, JSON.stringify(cache || createEmptyPromptMetaCache()));
+    } catch (e) {
+      console.warn('[AI Translate] 写入 prompt 元数据缓存失败:', e);
+    }
+  }
+
+  function buildPromptMetaEntry(promptText, tags) {
+    if (typeof promptText !== 'string' || !Array.isArray(tags) || tags.length === 0) return null;
+    return {
+      prompt: promptText,
+      tags: clonePromptMeta(tags)
+    };
+  }
+
+  function updateBasePromptMetaCache(payload = {}) {
+    const cache = readPromptMetaCache();
+
+    if (payload.positive !== undefined) {
+      const entry = buildPromptMetaEntry(payload.positive || '', payload.positiveTags);
+      if (entry) cache.base.positive = entry;
+      else delete cache.base.positive;
+    }
+
+    if (payload.negative !== undefined) {
+      const entry = buildPromptMetaEntry(payload.negative || '', payload.negativeTags);
+      if (entry) cache.base.negative = entry;
+      else delete cache.base.negative;
+    }
+
+    writePromptMetaCache(cache);
+  }
+
+  function updateCharacterPromptMetaCache(charDataList = []) {
+    const cache = readPromptMetaCache();
+    cache.characters = (charDataList || []).map((item) => {
+      const charMeta = {};
+      const positiveEntry = buildPromptMetaEntry(item?.positive || '', item?.positiveTags);
+      const negativeEntry = buildPromptMetaEntry(item?.negative || '', item?.negativeTags);
+      if (positiveEntry) charMeta.positive = positiveEntry;
+      if (negativeEntry) charMeta.negative = negativeEntry;
+      return charMeta;
+    });
+    writePromptMetaCache(cache);
+  }
+
+  function attachPromptMetaToResult(result) {
+    const cache = readPromptMetaCache();
+    let shouldPersist = false;
+
+    const tryAttachBase = (side, promptText) => {
+      const entry = cache.base?.[side];
+      if (!entry) return;
+      if (entry.prompt === promptText && Array.isArray(entry.tags) && entry.tags.length > 0) {
+        result[side + 'Tags'] = clonePromptMeta(entry.tags);
+        return;
+      }
+      delete cache.base[side];
+      shouldPersist = true;
+    };
+
+    if (typeof result.positive === 'string') tryAttachBase('positive', result.positive);
+    if (typeof result.negative === 'string') tryAttachBase('negative', result.negative);
+
+    if (Array.isArray(result.characters)) {
+      if (cache.characters.length > result.characters.length) {
+        cache.characters = cache.characters.slice(0, result.characters.length);
+        shouldPersist = true;
+      }
+
+      result.characters.forEach((item, index) => {
+        const charCache = cache.characters[index];
+        if (!charCache) return;
+
+        if (typeof item.positive === 'string') {
+          if (charCache.positive?.prompt === item.positive && Array.isArray(charCache.positive.tags) && charCache.positive.tags.length > 0) {
+            item.positiveTags = clonePromptMeta(charCache.positive.tags);
+          } else if (charCache.positive) {
+            delete charCache.positive;
+            shouldPersist = true;
+          }
+        }
+
+        if (typeof item.negative === 'string') {
+          if (charCache.negative?.prompt === item.negative && Array.isArray(charCache.negative.tags) && charCache.negative.tags.length > 0) {
+            item.negativeTags = clonePromptMeta(charCache.negative.tags);
+          } else if (charCache.negative) {
+            delete charCache.negative;
+            shouldPersist = true;
+          }
+        }
+      });
+    }
+
+    if (shouldPersist) {
+      writePromptMetaCache(cache);
+    }
+
+    return result;
+  }
+
   window.addEventListener('message', e => {
     if (e.source !== window) return;
     const { type, map, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
@@ -1436,7 +1568,7 @@
       result.characters = charPrompts;
     }
 
-    return result;
+    return attachPromptMetaToResult(result);
   }
 
   window.addEventListener('message', e => {
@@ -1444,10 +1576,16 @@
     const { type, data } = e.data || {};
 
     if (type === '__GET_PROMPT__') {
-      const { positive, negative, characters } = getCurrentPrompts();
+      const promptState = getCurrentPrompts();
+      const { positive, negative, positiveTags, negativeTags, characters } = promptState;
       window.postMessage({
         type: '__RETURN_PROMPT__',
-        data: { positive, negative }
+        data: {
+          positive,
+          negative,
+          ...(Array.isArray(positiveTags) ? { positiveTags } : {}),
+          ...(Array.isArray(negativeTags) ? { negativeTags } : {})
+        }
       }, '*');
       window.postMessage({
         type: '__RETURN_CHARACTER_PROMPTS__',
@@ -1480,6 +1618,9 @@
           );
           if (negEl) setEditorContent(negEl, negative);
         }
+
+        // 保存结构化标签元数据，供 popup 回读时恢复 AI 胶囊。
+        updateBasePromptMetaCache(data || {});
       } finally {
         setTimeout(() => { isSyncingFromPopup = false; }, 100);
       }
@@ -1517,6 +1658,7 @@
 
           const ok = jotaiSet('imagegen-character-prompts', newChars);
           if (ok) {
+            updateCharacterPromptMetaCache(charDataList);
             console.log('[Jotai] 角色提示词已通过 Jotai 写入，共', newChars.length, '个角色');
             setTimeout(() => { isSyncingFromPopup = false; }, 100);
             return; // Jotai 写入成功，无需 DOM 操作
@@ -1570,6 +1712,8 @@
             if (targetText !== undefined) setEditorContent(pm, targetText);
           }
         };
+
+        updateCharacterPromptMetaCache(charDataList);
 
         syncCharactersDOM(charDataList).finally(() => {
           setTimeout(() => { isSyncingFromPopup = false; }, 100);

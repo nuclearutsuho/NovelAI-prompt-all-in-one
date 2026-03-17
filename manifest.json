@@ -4,8 +4,13 @@
   "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
   "version": "3.0.5",
   "permissions": [
+    "permissions",
     "storage",
     "unlimitedStorage"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "host_permissions": [
     "https://image.novelai.net/*",

@@ -119,6 +119,11 @@
     /* Ensure layout doesn't jump */
 }
 
+.tag-zh-row.tag-ai-original {
+    color: #8bd5ca;
+    font-style: italic;
+}
+
 .tag-capsule.disabled+.tag-zh-row {
     opacity: 0.5;
 }

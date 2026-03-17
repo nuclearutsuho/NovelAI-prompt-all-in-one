@@ -696,7 +696,7 @@ const MODAL_ID = 'nai-history-modal';
      */
     function generateDiffHTML(currSnapshot, prevSnapshot) {
       if (!prevSnapshot) {
-         const previewTags = currSnapshot.positiveTags ? currSnapshot.positiveTags.map(t=>t.value).join(', ') : currSnapshot.positive;
+         const previewTags = currSnapshot.positiveTags ? currSnapshot.positiveTags.map(t => t.value).join(', ') : currSnapshot.positive;
          return `<div class="nhm-item-preview">${tagsPreview(previewTags)}</div>`;
       }
 
@@ -1048,7 +1048,11 @@ const MODAL_ID = 'nai-history-modal';
         if (!isNewline) {
           const zhRow = document.createElement('div');
           zhRow.className = 'nhm-tag-zh-row';
-          zhRow.textContent = (info && info.zhCN) || '\u00A0';
+          // AI 翻译 tag 在历史详情里优先显示原始输入，其余 tag 继续回退到字典翻译。
+          const secondaryText = (typeof tag.aiOriginal === 'string' && tag.aiOriginal.trim())
+            ? tag.aiOriginal.trim()
+            : ((info && info.zhCN) || '');
+          zhRow.textContent = secondaryText || '\u00A0';
           itemNode.appendChild(zhRow);
         }
 

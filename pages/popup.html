@@ -241,6 +241,38 @@
       background: #4a4a6a;
     }
 
+    .ai-translate-btn {
+      background: #0f766e;
+      border-color: #0f766e;
+      color: #ecfeff;
+      min-width: 34px;
+      gap: 4px;
+    }
+
+    .ai-translate-btn:hover {
+      background: #0d9488;
+      border-color: #0d9488;
+    }
+
+    .ai-translate-btn.is-loading {
+      opacity: 0.85;
+      pointer-events: none;
+    }
+
+    .ai-translate-btn.is-loading::after {
+      content: '';
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid rgba(236, 254, 255, 0.35);
+      border-top-color: #ecfeff;
+      animation: ai-spin 0.8s linear infinite;
+    }
+
+    @keyframes ai-spin {
+      to { transform: rotate(360deg); }
+    }
+
     #btn-add, .primary-add-btn {
       background: #818cf8;
       color: #fff;
@@ -642,6 +674,111 @@
       cursor: pointer;
     }
 
+    .ai-translate-settings {
+      border-top: 1px dashed #4a4a6a;
+      padding-top: 12px;
+    }
+
+    .ai-template-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.18);
+      color: #99f6e4;
+      font-size: 11px;
+      margin-top: 8px;
+      border: 1px solid rgba(45, 212, 191, 0.25);
+    }
+
+    .ai-profile-toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .ai-profile-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .ai-profile-btn {
+      background: #3a3a55;
+      color: #e2e8f0;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      padding: 0 10px;
+      height: 28px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .ai-profile-btn:hover:not(:disabled) {
+      background: #4a4a6a;
+    }
+
+    .ai-profile-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .ai-profile-btn.danger:hover:not(:disabled) {
+      background: #7f1d1d;
+      border-color: #991b1b;
+    }
+
+    .ai-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .ai-setting-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .ai-setting-field.full {
+      grid-column: 1 / -1;
+    }
+
+    .ai-setting-field span {
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+
+    .ai-setting-field input,
+    .ai-setting-field select,
+    .ai-setting-field textarea {
+      background: #181825;
+      color: #fff;
+      border: 1px solid #4a4a6a;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .ai-setting-field input:focus,
+    .ai-setting-field select:focus,
+    .ai-setting-field textarea:focus {
+      border-color: #14b8a6;
+      box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.18);
+    }
+
+    .ai-setting-field textarea {
+      min-height: 88px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
     .setting-desc {
       font-size: 0.8em;
       color: #999;
@@ -832,6 +969,7 @@
       .res-control { margin-left: 4px; padding-left: 4px; gap: 4px; }
       header { padding: 4px 6px; }
       #input-area { padding: 4px 6px; gap: 4px; }
+      .ai-settings-grid { grid-template-columns: 1fr; }
       
       /* Make resolution inputs smaller */
       .res-input { width: 38px; padding: 0 1px; }
@@ -976,6 +1114,7 @@
       <button id="btn-quick-wildcard" class="quick-btn" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
       <button id="btn-quick-seq-wildcard" class="quick-btn" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</button>
       <button id="btn-quick-random" class="quick-btn" title="Random Choice" data-i18n-title="btn_quick_random" data-i18n="btn_quick_random">动态抽取</button>
+      <button id="btn-ai-translate" class="quick-btn ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
       <button id="btn-add" class="primary-add-btn" data-i18n="btn_add">Add</button>
       <button id="btn-group-tags" class="group-tags-btn" data-i18n="btn_group_tags" title="Open Group Tags Panel" data-i18n-title="btn_group_tags_title">Group Tags</button>
     </div>
@@ -1012,6 +1151,7 @@
         <button class="quick-btn char-btn-wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
         <button class="quick-btn char-btn-seq-wildcard" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</button>
         <button class="quick-btn char-btn-random" title="Random Choice" data-i18n-title="btn_quick_random" data-i18n="btn_quick_random">动态抽取</button>
+        <button class="quick-btn char-btn-ai-translate ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
         <button class="primary-add-btn" data-i18n="btn_add">Add</button>
         <button class="char-delete" title="Remove Character" data-i18n-title="btn_remove_char">×</button>
       </div>
@@ -1055,6 +1195,45 @@
         <label><input type="checkbox" id="triggerTab"> <span data-i18n="setting_tab">Tab</span></label>
       </div>
 
+      <div id="ai-translate-settings" class="setting-group ai-translate-settings">
+        <strong data-i18n="setting_ai_translate_title">AI Translate</strong>
+        <div class="setting-desc" data-i18n="setting_ai_translate_desc">Configure OpenAI-compatible translation APIs and save multiple profiles.</div>
+        <div class="ai-template-note" data-i18n="setting_ai_template_note">OpenAI-compatible template</div>
+
+        <div class="ai-profile-toolbar">
+          <label class="ai-setting-field" style="flex:1; min-width: 180px;">
+            <span data-i18n="setting_ai_profile">Profile</span>
+            <select id="ai-profile-select"></select>
+          </label>
+          <div class="ai-profile-actions">
+            <button id="btn-ai-profile-new" type="button" class="ai-profile-btn" data-i18n="setting_ai_profile_new">New</button>
+            <button id="btn-ai-profile-delete" type="button" class="ai-profile-btn danger" data-i18n="setting_ai_profile_delete">Delete</button>
+          </div>
+        </div>
+
+        <div class="ai-settings-grid">
+          <label class="ai-setting-field">
+            <span data-i18n="setting_ai_profile_name">Profile Name</span>
+            <input id="ai-profile-name" type="text" autocomplete="off">
+          </label>
+          <label class="ai-setting-field">
+            <span data-i18n="setting_ai_model">Model</span>
+            <input id="ai-model" type="text" autocomplete="off">
+          </label>
+          <label class="ai-setting-field full">
+            <span data-i18n="setting_ai_api_url">API URL</span>
+            <input id="ai-api-url" type="url" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="ai-setting-field full">
+            <span data-i18n="setting_ai_api_key">API Key</span>
+            <input id="ai-api-key" type="password" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="ai-setting-field full">
+            <span data-i18n="setting_ai_system_prompt">System Prompt</span>
+            <textarea id="ai-system-prompt" spellcheck="false"></textarea>
+          </label>
+        </div>
+      </div>
 
       <div class="setting-group storage-monitor-group">
         <strong data-i18n="setting_storage_usage">Storage Usage</strong>

@@ -38,16 +38,167 @@ const groupTagsPickerState = {
 let activeEditorTarget = { type: 'base', mode: 'positive' };
 
 let currentLang = DEFAULT_LANG;
+let aiTranslateConfigState = null;
 
 let hasReceivedInitialChars = false;
 
+const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
+const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 30000;
+const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
+const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
+  providerPreset: 'openai',
+  apiUrl: 'https://api.openai.com/v1/chat/completions',
+  apiKey: '',
+  model: 'gpt-4o-mini',
+  systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
+});
+
+function cloneDeep(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+// 将 tag 统一序列化为可安全存储/传输的纯对象。
+function normalizeTagObject(tag = {}) {
+  const value = String(tag.value || '').trim();
+  if (!value) return null;
+
+  const normalized = {
+    value,
+    disabled: !!tag.disabled
+  };
+
+  if (tag.isStart) normalized.isStart = true;
+
+  const dynWeight = Number(tag.dynWeight);
+  if (!Number.isNaN(dynWeight) && dynWeight !== 1) {
+    normalized.dynWeight = dynWeight;
+  }
+
+  if (typeof tag.aiOriginal === 'string' && tag.aiOriginal.trim()) {
+    normalized.aiOriginal = tag.aiOriginal.trim();
+  }
+
+  return normalized;
+}
+
+function serializeTagList(tags = []) {
+  return (tags || []).map(normalizeTagObject).filter(Boolean);
+}
+
+function getIncomingTagList(incomingTags, promptText = '') {
+  if (Array.isArray(incomingTags)) {
+    return serializeTagList(incomingTags);
+  }
+  return parsePromptToTags(promptText || '');
+}
+
+// 首次回读网页时，如果 prompt 文本没变且本地已有更完整的结构化 tag，
+// 就保留本地状态，避免刷新页面后把 AI 原文和单胶囊结构冲掉。
+function shouldApplyIncomingPromptState({ isFirstTime = false, incomingPrompt, incomingTags, currentPrompt = '', currentTags = [] }) {
+  if (incomingPrompt === undefined) return false;
+
+  // 刷新后的启动窗口期里，网页可能只恢复了一半字段。
+  // 对于本地已有内容的一侧，先忽略这轮空值，等后续重试把真正内容取回来。
+  const hasCurrentState = hasMeaningfulPromptState(currentPrompt, currentTags);
+  if (isFirstTime && pendingInitialPromptRetries > 0 && hasCurrentState && normalizePrompt(incomingPrompt || '') === '' && !Array.isArray(incomingTags)) {
+    return false;
+  }
+
+  const samePrompt = normalizePrompt(incomingPrompt || '') === normalizePrompt(currentPrompt || '');
+  if (!isFirstTime) {
+    return !samePrompt;
+  }
+
+  if (!samePrompt) return true;
+  if (Array.isArray(incomingTags)) return true;
+  return !Array.isArray(currentTags) || currentTags.length === 0;
+}
+
+function createAiProfileId() {
+  return `ai_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getDefaultAiProfileName(index = 1) {
+  return `OpenAI ${index}`;
+}
+
+function createDefaultAiProfile(index = 1) {
+  return {
+    id: createAiProfileId(),
+    name: getDefaultAiProfileName(index),
+    ...DEFAULT_AI_PROFILE_TEMPLATE
+  };
+}
+
+function normalizeAiProfile(profile = {}, index = 1) {
+  const fallback = createDefaultAiProfile(index);
+  return {
+    id: String(profile.id || fallback.id),
+    name: String(profile.name || fallback.name).trim() || fallback.name,
+    providerPreset: 'openai',
+    apiUrl: String(profile.apiUrl || fallback.apiUrl).trim() || fallback.apiUrl,
+    apiKey: String(profile.apiKey || '').trim(),
+    model: String(profile.model || fallback.model).trim() || fallback.model,
+    systemPrompt: typeof profile.systemPrompt === 'string' && profile.systemPrompt.trim()
+      ? profile.systemPrompt
+      : fallback.systemPrompt
+  };
+}
+
+function normalizeAiTranslateConfig(rawConfig) {
+  let profiles = [];
+
+  // 兼容旧的单配置结构，自动迁移为多配置结构。
+  if (rawConfig && Array.isArray(rawConfig.profiles)) {
+    profiles = rawConfig.profiles.map((profile, index) => normalizeAiProfile(profile, index + 1));
+  } else if (rawConfig && typeof rawConfig === 'object' && (rawConfig.apiUrl || rawConfig.apiKey || rawConfig.model || rawConfig.systemPrompt)) {
+    profiles = [normalizeAiProfile(rawConfig, 1)];
+  }
+
+  if (profiles.length === 0) {
+    profiles = [createDefaultAiProfile(1)];
+  }
+
+  const activeProfileId = profiles.some((profile) => profile.id === rawConfig?.activeProfileId)
+    ? rawConfig.activeProfileId
+    : profiles[0].id;
+
+  return {
+    activeProfileId,
+    profiles
+  };
+}
+
+function getActiveAiProfile(config = aiTranslateConfigState) {
+  const normalizedConfig = normalizeAiTranslateConfig(config);
+  return normalizedConfig.profiles.find((profile) => profile.id === normalizedConfig.activeProfileId) || normalizedConfig.profiles[0];
+}
+
+async function loadAiTranslateConfig() {
+  const stored = (await chrome.storage.local.get(AI_TRANSLATE_STORAGE_KEY))[AI_TRANSLATE_STORAGE_KEY];
+  const normalized = normalizeAiTranslateConfig(stored);
+  aiTranslateConfigState = normalized;
+
+  if (!stored || JSON.stringify(stored) !== JSON.stringify(normalized)) {
+    await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: normalized });
+  }
+
+  return normalized;
+}
+
+async function saveAiTranslateConfig(config) {
+  aiTranslateConfigState = normalizeAiTranslateConfig(config);
+  await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: aiTranslateConfigState });
+  return aiTranslateConfigState;
+}
+
 function computeStateFingerprint(posT, negT, charD) {
-  const posF = JSON.stringify((posT || []).map(t => [t.value, !!t.disabled]));
-  const negF = JSON.stringify((negT || []).map(t => [t.value, !!t.disabled]));
+  const posF = JSON.stringify(serializeTagList(posT || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']));
+  const negF = JSON.stringify(serializeTagList(negT || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']));
   const charsStr = JSON.stringify(getMeaningfulCharacterHistoryData(charD).map(c => ({
     p: c.posPrompt || '', n: c.negPrompt || '',
-    pd: (c.posTags || []).map(t => [t.value, !!t.disabled]),
-    nd: (c.negTags || []).map(t => [t.value, !!t.disabled])
+    pd: serializeTagList(c.posTags || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']),
+    nd: serializeTagList(c.negTags || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || ''])
   })));
   return posF + negF + charsStr;
 }
@@ -192,6 +343,362 @@ function showPopupToast(type, message) {
     popupToastTimer = null;
     dismissPopupToast();
   }, meta.duration);
+}
+
+function buildPromptSyncPayload() {
+  return {
+    positive: tagsToString(positiveTags),
+    negative: tagsToString(negativeTags),
+    positiveTags: serializeTagList(positiveTags),
+    negativeTags: serializeTagList(negativeTags)
+  };
+}
+
+function buildCharacterPromptPayload() {
+  return (characterPromptsData || []).map((char) => ({
+    positive: char.posPrompt || tagsToString(char.posTags || []),
+    negative: char.negPrompt || tagsToString(char.negTags || []),
+    positiveTags: serializeTagList(char.posTags || []),
+    negativeTags: serializeTagList(char.negTags || []),
+    gender: char.gender || 'other',
+    activeTab: char.activeTab || 'positive'
+  }));
+}
+
+function setAiTranslateButtonLoading(button, isLoading) {
+  if (!button) return;
+  button.disabled = !!isLoading;
+  button.classList.toggle('is-loading', !!isLoading);
+}
+
+function getOriginPatternFromApiUrl(apiUrl) {
+  const parsed = new URL(apiUrl);
+  return `${parsed.origin}/*`;
+}
+
+function containsOriginPermission(origins) {
+  return new Promise((resolve) => {
+    chrome.permissions.contains({ origins }, (granted) => resolve(!!granted));
+  });
+}
+
+function requestOriginPermission(origins) {
+  return new Promise((resolve) => {
+    chrome.permissions.request({ origins }, (granted) => resolve(!!granted));
+  });
+}
+
+async function ensureAiApiPermission(apiUrl) {
+  const originPattern = getOriginPatternFromApiUrl(apiUrl);
+  if (await containsOriginPermission([originPattern])) {
+    return true;
+  }
+  return requestOriginPermission([originPattern]);
+}
+
+function extractTranslatedText(responseJson) {
+  const messageContent = responseJson?.choices?.[0]?.message?.content;
+  if (typeof messageContent === 'string') {
+    return messageContent.trim();
+  }
+  if (Array.isArray(messageContent)) {
+    return messageContent
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+async function aiTranslateText(sourceText, profile) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
+
+  try {
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    if (profile.apiKey) {
+      headers.Authorization = `Bearer ${profile.apiKey}`;
+    }
+
+    const response = await fetch(profile.apiUrl, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: profile.model,
+        messages: [
+          { role: 'system', content: profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT },
+          { role: 'user', content: sourceText }
+        ],
+        temperature: 0.3
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(errorText || `HTTP ${response.status}`);
+    }
+
+    const responseJson = await response.json();
+    const translatedText = extractTranslatedText(responseJson).replace(/\s+/g, ' ').trim();
+    if (!translatedText) {
+      throw new Error('EMPTY_TRANSLATION');
+    }
+
+    return translatedText;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function renderAiTranslateProfileOptions() {
+  const profileSelect = document.getElementById('ai-profile-select');
+  const deleteButton = document.getElementById('btn-ai-profile-delete');
+  if (!profileSelect || !aiTranslateConfigState) return;
+
+  profileSelect.innerHTML = '';
+  aiTranslateConfigState.profiles.forEach((profile, index) => {
+    const option = document.createElement('option');
+    option.value = profile.id;
+    option.textContent = profile.name || getDefaultAiProfileName(index + 1);
+    profileSelect.appendChild(option);
+  });
+  profileSelect.value = aiTranslateConfigState.activeProfileId;
+
+  if (deleteButton) {
+    deleteButton.disabled = aiTranslateConfigState.profiles.length <= 1;
+  }
+}
+
+function populateAiTranslateProfileForm() {
+  const profile = getActiveAiProfile();
+  if (!profile) return;
+
+  const profileNameInput = document.getElementById('ai-profile-name');
+  const apiUrlInput = document.getElementById('ai-api-url');
+  const apiKeyInput = document.getElementById('ai-api-key');
+  const modelInput = document.getElementById('ai-model');
+  const systemPromptInput = document.getElementById('ai-system-prompt');
+
+  if (profileNameInput) profileNameInput.value = profile.name || '';
+  if (apiUrlInput) apiUrlInput.value = profile.apiUrl || '';
+  if (apiKeyInput) apiKeyInput.value = profile.apiKey || '';
+  if (modelInput) modelInput.value = profile.model || '';
+  if (systemPromptInput) systemPromptInput.value = profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT;
+
+  renderAiTranslateProfileOptions();
+}
+
+async function persistAiTranslateProfileForm() {
+  if (!aiTranslateConfigState) {
+    await loadAiTranslateConfig();
+  }
+
+  // 翻译前先把设置面板里当前正在编辑的值落盘，避免用户刚修改 API 配置却未触发 blur。
+
+  const profile = getActiveAiProfile();
+  if (!profile) return;
+
+  const profileNameInput = document.getElementById('ai-profile-name');
+  const apiUrlInput = document.getElementById('ai-api-url');
+  const apiKeyInput = document.getElementById('ai-api-key');
+  const modelInput = document.getElementById('ai-model');
+  const systemPromptInput = document.getElementById('ai-system-prompt');
+
+  const nextConfig = cloneDeep(aiTranslateConfigState);
+  const profileIndex = nextConfig.profiles.findIndex((item) => item.id === profile.id);
+  if (profileIndex === -1) return;
+
+  nextConfig.profiles[profileIndex] = normalizeAiProfile({
+    ...nextConfig.profiles[profileIndex],
+    name: profileNameInput?.value,
+    apiUrl: apiUrlInput?.value,
+    apiKey: apiKeyInput?.value,
+    model: modelInput?.value,
+    systemPrompt: systemPromptInput?.value
+  }, profileIndex + 1);
+
+  await saveAiTranslateConfig(nextConfig);
+  renderAiTranslateProfileOptions();
+}
+
+function formatAiTranslateError(error) {
+  if (error?.name === 'AbortError') {
+    return getLocalizedText('toast_ai_translate_timeout', 'Translation request timed out.');
+  }
+
+  const message = String(error?.message || '').trim();
+  if (message === 'EMPTY_TRANSLATION') {
+    return getLocalizedText('toast_ai_translate_empty', 'The API returned an empty translation.');
+  }
+
+  if (!message) {
+    return getLocalizedText('toast_ai_translate_failed', 'Translation failed.');
+  }
+
+  return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
+}
+
+async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer }) {
+  if (!tagEditor) return;
+
+  const sourceText = String(inputEl?.value || '').trim();
+  if (!sourceText) {
+    showPopupToast('warning', getLocalizedText('toast_ai_missing_input', 'Enter text before translating.'));
+    return;
+  }
+
+  if (!aiTranslateConfigState) {
+    await loadAiTranslateConfig();
+  }
+
+  // 翻译前先把设置表单中的当前输入落盘，避免请求仍使用旧配置。
+  await persistAiTranslateProfileForm();
+
+  const profile = getActiveAiProfile();
+  if (!profile) {
+    showPopupToast('error', getLocalizedText('toast_ai_missing_profile', 'No AI profile is available.'));
+    return;
+  }
+
+  if (!profile.apiUrl) {
+    showPopupToast('warning', getLocalizedText('toast_ai_missing_api_url', 'Please configure an API URL first.'));
+    return;
+  }
+
+  if (!profile.model) {
+    showPopupToast('warning', getLocalizedText('toast_ai_missing_model', 'Please configure a model name first.'));
+    return;
+  }
+
+  try {
+    new URL(profile.apiUrl);
+  } catch (error) {
+    showPopupToast('error', getLocalizedText('toast_ai_invalid_api_url', 'The API URL is invalid.'));
+    return;
+  }
+
+  const granted = await ensureAiApiPermission(profile.apiUrl);
+  if (!granted) {
+    showPopupToast('warning', getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.'));
+    return;
+  }
+
+  setAiTranslateButtonLoading(buttonEl, true);
+  try {
+    const translatedText = await aiTranslateText(sourceText, profile);
+    tagEditor.addTag({
+      value: translatedText,
+      aiOriginal: sourceText
+    });
+
+    if (inputEl) {
+      inputEl.value = '';
+      inputEl.focus();
+    }
+
+    if (scrollContainer) {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    }
+  } catch (error) {
+    console.error('[AI Translate] 翻译失败:', error);
+    showPopupToast('error', formatAiTranslateError(error));
+  } finally {
+    setAiTranslateButtonLoading(buttonEl, false);
+  }
+}
+
+function bindAiTranslateSettingsUI() {
+  const settingsRoot = document.getElementById('ai-translate-settings');
+  if (!settingsRoot || settingsRoot.dataset.bound === 'true') return;
+  settingsRoot.dataset.bound = 'true';
+
+  const profileSelect = document.getElementById('ai-profile-select');
+  const newProfileButton = document.getElementById('btn-ai-profile-new');
+  const deleteProfileButton = document.getElementById('btn-ai-profile-delete');
+  const watchedInputs = [
+    document.getElementById('ai-profile-name'),
+    document.getElementById('ai-api-url'),
+    document.getElementById('ai-api-key'),
+    document.getElementById('ai-model'),
+    document.getElementById('ai-system-prompt')
+  ].filter(Boolean);
+
+  let saveTimer = null;
+  const scheduleSave = () => {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      persistAiTranslateProfileForm().catch((error) => {
+        console.error('[AI Translate] 保存配置失败:', error);
+      });
+    }, 250);
+  };
+
+  const flushPendingSave = async () => {
+    if (saveTimer !== null) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    await persistAiTranslateProfileForm();
+  };
+
+  profileSelect?.addEventListener('change', async () => {
+    // 先保存当前 profile 的编辑值，再切换到新的 profile。
+    await flushPendingSave();
+    const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
+    nextConfig.activeProfileId = profileSelect.value;
+    await saveAiTranslateConfig(nextConfig);
+    populateAiTranslateProfileForm();
+  });
+
+  newProfileButton?.addEventListener('click', async () => {
+    await flushPendingSave();
+    const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
+    const newProfile = createDefaultAiProfile(nextConfig.profiles.length + 1);
+    nextConfig.profiles.push(newProfile);
+    nextConfig.activeProfileId = newProfile.id;
+    await saveAiTranslateConfig(nextConfig);
+    populateAiTranslateProfileForm();
+    showPopupToast('success', getLocalizedText('toast_ai_profile_created', 'AI profile created.'));
+  });
+
+  deleteProfileButton?.addEventListener('click', async () => {
+    await flushPendingSave();
+    if (!aiTranslateConfigState || aiTranslateConfigState.profiles.length <= 1) {
+      showPopupToast('warning', getLocalizedText('toast_ai_profile_delete_last', 'Keep at least one AI profile.'));
+      return;
+    }
+
+    const nextConfig = cloneDeep(aiTranslateConfigState);
+    const profileIndex = nextConfig.profiles.findIndex((profile) => profile.id === nextConfig.activeProfileId);
+    if (profileIndex === -1) return;
+
+    nextConfig.profiles.splice(profileIndex, 1);
+    nextConfig.activeProfileId = nextConfig.profiles[Math.max(0, profileIndex - 1)].id;
+    await saveAiTranslateConfig(nextConfig);
+    populateAiTranslateProfileForm();
+    showPopupToast('success', getLocalizedText('toast_ai_profile_deleted', 'AI profile deleted.'));
+  });
+
+  watchedInputs.forEach((input) => {
+    input.addEventListener('input', scheduleSave);
+    input.addEventListener('change', scheduleSave);
+  });
+
+  loadAiTranslateConfig()
+    .then(() => {
+      populateAiTranslateProfileForm();
+    })
+    .catch((error) => {
+      console.error('[AI Translate] 加载配置失败:', error);
+    });
 }
 
 function applyGroupMapsToEditors(colorMap = {}, translationMap = {}, shouldRender = true) {
@@ -758,12 +1265,7 @@ function syncCharactersToPage(source) {
   if (chrome.tabs) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        const payload = characterPromptsData.map(char => ({
-            positive: char.posPrompt,
-            negative: char.negPrompt,
-            gender: char.gender,
-            activeTab: char.activeTab
-        }));
+        const payload = buildCharacterPromptPayload();
 
         lastSentCharacterPrompts = payload;
         console.log('[NAI-Prompt-All-In-One] Syncing Characters to Page =>', payload);
@@ -803,6 +1305,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const btnWildcard = clone.querySelector('.char-btn-wildcard');
   const btnSeqWildcard = clone.querySelector('.char-btn-seq-wildcard');
   const btnRandom = clone.querySelector('.char-btn-random');
+  const btnAiTranslate = clone.querySelector('.char-btn-ai-translate');
   const deleteBtn = clone.querySelector('.char-delete');
 
   // Apply translations directly to the new clone components
@@ -822,6 +1325,11 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   if(btnRandom && dict[getKey('btn_quick_random')]) {
       btnRandom.title = dict.btn_quick_random;
       btnRandom.textContent = dict[getKey('btn_quick_random')];
+  }
+  if (btnAiTranslate) {
+      const aiTranslateKey = getKey('btn_ai_translate');
+      btnAiTranslate.title = dict.btn_ai_translate || getLocalizedText('btn_ai_translate', 'AI Translate');
+      btnAiTranslate.textContent = dict[aiTranslateKey] || getLocalizedText(aiTranslateKey, 'AI');
   }
 
   // Initialize data if not fully set
@@ -1007,6 +1515,14 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     input.focus();
   });
 
+  btnAiTranslate?.addEventListener('click', () => {
+    handleAiTranslateAction({
+      inputEl: input,
+      buttonEl: btnAiTranslate,
+      tagEditor: charEditor
+    });
+  });
+
   container.appendChild(block);
 }
 
@@ -1031,6 +1547,7 @@ function initUI() {
   autocomplete = new Autocomplete();
   autocomplete.load();
   initGroupTagsPickerModal();
+  bindAiTranslateSettingsUI();
 
   // Resolution controls
   const resWidth = document.getElementById('res-width');
@@ -1369,6 +1886,7 @@ function initUI() {
   const btnQuickWildcard = document.getElementById('btn-quick-wildcard');
   const btnQuickSeqWildcard = document.getElementById('btn-quick-seq-wildcard');
   const btnQuickRandom = document.getElementById('btn-quick-random');
+  const btnAiTranslate = document.getElementById('btn-ai-translate');
 
   if (btnQuickWildcard) {
     btnQuickWildcard.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1402,6 +1920,15 @@ function initUI() {
       }
     });
   }
+
+  btnAiTranslate?.addEventListener('click', () => {
+    handleAiTranslateAction({
+      inputEl: input,
+      buttonEl: btnAiTranslate,
+      tagEditor: editor,
+      scrollContainer: container
+    });
+  });
 
   // Attach Autocomplete to Input
   autocomplete.attach(input, (val) => {
@@ -1469,19 +1996,22 @@ function initUI() {
   const applyTranslations = (lang) => {
     currentLang = lang;
     const dict = getI18nDict(lang, 'popup');
+    const fallbackDict = getI18nDict(DEFAULT_LANG, 'popup');
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const baseKey = el.getAttribute('data-i18n');
-      const key = (isShortMode && dict[baseKey + '_short']) ? baseKey + '_short' : baseKey;
+      const shortKey = `${baseKey}_short`;
+      const key = (isShortMode && (dict[shortKey] || fallbackDict[shortKey])) ? shortKey : baseKey;
+      const text = dict[key] || fallbackDict[key];
       
-      if (dict[key]) {
+      if (text) {
         // If element has children (like Settings title with close button), preserve them
         if (el.children.length === 0) {
-          el.textContent = dict[key];
+          el.textContent = text;
         } else {
           // Find text node and replace it
           for (let node of el.childNodes) {
             if (node.nodeType === 3) {
-              node.textContent = dict[key] + ' ';
+              node.textContent = text + ' ';
               break;
             }
           }
@@ -1490,12 +2020,14 @@ function initUI() {
     });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
       const key = el.getAttribute('data-i18n-placeholder');
-      if (dict[key]) el.placeholder = dict[key];
+      const text = dict[key] || fallbackDict[key];
+      if (text) el.placeholder = text;
     });
 
     document.querySelectorAll('[data-i18n-title]').forEach(el => {
       const key = el.getAttribute('data-i18n-title');
-      if (dict[key]) el.title = dict[key];
+      const text = dict[key] || fallbackDict[key];
+      if (text) el.title = text;
     });
 
     if (editor) {
@@ -1520,12 +2052,11 @@ function initUI() {
       if (btn) btn.classList.toggle('active', id === `btn-${lang}`);
     });
 
-    const fallback = getI18nDict(DEFAULT_LANG, 'popup');
     const acI18n = {
-      fixedShort: dict.ac_mode_fixed_short || fallback.ac_mode_fixed_short || 'Fixed',
-      onImageShort: dict.ac_mode_on_image_short || fallback.ac_mode_on_image_short || 'On Img',
-      fixedTitle: dict.ac_mode_fixed_title || fallback.ac_mode_fixed_title || 'Fixed Interval',
-      onImageTitle: dict.ac_mode_on_image_title || fallback.ac_mode_on_image_title || 'On Image'
+      fixedShort: dict.ac_mode_fixed_short || fallbackDict.ac_mode_fixed_short || 'Fixed',
+      onImageShort: dict.ac_mode_on_image_short || fallbackDict.ac_mode_on_image_short || 'On Img',
+      fixedTitle: dict.ac_mode_fixed_title || fallbackDict.ac_mode_fixed_title || 'Fixed Interval',
+      onImageTitle: dict.ac_mode_on_image_title || fallbackDict.ac_mode_on_image_title || 'On Image'
     };
     chrome.storage.local.set({ autoClickerI18n: acI18n });
 
@@ -1926,6 +2457,7 @@ function parsePromptToTags(promptText) {
 let lastSentPositive = null;
 let lastSentNegative = null;
 let lastSentCharacterPrompts = [];
+let pendingInitialPromptRetries = 0;
 
 /* Communication */
 
@@ -1934,6 +2466,29 @@ function normalizePrompt(str) {
   // Also remove commas to handle "a, b" vs "a,b"
   if (!str) return '';
   return str.replace(/[\s\r\n,]/g, '');
+}
+
+function hasMeaningfulPromptState(promptText = '', tags = []) {
+  return normalizePrompt(promptText) !== '' || (Array.isArray(tags) && tags.length > 0);
+}
+
+// 页面刷新时，NovelAI 可能会先回传一轮空 prompt，再异步恢复真正内容。
+// 如果本地已经从历史里恢复了完整状态，这一轮空值不应立刻覆盖并写入新历史。
+function shouldDeferInitialEmptyPromptSync({ positive, negative, positiveTags: incomingPositiveTags, negativeTags: incomingNegativeTags, currentPositive, currentNegative }) {
+  if (hasReceivedInitialData) return false;
+  if (pendingInitialPromptRetries <= 0) return false;
+
+  const hasIncomingStructuredTags =
+    (Array.isArray(incomingPositiveTags) && incomingPositiveTags.length > 0) ||
+    (Array.isArray(incomingNegativeTags) && incomingNegativeTags.length > 0);
+  if (hasIncomingStructuredTags) return false;
+
+  const hasLocalState =
+    hasMeaningfulPromptState(currentPositive, positiveTags) ||
+    hasMeaningfulPromptState(currentNegative, negativeTags);
+  if (!hasLocalState) return false;
+
+  return normalizePrompt(positive || '') === '' && normalizePrompt(negative || '') === '';
 }
 
 function mergeTagsPreservingDisabled(oldTags, newTags) {
@@ -1984,15 +2539,29 @@ function initCommunication() {
     }
 
     if (msg.type === 'RETURN_PROMPT') {
-      const { positive, negative } = msg.data;
+      const { positive, negative, positiveTags: incomingPositiveTags, negativeTags: incomingNegativeTags } = msg.data;
+      const currentPosStr = tagsToString(positiveTags);
+      const currentNegStr = tagsToString(negativeTags);
 
       // 如果尚未接到网页真正的框内文本数据（只传回undefined），不做任何处理直接等下一发
       if (positive === undefined && negative === undefined && !hasReceivedInitialData) {
           return;
       }
 
+      if (shouldDeferInitialEmptyPromptSync({
+        positive,
+        negative,
+        positiveTags: incomingPositiveTags,
+        negativeTags: incomingNegativeTags,
+        currentPositive: currentPosStr,
+        currentNegative: currentNegStr
+      })) {
+          return;
+      }
+
       const isFirstTime = !hasReceivedInitialData;
       hasReceivedInitialData = true;
+      pendingInitialPromptRetries = 0;
 
       // Skip echo: if this matches what we just sent, ignore
       if (!isFirstTime && normalizePrompt(positive) === normalizePrompt(lastSentPositive) &&
@@ -2000,27 +2569,43 @@ function initCommunication() {
         return;
       }
 
-      const currentPosStr = tagsToString(positiveTags);
-      const currentNegStr = tagsToString(negativeTags);
+      let shouldUpdatePos = shouldApplyIncomingPromptState({
+        isFirstTime,
+        incomingPrompt: positive,
+        incomingTags: incomingPositiveTags,
+        currentPrompt: currentPosStr,
+        currentTags: positiveTags
+      });
+      let shouldUpdateNeg = shouldApplyIncomingPromptState({
+        isFirstTime,
+        incomingPrompt: negative,
+        incomingTags: incomingNegativeTags,
+        currentPrompt: currentNegStr,
+        currentTags: negativeTags
+      });
 
-      let shouldUpdatePos = positive !== undefined && (isFirstTime || normalizePrompt(positive) !== normalizePrompt(currentPosStr));
-      let shouldUpdateNeg = negative !== undefined && (isFirstTime || normalizePrompt(negative) !== normalizePrompt(currentNegStr));
-
-      if (!shouldUpdatePos && !shouldUpdateNeg && !isFirstTime) {
+      if (!shouldUpdatePos && !shouldUpdateNeg) {
+         lastSentPositive = currentPosStr;
+         lastSentNegative = currentNegStr;
+         syncActiveTagsToPanel();
          return;
       }
 
       if (shouldUpdatePos) {
           rawPositive = positive || '';
-          const parsedPosTags = parsePromptToTags(rawPositive);
+          const parsedPosTags = getIncomingTagList(incomingPositiveTags, rawPositive);
           // 这里通过 mergeTagsPreservingDisabled() 能巧妙地将新入的数据与我们在启动期缝合的“完整带disabled态字典”比对！从而将 disabled 的 Tag 存留！
-          positiveTags = mergeTagsPreservingDisabled(positiveTags, parsedPosTags);
+          positiveTags = Array.isArray(incomingPositiveTags)
+            ? parsedPosTags
+            : mergeTagsPreservingDisabled(positiveTags, parsedPosTags);
       }
 
       if (shouldUpdateNeg) {
           rawNegative = negative || '';
-          const parsedNegTags = parsePromptToTags(rawNegative);
-          negativeTags = mergeTagsPreservingDisabled(negativeTags, parsedNegTags);
+          const parsedNegTags = getIncomingTagList(incomingNegativeTags, rawNegative);
+          negativeTags = Array.isArray(incomingNegativeTags)
+            ? parsedNegTags
+            : mergeTagsPreservingDisabled(negativeTags, parsedNegTags);
       }
 
       if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
@@ -2028,6 +2613,9 @@ function initCommunication() {
       
       // 不论是初始加载还是后续同步，更新 tags 后推送给 GroupTags
       syncActiveTagsToPanel();
+      lastSentPositive = tagsToString(positiveTags);
+      lastSentNegative = tagsToString(negativeTags);
+      recordHistory('webpage');
       
     } else if (msg.type === 'RETURN_CHARACTER_PROMPTS') {
       const charPrompts = msg.data || [];
@@ -2045,7 +2633,8 @@ function initCommunication() {
           }
       } else if (isFirstTime) {
           uiNeedsRebuild = true;
-          if (charPrompts.length === 0) {
+          // 首次空回读且本地已有历史态时，先保留本地角色数据，等待后续重试回读。
+          if (charPrompts.length === 0 && characterPromptsData.length === 0) {
               characterPromptsData = [];
               charEditors = [];
           }
@@ -2056,16 +2645,34 @@ function initCommunication() {
       charPrompts.forEach((c, i) => {
           const charObj = characterPromptsData[i] || { posTags: [], negTags: [], posPrompt: '', negPrompt: '', gender: 'other' };
           
-          const currentPosStr = normalizePrompt(charObj.posPrompt || '');
-          const currentNegStr = normalizePrompt(charObj.negPrompt || '');
+          const currentPosPrompt = charObj.posPrompt || tagsToString(charObj.posTags || []);
+          const currentNegPrompt = charObj.negPrompt || tagsToString(charObj.negTags || []);
+          const currentPosStr = normalizePrompt(currentPosPrompt);
+          const currentNegStr = normalizePrompt(currentNegPrompt);
           // If the webpage gives us undefined, it means that tab wasn't active. Ignore those in comparison.
           const incomingPosStr = c.positive !== undefined ? normalizePrompt(c.positive) : currentPosStr;
           const incomingNegStr = c.negative !== undefined ? normalizePrompt(c.negative) : currentNegStr;
 
-          let shouldUpdatePos = c.positive !== undefined && (isFirstTime || incomingPosStr !== currentPosStr);
-          let shouldUpdateNeg = c.negative !== undefined && (isFirstTime || incomingNegStr !== currentNegStr);
+          let shouldUpdatePos = shouldApplyIncomingPromptState({
+            isFirstTime,
+            incomingPrompt: c.positive,
+            incomingTags: c.positiveTags,
+            currentPrompt: currentPosPrompt,
+            currentTags: charObj.posTags || []
+          });
+          let shouldUpdateNeg = shouldApplyIncomingPromptState({
+            isFirstTime,
+            incomingPrompt: c.negative,
+            incomingTags: c.negativeTags,
+            currentPrompt: currentNegPrompt,
+            currentTags: charObj.negTags || []
+          });
+          const nextGender = c.gender !== undefined ? c.gender : (charObj.gender || 'other');
+          const nextActiveTab = c.activeTab !== undefined ? c.activeTab : (charObj.activeTab || 'positive');
+          const shouldUpdateMeta = nextGender !== (charObj.gender || 'other') || nextActiveTab !== (charObj.activeTab || 'positive');
+          const hasExistingCharacter = i < characterPromptsData.length;
 
-          if (!shouldUpdatePos && !shouldUpdateNeg && i < characterPromptsData.length && !isFirstTime) {
+          if (!shouldUpdatePos && !shouldUpdateNeg && !shouldUpdateMeta && hasExistingCharacter) {
               return; // Skip if identical (Debounce echo naturally)
           }
 
@@ -2075,21 +2682,25 @@ function initCommunication() {
           let newNegTags = charObj.negTags || [];
           
           if (shouldUpdatePos || charObj.posPrompt === undefined) {
-              const parsedPosTags = parsePromptToTags(c.positive || '');
-              newPosTags = mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags);
+              const parsedPosTags = getIncomingTagList(c.positiveTags, c.positive || '');
+              newPosTags = Array.isArray(c.positiveTags)
+                ? parsedPosTags
+                : mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags);
               charObj.posPrompt = c.positive || '';
               charObj.posTags = newPosTags;
           }
 
           if (shouldUpdateNeg || charObj.negPrompt === undefined) {
-              const parsedNegTags = parsePromptToTags(c.negative || '');
-              newNegTags = mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags);
+              const parsedNegTags = getIncomingTagList(c.negativeTags, c.negative || '');
+              newNegTags = Array.isArray(c.negativeTags)
+                ? parsedNegTags
+                : mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags);
               charObj.negPrompt = c.negative || '';
               charObj.negTags = newNegTags;
           }
 
-          charObj.gender = c.gender !== undefined ? c.gender : (charObj.gender || 'other');
-          charObj.activeTab = c.activeTab !== undefined ? c.activeTab : (charObj.activeTab || 'pos');
+          charObj.gender = nextGender;
+          charObj.activeTab = nextActiveTab;
           
           // Apply changes to array
           characterPromptsData[i] = charObj;
@@ -2113,15 +2724,6 @@ function initCommunication() {
       // 网页端角色提示词有实质变更，记录历史快照
       if (changesApplied) recordHistory('webpage');
     } // End of RETURN_CHARACTER_PROMPTS
-
-    // The following block runs for RETURN_PROMPT
-    if (msg.type === 'RETURN_PROMPT') {
-      lastSentPositive = tagsToString(positiveTags);
-      lastSentNegative = tagsToString(negativeTags);
-
-      // 网页端主提示词有实质变更，记录历史快照
-      recordHistory('webpage');
-    }
 
     if (msg.type === '__CLEAN_NUMERIC_PREFIXES__') {
       console.log('[Popup] Received cleanup request for numeric prefixes');
@@ -2182,11 +2784,14 @@ function initCommunication() {
 let hasReceivedInitialData = false;
 
 function requestPromptWithRetry(retries, delayMs) {
+  pendingInitialPromptRetries = retries;
   requestPrompt();
   if (retries > 0) {
     setTimeout(() => {
       if (!hasReceivedInitialData) {
         requestPromptWithRetry(retries - 1, delayMs);
+      } else {
+        pendingInitialPromptRetries = 0;
       }
     }, delayMs);
   }
@@ -2218,8 +2823,9 @@ function requestPrompt() {
 
 function syncToPage(source) {
   if (source) _syncSource = source;
-  const posStr = tagsToString(positiveTags);
-  const negStr = tagsToString(negativeTags);
+  const promptPayload = buildPromptSyncPayload();
+  const posStr = promptPayload.positive;
+  const negStr = promptPayload.negative;
 
   // Update local echo logic
   lastSentPositive = posStr;
@@ -2229,10 +2835,7 @@ function syncToPage(source) {
     if (tabs[0]) {
       chrome.tabs.sendMessage(tabs[0].id, {
         type: 'SET_PROMPT',
-        data: {
-          positive: posStr,
-          negative: negStr
-        }
+        data: promptPayload
       });
     }
   });
@@ -2291,8 +2894,9 @@ async function _commitSnapshot() {
   _popupDebounceTimer = null;
   _webpageDebounceTimer = null;
 
-  const posStr = tagsToString(positiveTags);
-  const negStr = tagsToString(negativeTags);
+  const promptPayload = buildPromptSyncPayload();
+  const posStr = promptPayload.positive;
+  const negStr = promptPayload.negative;
   const meaningfulCharacters = getMeaningfulCharacterHistoryData(characterPromptsData);
   const hasMeaningfulState = positiveTags.length > 0 || negativeTags.length > 0 || meaningfulCharacters.length > 0;
 
@@ -2313,13 +2917,13 @@ async function _commitSnapshot() {
     positive: posStr,
     negative: negStr,
     // [v2] 保存原始 tag 对象数组，用于完整还原禁用状态、换行、复合组等
-    positiveTags: positiveTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
-    negativeTags: negativeTags.map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+    positiveTags: serializeTagList(positiveTags),
+    negativeTags: serializeTagList(negativeTags),
     characters: meaningfulCharacters.map(c => ({
       posPrompt: c.posPrompt || '',
       negPrompt: c.negPrompt || '',
-      posTags: (c.posTags || []).map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
-      negTags: (c.negTags || []).map(t => ({ value: t.value, disabled: !!t.disabled, isStart: !!t.isStart, dynWeight: t.dynWeight || 1 })),
+      posTags: serializeTagList(c.posTags || []),
+      negTags: serializeTagList(c.negTags || []),
       gender: c.gender || 'other',
       activeTab: c.activeTab || 'positive'
     }))
@@ -2374,8 +2978,10 @@ async function restoreFromSnapshot(snapshot) {
         rebuildCharacterPromptsUI();
       }
     }
-    const posStr = tagsToString(positiveTags);
-    const negStr = tagsToString(negativeTags);
+    const promptPayload = buildPromptSyncPayload();
+    const charPayload = buildCharacterPromptPayload();
+    const posStr = promptPayload.positive;
+    const negStr = promptPayload.negative;
     lastSentPositive = posStr;
     lastSentNegative = negStr;
     clearTimeout(_popupDebounceTimer);
@@ -2385,9 +2991,8 @@ async function restoreFromSnapshot(snapshot) {
     await recordHistory('restore');
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_PROMPT', data: { positive: posStr, negative: negStr } });
-        const payload = characterPromptsData.map(c => ({ positive: c.posPrompt, negative: c.negPrompt, gender: c.gender, activeTab: c.activeTab }));
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_CHARACTER_PROMPTS', data: payload });
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_PROMPT', data: promptPayload });
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_CHARACTER_PROMPTS', data: charPayload });
       }
     });
     return;
@@ -2419,8 +3024,10 @@ async function restoreFromSnapshot(snapshot) {
   rebuildCharacterPromptsUI();
 
   // 同步到页面
-  const posStr = tagsToString(positiveTags);
-  const negStr = tagsToString(negativeTags);
+  const promptPayload = buildPromptSyncPayload();
+  const charPayload = buildCharacterPromptPayload();
+  const posStr = promptPayload.positive;
+  const negStr = promptPayload.negative;
   lastSentPositive = posStr;
   lastSentNegative = negStr;
 
@@ -2437,18 +3044,12 @@ async function restoreFromSnapshot(snapshot) {
     if (tabs[0]) {
       chrome.tabs.sendMessage(tabs[0].id, {
         type: 'SET_PROMPT',
-        data: { positive: posStr, negative: negStr }
+        data: promptPayload
       });
       // 同时恢复角色
-      const payload = characterPromptsData.map(c => ({
-        positive: c.posPrompt,
-        negative: c.negPrompt,
-        gender: c.gender,
-        activeTab: c.activeTab
-      }));
       chrome.tabs.sendMessage(tabs[0].id, {
         type: 'SET_CHARACTER_PROMPTS',
-        data: payload
+        data: charPayload
       });
     }
   });
@@ -2463,8 +3064,10 @@ function cloneSnippetTags(tags, promptText) {
 }
 
 async function broadcastPromptStateAndRecord(source = 'restore') {
-  const posStr = tagsToString(positiveTags);
-  const negStr = tagsToString(negativeTags);
+  const promptPayload = buildPromptSyncPayload();
+  const charPayload = buildCharacterPromptPayload();
+  const posStr = promptPayload.positive;
+  const negStr = promptPayload.negative;
   lastSentPositive = posStr;
   lastSentNegative = negStr;
 
@@ -2480,19 +3083,12 @@ async function broadcastPromptStateAndRecord(source = 'restore') {
 
     chrome.tabs.sendMessage(tabs[0].id, {
       type: 'SET_PROMPT',
-      data: { positive: posStr, negative: negStr }
+      data: promptPayload
     });
-
-    const payload = characterPromptsData.map(c => ({
-      positive: c.posPrompt,
-      negative: c.negPrompt,
-      gender: c.gender,
-      activeTab: c.activeTab
-    }));
 
     chrome.tabs.sendMessage(tabs[0].id, {
       type: 'SET_CHARACTER_PROMPTS',
-      data: payload
+      data: charPayload
     });
   });
 }
