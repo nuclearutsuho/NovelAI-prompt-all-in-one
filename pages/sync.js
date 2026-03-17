@@ -1,4 +1,6 @@
 // ============================================================
+import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
+
 // Wildcard Sync Manager - sync.js
 // Features: Bidirectional Sync, Snapshot Backup, CodeMirror Editor, Drag-and-Drop Organization
 // ============================================================
@@ -25,6 +27,27 @@ let draggedItem = null;       // item being dragged
 let snapshotSettings = { maxSnapshots: 20, confirmDelete: true };
 let selectedSnapshots = new Set();
 let boundDirHandle = null;
+let currentLang = DEFAULT_LANG;
+let currentTopUiState = 'unbound';
+
+function getSyncDict() {
+    return getI18nDict(currentLang, 'sync');
+}
+
+function t(key, fallback = '') {
+    return getI18nText(currentLang, 'sync', key, fallback);
+}
+
+function tf(key, values = {}, fallback = '') {
+    return t(key, fallback).replace(/\{(\w+)\}/g, (_, token) => values[token] ?? '');
+}
+
+function resolveDefaultLang() {
+    const browserLang = (navigator.language || navigator.userLanguage || DEFAULT_LANG).toLowerCase();
+    if (browserLang.startsWith('zh')) return 'zh';
+    if (browserLang.startsWith('ja')) return 'jp';
+    return DEFAULT_LANG;
+}
 
 // ============================
 // Section 2: DOM References
@@ -78,6 +101,55 @@ const diffModal = document.getElementById('diffModal');
 const diffSummary = document.getElementById('diffSummary');
 const diffContainer = document.getElementById('diffContainer');
 const closeDiffBtn = document.getElementById('closeDiffBtn');
+
+function updateBottomToggleText() {
+    toggleBottom.textContent = bottomExpanded ? t('toggle_bottom_collapse') : t('toggle_bottom_expand');
+}
+
+function applyStaticTranslations(lang = currentLang) {
+    currentLang = lang;
+    const dict = getSyncDict();
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (dict[key]) el.textContent = dict[key];
+    });
+
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (dict[key]) el.placeholder = dict[key];
+    });
+
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        if (dict[key]) el.title = dict[key];
+    });
+
+    updateBottomToggleText();
+
+    if (typeof updateBatchButtons === 'function') updateBatchButtons();
+    if (typeof updateTopUI === 'function') updateTopUI(boundDirHandle?.name || null, currentTopUiState);
+    if (editorView) updateLineInfo(editorView.state);
+    if (typeof updateDictStatus === 'function') updateDictStatus();
+}
+
+async function initI18n() {
+    let lang = resolveDefaultLang();
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        const data = await new Promise(resolve => chrome.storage.local.get('language', resolve));
+        if (data.language) lang = data.language;
+    }
+
+    applyStaticTranslations(lang);
+
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area === 'local' && changes.language) {
+                applyStaticTranslations(changes.language.newValue || resolveDefaultLang());
+            }
+        });
+    }
+}
 
 // ============================
 // Section 3: Utility Functions
@@ -251,7 +323,7 @@ async function createSnapshot(label, type = 'auto') {
             await saveSnapshotToLocal(handle, snapshot);
         }
     } catch (e) {
-        log(`本地快照保存失败: ${e.message}`, 'warn');
+        log(tf('log_local_snapshot_save_failed', { message: e.message }), 'warn');
     }
 
     // Auto-cleanup: keep max N auto snapshots
@@ -263,7 +335,7 @@ async function createSnapshot(label, type = 'auto') {
         }
     }
 
-    log(`快照已创建: ${label} (${type})`, 'success');
+    log(tf('log_snapshot_created', { label, type: t(`snapshot_type_${type}`, type) }), 'success');
     await renderSnapshotList();
     return snapshot;
 }
@@ -331,18 +403,18 @@ async function deleteSnapshotFull(id) {
 
 async function restoreSnapshot(id) {
     const snap = await getSnapshot(id);
-    if (!snap) return showToast('快照不存在', 'error');
+    if (!snap) return showToast(t('toast_snapshot_missing'), 'error');
 
     // Auto snapshot before restoring
-    await createSnapshot('恢复前自动备份', 'auto');
+    await createSnapshot(t('snapshot_label_before_restore'), 'auto');
 
     await new Promise(r => chrome.storage.local.set({
         wildcards: snap.wildcards,
         wildcardFolders: snap.wildcardFolders
     }, r));
 
-    log(`已从快照恢复: ${snap.label}`, 'success');
-    showToast('快照已恢复', 'success');
+    log(tf('log_snapshot_restored', { label: snap.label }), 'success');
+    showToast(t('toast_snapshot_restored'), 'success');
     refreshFileTree();
 }
 
@@ -387,11 +459,11 @@ async function renderSnapshotList() {
                     diffHtml += `<span class="diff-file-tag ${item.type}" title="${item.name}">${item.icon} ${dispName}</span>`;
                 });
                 if (remaining > 0) {
-                    diffHtml += `<span class="diff-more-tag" title="还有 ${remaining} 个文件变动">+${remaining} more...</span>`;
+                    diffHtml += `<span class="diff-more-tag" title="${tf('snapshot_more_files_title', { count: remaining })}">${tf('snapshot_more_files', { count: remaining })}</span>`;
                 }
                 diffHtml += '</div>';
             } else {
-                diffHtml = '<div class="snapshot-diff-container"><span class="diff-more-tag">No changes</span></div>';
+                diffHtml = `<div class="snapshot-diff-container"><span class="diff-more-tag">${t('snapshot_no_changes')}</span></div>`;
             }
         }
 
@@ -402,16 +474,16 @@ async function renderSnapshotList() {
             <div class="snapshot-content">
                 <div class="snapshot-header">
                     <span class="snapshot-time">${time}</span>
-                    <span class="snapshot-tag-type ${tagClass}">${snap.type}</span>
+                    <span class="snapshot-tag-type ${tagClass}">${t(`snapshot_type_${snap.type}`, snap.type)}</span>
                     <span class="snapshot-label">${snap.label}</span>
                 </div>
                 ${diffHtml}
             </div>
             <div class="snapshot-actions">
-                <button class="btn-sm" data-action="diff" data-id="${snap.id}" title="对比当前">🔍</button>
-                <button class="btn-sm btn-success" data-action="restore" data-id="${snap.id}" title="恢复">↩</button>
-                <button class="btn-sm" data-action="export" data-id="${snap.id}" title="导出 JSON">💾</button>
-                <button class="btn-sm btn-danger" data-action="delete" data-id="${snap.id}" title="删除">✕</button>
+                <button class="btn-sm" data-action="diff" data-id="${snap.id}" title="${t('snapshot_action_compare_title')}">🔍</button>
+                <button class="btn-sm btn-success" data-action="restore" data-id="${snap.id}" title="${t('snapshot_action_restore_title')}">↩</button>
+                <button class="btn-sm" data-action="export" data-id="${snap.id}" title="${t('snapshot_action_export_json_title')}">💾</button>
+                <button class="btn-sm btn-danger" data-action="delete" data-id="${snap.id}" title="${t('snapshot_action_delete_title')}">✕</button>
             </div>
         `;
         snapshotList.appendChild(li);
@@ -440,13 +512,13 @@ async function renderSnapshotList() {
         const id = btn.dataset.id;
 
         if (action === 'restore') {
-            if (await customConfirm('确认从此快照恢复？当前数据将被覆盖（已自动备份）。')) {
+            if (await customConfirm(t('confirm_restore_snapshot'))) {
                 await restoreSnapshot(id);
             }
         } else if (action === 'delete') {
-            if (snapshotSettings.confirmDelete && !await customConfirm('确认删除此快照？')) return;
+            if (snapshotSettings.confirmDelete && !await customConfirm(t('confirm_delete_snapshot'))) return;
             await deleteSnapshotFull(id);
-            log(`快照已删除: ${id}`, 'info');
+            log(tf('log_snapshot_deleted', { id }), 'info');
             await renderSnapshotList();
         } else if (action === 'export') {
             await exportSnapshots([id]);
@@ -460,8 +532,8 @@ function updateBatchButtons() {
     const count = selectedSnapshots.size;
     batchDeleteBtn.disabled = count === 0;
     batchExportBtn.disabled = count === 0;
-    batchDeleteBtn.innerHTML = `🗑️ 批量删除 ${count ? `(${count})` : ''}`;
-    batchExportBtn.innerHTML = `💾 批量导出 ${count ? `(${count})` : ''}`;
+    batchDeleteBtn.textContent = `${t('batch_delete')}${count ? ` (${count})` : ''}`;
+    batchExportBtn.textContent = `${t('batch_export')}${count ? ` (${count})` : ''}`;
 
     // Update selectAll
     const checkboxes = document.querySelectorAll('.snap-checkbox');
@@ -486,25 +558,25 @@ async function exportSnapshots(ids) {
         a.click();
         URL.revokeObjectURL(url);
     }
-    log(`已导出 ${ids.length} 个快照`, 'success');
+    log(tf('log_exported_snapshots', { count: ids.length }), 'success');
 }
 
 async function deleteSnapshots(ids) {
-    if (snapshotSettings.confirmDelete && !await customConfirm(`确认彻底删除选中的 ${ids.length} 个快照？`)) return;
+    if (snapshotSettings.confirmDelete && !await customConfirm(tf('confirm_delete_snapshots', { count: ids.length }))) return;
 
     let count = 0;
     for (const id of ids) {
         await deleteSnapshotFull(id);
         count++;
     }
-    log(`已批量删除 ${count} 个快照`, 'success');
+    log(tf('log_deleted_snapshots', { count }), 'success');
     selectedSnapshots.clear();
     await renderSnapshotList();
 }
 
 async function showDiff(id) {
     const snap = await getSnapshot(id);
-    if (!snap) return showToast('快照不存在', 'error');
+    if (!snap) return showToast(t('toast_snapshot_missing'), 'error');
 
     // Get current data
     const currentData = await new Promise(r => chrome.storage.local.get('wildcards', r));
@@ -514,7 +586,7 @@ async function showDiff(id) {
     const diff = computeDiff(snap.wildcards, currentWildcards);
 
     diffSummary.innerHTML = `
-        <span style="margin-right:10px;">对比: [快照] ${snap.label} vs [当前]</span>
+        <span style="margin-right:10px;">${tf('diff_summary', { label: snap.label })}</span>
         <span class="diff-added">+${diff.added.length}</span>
         <span class="diff-removed">-${diff.removed.length}</span>
         <span class="diff-modified">~${diff.modified.length}</span>
@@ -523,7 +595,7 @@ async function showDiff(id) {
     diffContainer.innerHTML = '';
 
     if (diff.added.length === 0 && diff.removed.length === 0 && diff.modified.length === 0) {
-        diffContainer.textContent = '内容完全一致';
+        diffContainer.textContent = t('diff_identical');
     } else {
         const createItem = (key, type, icon) => {
             const div = document.createElement('div');
@@ -536,7 +608,7 @@ async function showDiff(id) {
                 // Show file diff Detail (simple)
                 const oldContent = snap.wildcards[key] || '';
                 const newContent = currentWildcards[key] || '';
-                alert(`文件: ${key}\n\n[快照内容]:\n${oldContent}\n\n[当前内容]:\n${newContent}`);
+                alert(tf('diff_alert_template', { key, oldContent, newContent }));
             };
             return div;
         };
@@ -614,19 +686,19 @@ async function removeEmptyDirs(handle, allowedDirs = new Set(), prefix = '', ski
 async function doExport() {
     const handle = boundDirHandle || await getDirHandle();
     if (!handle) {
-        return log('请先绑定文件夹', 'error');
+        return log(t('log_bind_first'), 'error');
     }
     if (!await verifyPermission(handle, true)) {
         updateTopUI(handle.name, 'reauthorize');
-        return log('请先重新授权已绑定文件夹', 'error');
+        return log(t('log_reauthorize_first'), 'error');
     }
     boundDirHandle = handle;
     updateTopUI(handle.name, 'bound');
 
-    log('开始导出...', 'info');
+    log(t('log_export_start'), 'info');
 
     // 1. Auto snapshot
-    await createSnapshot('导出前自动备份', 'auto');
+    await createSnapshot(t('snapshot_label_before_export'), 'auto');
 
     // 2. Get browser data
     const data = await new Promise(r => chrome.storage.local.get(['wildcards', 'wildcardFolders'], r));
@@ -634,7 +706,7 @@ async function doExport() {
     const folders = data.wildcardFolders || [];
 
     // 3. Scan local files
-    log('扫描本地文件...', 'info');
+    log(t('log_scan_local_files'), 'info');
     const local = await scanLocalDir(handle);
     const browserKeys = new Set(Object.keys(wildcards));
 
@@ -652,10 +724,10 @@ async function doExport() {
             }
             try {
                 await parentDir.removeEntry(fileName);
-                log(`删除本地文件: ${localKey}`, 'warn');
+                log(tf('log_deleted_local_file', { key: localKey }), 'warn');
                 deleteCount++;
             } catch (e) {
-                log(`删除失败: ${localKey} - ${e.message}`, 'error');
+                log(tf('log_delete_failed', { key: localKey, message: e.message }), 'error');
             }
         }
     }
@@ -683,27 +755,27 @@ async function doExport() {
     const allowedFolders = new Set(folders);
     await removeEmptyDirs(handle, allowedFolders);
 
-    log(`导出完成! 写入 ${writeCount} 个文件, 删除 ${deleteCount} 个文件`, 'success');
-    showToast(`导出完成: ${writeCount} 写入, ${deleteCount} 删除`, 'success');
+    log(tf('log_export_complete_counts', { writeCount, deleteCount }), 'success');
+    showToast(tf('toast_export_done', { writeCount, deleteCount }), 'success');
 }
 
 // Import: local → browser (full replace)
 async function doImport() {
     const handle = boundDirHandle || await getDirHandle();
     if (!handle) {
-        return log('请先绑定文件夹', 'error');
+        return log(t('log_bind_first'), 'error');
     }
     if (!await verifyPermission(handle, true)) {
         updateTopUI(handle.name, 'reauthorize');
-        return log('请先重新授权已绑定文件夹', 'error');
+        return log(t('log_reauthorize_first'), 'error');
     }
     boundDirHandle = handle;
     updateTopUI(handle.name, 'bound');
 
-    log('开始导入...', 'info');
+    log(t('log_import_start'), 'info');
 
     // 1. Auto snapshot
-    await createSnapshot('导入前自动备份', 'auto');
+    await createSnapshot(t('snapshot_label_before_import'), 'auto');
 
     // 2. Scan local
     const local = await scanLocalDir(handle);
@@ -721,8 +793,8 @@ async function doImport() {
     }, r));
 
     const fileCount = Object.keys(wildcards).length;
-    log(`导入完成! ${fileCount} 个文件, ${local.folders.length} 个文件夹`, 'success');
-    showToast(`导入完成: ${fileCount} 个文件`, 'success');
+    log(tf('log_import_complete_counts', { fileCount, folderCount: local.folders.length }), 'success');
+    showToast(tf('toast_import_done', { fileCount }), 'success');
     refreshFileTree();
 }
 
@@ -782,7 +854,7 @@ async function handleDrop(e, targetFolder) {
 
     // Avoid moving into self or child
     if (type === 'folder' && (targetFolder === oldPath || targetFolder.startsWith(oldPath + '/'))) {
-        return showToast('不能移动到自身或子文件夹中', 'warn');
+        return showToast(t('toast_move_into_self'), 'warn');
     }
 
     // New path construction
@@ -791,7 +863,8 @@ async function handleDrop(e, targetFolder) {
 
     if (newPath === oldPath) return; // No change
 
-    log(`Moving ${type}: ${oldPath} -> ${newPath}`, 'info');
+    const moveTypeLabel = t(`move_type_${type}`, type);
+    log(tf('log_move_start', { type: moveTypeLabel, oldPath, newPath }), 'info');
 
     // Perform move logic
     chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
@@ -802,7 +875,7 @@ async function handleDrop(e, targetFolder) {
 
         if (type === 'file') {
             if (wildcards[newPath]) {
-                if (!confirm(`文件 "${newPath}" 已存在，是否覆盖？`)) return;
+                if (!confirm(tf('confirm_overwrite_file', { key: newPath }))) return;
             }
             wildcards[newPath] = wildcards[oldPath];
             delete wildcards[oldPath];
@@ -827,7 +900,7 @@ async function handleDrop(e, targetFolder) {
             Object.keys(wildcards).forEach(k => {
                 if (k.startsWith(oldPrefix)) {
                     const newK = newPrefix + k.slice(oldPrefix.length);
-                    if (wildcards[newK] && !confirm(`文件 "${newK}" 已存在，是否覆盖？`)) conflict = true;
+                    if (wildcards[newK] && !confirm(tf('confirm_overwrite_file', { key: newK }))) conflict = true;
                     newWildcards[newK] = wildcards[k];
                 } else {
                     newWildcards[k] = wildcards[k];
@@ -842,7 +915,7 @@ async function handleDrop(e, targetFolder) {
                 wildcards: newWildcards
             }, () => {
                 refreshFileTree();
-                log(`移动完成: ${oldPath} -> ${newPath}`, 'success');
+                log(tf('log_move_completed', { oldPath, newPath }), 'success');
             });
             return; // Exit early as we process folders differently above
         }
@@ -854,7 +927,7 @@ async function handleDrop(e, targetFolder) {
                     currentFile = newPath;
                     fileNameInput.value = newPath.split('/').pop();
                 }
-                log(`已移动: ${oldPath} -> ${newPath}`, 'success');
+                log(tf('log_move_completed', { oldPath, newPath }), 'success');
             });
         }
     });
@@ -878,7 +951,7 @@ function renderTreeNode(node, path = '', depth = 0) {
             <span class="icon">${isExpanded ? '📂' : '📁'}</span>
             <span class="name">${folderName}</span>
             <div class="actions">
-                <button data-folder-delete="${folderPath}" title="删除文件夹">✕</button>
+                <button data-folder-delete="${folderPath}" title="${t('action_delete')}">✕</button>
             </div>
         `;
 
@@ -917,7 +990,7 @@ function renderTreeNode(node, path = '', depth = 0) {
             <span class="icon">📄</span>
             <span class="name">${file.name}</span>
             <div class="actions">
-                <button data-file-delete="${file.key}" title="删除文件">✕</button>
+                <button data-file-delete="${file.key}" title="${t('action_delete')}">✕</button>
             </div>
         `;
 
@@ -966,9 +1039,9 @@ function refreshFileTree() {
 
         // Update placeholder to show where file will be created
         if (selectedFolder) {
-            newItemName.placeholder = `新建于: ${selectedFolder.split('/').pop()}`;
+            newItemName.placeholder = tf('placeholder_new_item_in_folder', { folderName: selectedFolder.split('/').pop() });
         } else {
-            newItemName.placeholder = '新建于: 根目录';
+            newItemName.placeholder = t('placeholder_new_item_root');
         }
 
         // Attach delete handlers (same as before)
@@ -983,13 +1056,13 @@ function attachDeleteHandlers() {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const key = btn.dataset.fileDelete;
-            if (!await customConfirm(`确认删除文件 "${key}"？`)) return;
+            if (!await customConfirm(tf('confirm_delete_file', { key }))) return;
             chrome.storage.local.get('wildcards', d => {
                 const map = d.wildcards || {};
                 delete map[key];
                 chrome.storage.local.set({ wildcards: map }, () => {
                     if (currentFile === key) closeEditor();
-                    log(`已删除文件: ${key}`, 'info');
+                    log(tf('log_file_deleted', { key }), 'info');
                     refreshFileTree();
                 });
             });
@@ -1000,7 +1073,7 @@ function attachDeleteHandlers() {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const folder = btn.dataset.folderDelete;
-            if (!await customConfirm(`确认删除文件夹 "${folder}" 及其所有文件？`)) return;
+            if (!await customConfirm(tf('confirm_delete_folder', { folder }))) return;
             chrome.storage.local.get(['wildcards', 'wildcardFolders'], d => {
                 const map = d.wildcards || {};
                 const folders = d.wildcardFolders || [];
@@ -1010,7 +1083,7 @@ function attachDeleteHandlers() {
                 chrome.storage.local.set({ wildcards: newMap, wildcardFolders: newFolders }, () => {
                     if (currentFile && currentFile.startsWith(folder + '/')) closeEditor();
                     expandedFolders.delete(folder);
-                    log(`已删除文件夹: ${folder}`, 'info');
+                    log(tf('log_folder_deleted', { folder }), 'info');
                     refreshFileTree();
                 });
             });
@@ -1034,7 +1107,7 @@ function initWorker() {
         searchWorker.onmessage = (e) => {
             const { type, id, results, count } = e.data;
             if (type === 'ready') {
-                log(`后台搜索服务就绪: ${count} 条目`, 'success');
+                log(tf('log_search_ready', { count }), 'success');
             } else if (type === 'searchResults') {
                 const resolve = pendingSearches.get(id);
                 if (resolve) {
@@ -1045,10 +1118,10 @@ function initWorker() {
         };
         searchWorker.onerror = (err) => {
             console.error('Worker Error:', err);
-            log('搜索服务出错', 'error');
+            log(t('log_search_error'), 'error');
         };
     } catch (e) {
-        log('无法启动搜索服务: ' + e.message, 'error');
+        log(tf('log_search_start_failed', { message: e.message }), 'error');
     }
 }
 
@@ -1136,21 +1209,21 @@ function updateLineInfo(state) {
     const cursor = state.selection.main.head;
     const line = state.doc.lineAt(cursor);
     const totalLines = state.doc.lines;
-    lineInfo.textContent = `第 ${line.number} 行 / 共 ${totalLines} 行`;
+    lineInfo.textContent = tf('line_info', { line: line.number, total: totalLines });
 }
 
 function markModified() {
     if (currentFile) {
         const current = editorView.state.doc.toString();
         if (current !== localContent) {
-            saveStatus.textContent = '● 未保存';
+            saveStatus.textContent = t('save_status_unsaved');
             saveStatus.className = 'modified';
         }
     }
 }
 
 function markSaved() {
-    saveStatus.textContent = '✓ 已保存';
+    saveStatus.textContent = t('save_status_saved');
     saveStatus.className = 'saved';
     setTimeout(() => {
         if (saveStatus.className === 'saved') {
@@ -1165,17 +1238,17 @@ function openFile(key) {
         try {
             const current = editorView.state.doc.toString().replace(/\r\n/g, '\n');
             const local = (localContent || '').replace(/\r\n/g, '\n');
-            if (current !== local && !confirm('当前文件有未保存的更改，是否放弃？')) return;
+            if (current !== local && !confirm(t('confirm_discard_unsaved'))) return;
         } catch (e) {
             console.error('Check unsaved failed:', e);
-            if (!confirm('检测未保存更改时出错，是否强制切换？')) return;
+            if (!confirm(t('confirm_force_switch'))) return;
         }
     }
     chrome.storage.local.get('wildcards', data => {
         try {
             const map = data.wildcards || {};
             if (!(key in map)) {
-                showToast('文件不存在', 'error');
+                showToast(t('toast_file_missing'), 'error');
                 refreshFileTree(); // Sync tree state
                 return;
             }
@@ -1199,8 +1272,8 @@ function openFile(key) {
             saveStatus.className = '';
             updateLineInfo(editorView.state);
         } catch (e) {
-            log('打开文件失败: ' + e.message, 'error');
-            showToast('打开文件出错', 'error');
+            log(tf('log_open_file_failed', { message: e.message }), 'error');
+            showToast(t('toast_open_file_error'), 'error');
             // Recovery: Destroy potentially corrupted editor
             if (editorView) {
                 try { editorView.destroy(); } catch (err) { }
@@ -1228,20 +1301,20 @@ function saveCurrentFile() {
     if (!currentFile || !editorView) return;
     const content = editorView.state.doc.toString();
     const newName = fileNameInput.value.trim().replace(/\s+/g, '_').replace(/_+/g, '_');
-    if (!newName) return showToast('请输入文件名', 'error');
+    if (!newName) return showToast(t('toast_enter_file_name'), 'error');
     chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
         const map = data.wildcards || {};
         const oldParts = currentFile.split('/');
         oldParts.pop();
         const newKey = oldParts.length > 0 ? `${oldParts.join('/')}/${newName}` : newName;
-        if (newKey !== currentFile && map[newKey]) return showToast(`文件已存在: ${newKey}`, 'error');
+        if (newKey !== currentFile && map[newKey]) return showToast(tf('toast_file_exists', { name: newKey }), 'error');
         if (newKey !== currentFile) delete map[currentFile];
         map[newKey] = content;
         localContent = content;
         currentFile = newKey;
         chrome.storage.local.set({ wildcards: map }, () => {
             markSaved();
-            log(`已保存: ${newKey}`, 'success');
+            log(tf('log_saved', { key: newKey }), 'success');
             refreshFileTree();
         });
     });
@@ -1281,7 +1354,7 @@ async function loadDictionary() {
                 };
             });
         }
-        log(`字典加载完成: ${autocompleteDict.length} 个标签`, 'success');
+        log(tf('log_dictionary_loaded', { count: autocompleteDict.length }), 'success');
 
         // Send to worker
         initWorker();
@@ -1289,7 +1362,7 @@ async function loadDictionary() {
             searchWorker.postMessage({ type: 'init', payload: autocompleteDict });
         }
     } catch (e) {
-        log(`字典加载失败: ${e.message}`, 'error');
+        log(tf('log_dictionary_failed', { message: e.message }), 'error');
         autocompleteDict = [];
     }
 }
@@ -1298,11 +1371,13 @@ async function loadDictionary() {
 // Section 10: UI Setup & Events
 // ============================
 function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
+    currentTopUiState = state;
+
     if (state === 'bound' && dirName) {
-        statusText.textContent = `已绑定: ${dirName}`;
+        statusText.textContent = tf('status_bound', { dirName });
         statusText.classList.add('linked');
         linkBtn.style.display = 'none';
-        linkBtn.textContent = '📂 绑定文件夹';
+        linkBtn.textContent = t('action_bind_folder');
         unlinkBtn.style.display = '';
         exportBtn.style.display = '';
         importBtn.style.display = '';
@@ -1311,10 +1386,10 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
     }
 
     if (state === 'reauthorize' && dirName) {
-        statusText.textContent = `已保存目录: ${dirName}，需重新授权`;
+        statusText.textContent = tf('status_reauthorize', { dirName });
         statusText.classList.remove('linked');
         linkBtn.style.display = '';
-        linkBtn.textContent = '🔐 重新授权文件夹';
+        linkBtn.textContent = t('action_reauthorize_folder');
         unlinkBtn.style.display = '';
         exportBtn.style.display = 'none';
         importBtn.style.display = 'none';
@@ -1322,10 +1397,10 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
         return;
     }
 
-    statusText.textContent = '未绑定本地文件夹';
+    statusText.textContent = t('status_unbound');
     statusText.classList.remove('linked');
     linkBtn.style.display = '';
-    linkBtn.textContent = '📂 绑定文件夹';
+    linkBtn.textContent = t('action_bind_folder');
     unlinkBtn.style.display = 'none';
     exportBtn.style.display = 'none';
     importBtn.style.display = 'none';
@@ -1346,7 +1421,7 @@ let bottomExpanded = true;
 toggleBottom.addEventListener('click', () => {
     bottomExpanded = !bottomExpanded;
     bottomContent.style.display = bottomExpanded ? '' : 'none';
-    toggleBottom.textContent = bottomExpanded ? '▼ 折叠' : '▲ 展开';
+    updateBottomToggleText();
 });
 
 let isResizing = false;
@@ -1393,18 +1468,18 @@ resizeHandleBottom.addEventListener('mousedown', (e) => {
 newFileBtn.addEventListener('click', () => {
     let raw = newItemName.value.trim();
     let name = raw.replace(/\s+/g, '_').replace(/_+/g, '_');
-    if (!name) return showToast('请输入文件名', 'error');
+    if (!name) return showToast(t('toast_enter_file_name'), 'error');
 
     // Handle creation in selected folder
     const fullName = selectedFolder ? `${selectedFolder}/${name}` : name;
 
     chrome.storage.local.get('wildcards', data => {
         const map = data.wildcards || {};
-        if (map[fullName]) return showToast(`文件已存在: ${fullName}`, 'error');
+        if (map[fullName]) return showToast(tf('toast_file_exists', { name: fullName }), 'error');
         map[fullName] = '';
         chrome.storage.local.set({ wildcards: map }, () => {
             newItemName.value = '';
-            log(`创建文件: ${fullName}`, 'info');
+            log(tf('log_created_file', { key: fullName }), 'info');
             refreshFileTree();
             openFile(fullName);
         });
@@ -1414,19 +1489,19 @@ newFileBtn.addEventListener('click', () => {
 newFolderBtn.addEventListener('click', () => {
     let raw = newItemName.value.trim();
     let name = raw.replace(/\s+/g, '_').replace(/_+/g, '_');
-    if (!name) return showToast('请输入文件夹名', 'error');
+    if (!name) return showToast(t('toast_enter_folder_name'), 'error');
 
     // Handle creation in selected folder
     const fullName = selectedFolder ? `${selectedFolder}/${name}` : name;
 
     chrome.storage.local.get('wildcardFolders', data => {
         const folders = data.wildcardFolders || [];
-        if (folders.includes(fullName)) return showToast(`文件夹已存在: ${fullName}`, 'error');
+        if (folders.includes(fullName)) return showToast(tf('toast_folder_exists', { name: fullName }), 'error');
         folders.push(fullName);
         chrome.storage.local.set({ wildcardFolders: folders }, () => {
             newItemName.value = '';
             expandedFolders.add(fullName);
-            log(`创建文件夹: ${fullName}`, 'info');
+            log(tf('log_created_folder', { folder: fullName }), 'info');
             refreshFileTree();
         });
     });
@@ -1437,10 +1512,10 @@ linkBtn.addEventListener('click', async () => {
         if (boundDirHandle) {
             if (await verifyPermission(boundDirHandle, true)) {
                 updateTopUI(boundDirHandle.name, 'bound');
-                log(`已重新授权: ${boundDirHandle.name}`, 'success');
+                log(tf('log_reauthorized', { dirName: boundDirHandle.name }), 'success');
             } else {
                 updateTopUI(boundDirHandle.name, 'reauthorize');
-                log(`重新授权失败: ${boundDirHandle.name}`, 'error');
+                log(tf('log_reauthorize_failed', { dirName: boundDirHandle.name }), 'error');
             }
             return;
         }
@@ -1449,10 +1524,10 @@ linkBtn.addEventListener('click', async () => {
         await saveDirHandle(dirHandle);
         boundDirHandle = dirHandle;
         updateTopUI(dirHandle.name, 'bound');
-        log(`已绑定: ${dirHandle.name}`, 'success');
+        log(tf('log_bound', { dirName: dirHandle.name }), 'success');
     } catch (e) {
-        if (e.name === 'AbortError') log('用户取消选择', 'info');
-        else log(`绑定失败: ${e.message}`, 'error');
+        if (e.name === 'AbortError') log(t('log_user_cancelled'), 'info');
+        else log(tf('log_bind_failed', { message: e.message }), 'error');
     }
 });
 
@@ -1460,27 +1535,27 @@ unlinkBtn.addEventListener('click', async () => {
     await removeDirHandle();
     boundDirHandle = null;
     updateTopUI(null, 'unbound');
-    log('已解除绑定', 'info');
+    log(t('log_unbound'), 'info');
 });
 
 exportBtn.addEventListener('click', async () => {
     exportBtn.disabled = true;
     try { await doExport(); }
-    catch (e) { log(`导出失败: ${e.message}`, 'error'); showToast('导出失败', 'error'); }
+    catch (e) { log(tf('log_export_failed', { message: e.message }), 'error'); showToast(t('toast_export_failed'), 'error'); }
     finally { exportBtn.disabled = false; }
 });
 
 importBtn.addEventListener('click', async () => {
-    if (!await customConfirm('导入将用本地文件完全替换浏览器数据。操作前会自动创建快照。继续？')) return;
+    if (!await customConfirm(t('confirm_import_overwrite'))) return;
     importBtn.disabled = true;
     try { await doImport(); }
-    catch (e) { log(`导入失败: ${e.message}`, 'error'); showToast('导入失败', 'error'); }
+    catch (e) { log(tf('log_import_failed', { message: e.message }), 'error'); showToast(t('toast_import_failed'), 'error'); }
     finally { importBtn.disabled = false; }
 });
 
 snapshotBtn.addEventListener('click', async () => {
-    await createSnapshot('手动快照', 'manual');
-    showToast('手动快照已创建', 'success');
+    await createSnapshot(t('snapshot_label_manual'), 'manual');
+    showToast(t('toast_manual_snapshot_created'), 'success');
 });
 
 saveBtn.addEventListener('click', saveCurrentFile);
@@ -1498,7 +1573,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
                 const editorContent = editorView ? editorView.state.doc.toString() : '';
                 if (externalContent !== editorContent && externalContent !== localContent) extChangeBanner.classList.add('show');
             } else {
-                showToast('当前编辑的文件已被外部删除', 'error');
+                showToast(t('toast_current_file_deleted'), 'error');
                 closeEditor();
             }
         }
@@ -1529,12 +1604,12 @@ snapshotSettingsBtn.addEventListener('click', () => {
 
 saveSnapSettingsBtn.addEventListener('click', async () => {
     const max = parseInt(settingMaxSnapshots.value, 10);
-    if (isNaN(max) || max < 1) return showToast('请输入有效的数量', 'error');
+    if (isNaN(max) || max < 1) return showToast(t('toast_enter_valid_number'), 'error');
 
     snapshotSettings.maxSnapshots = max;
     snapshotSettings.confirmDelete = settingConfirmDelete.checked;
     await saveSnapshotSettings();
-    showToast('设置已保存', 'success');
+    showToast(t('toast_settings_saved'), 'success');
     snapSettingsModal.classList.remove('show');
 });
 
@@ -1647,9 +1722,9 @@ async function loadDictForEditor() {
         filterDict(dictCurrentQuery);
         dictLoaded = true;
         const dt = ((performance.now() - t0) / 1000).toFixed(2);
-        log(`字典加载完成: ${dictBaseData.length.toLocaleString()} 条 (${dt}s)`, 'success');
+        log(tf('log_dict_editor_loaded', { count: dictBaseData.length.toLocaleString(), seconds: dt }), 'success');
     } catch (e) {
-        log(`字典加载失败: ${e.message}`, 'error');
+        log(tf('log_dict_editor_failed', { message: e.message }), 'error');
     }
 }
 
@@ -1787,8 +1862,8 @@ function createDictCard(item, dataIdx) {
     // Restore/Revert for modified/deleted items (except new ones), Delete for others
     const isRestore = (item._modified || item._deleted) && !item._new;
     const actionBtn = isRestore
-        ? `<button data-action="restore" title="恢复" style="color:#4ade80">↺</button>`
-        : `<button data-action="delete" title="删除">✕</button>`;
+        ? `<button data-action="restore" title="${t('action_restore')}" style="color:#4ade80">↺</button>`
+        : `<button data-action="delete" title="${t('action_delete')}">✕</button>`;
 
     card.innerHTML = `
         <div class="dict-card-header">
@@ -1931,18 +2006,18 @@ function customPrompt(title, placeholder = '') {
 }
 
 dictAddBtn.addEventListener('click', async () => {
-    const tag = await customPrompt('输入新 Tag 名称', '例如: blue_sky');
+    const tag = await customPrompt(t('prompt_new_tag_title'), t('prompt_new_tag_placeholder'));
     if (!tag || !tag.trim()) return;
     const canonicalTag = groupTagsDataUtils.toCanonicalTagKey ? groupTagsDataUtils.toCanonicalTagKey(tag) : tag.trim();
-    if (dictMergedView.some(d => d.tag === canonicalTag)) { showToast('该 Tag 已存在', 'error'); return; }
+    if (dictMergedView.some(d => d.tag === canonicalTag)) { showToast(t('toast_tag_exists'), 'error'); return; }
     dictNewEntries.push({ tag: canonicalTag, color: 0, count: 0, aliases: '', zhCN: '', _new: true });
     saveDictOverlay();
     rebuildAndRender();
-    showToast('已添加: ' + canonicalTag, 'success');
+    showToast(tf('toast_tag_added', { tag: canonicalTag }), 'success');
 });
 
 dictExportBtn.addEventListener('click', () => {
-    if (!dictMergedView.length) { showToast('无数据可导出', 'error'); return; }
+    if (!dictMergedView.length) { showToast(t('toast_no_data_to_export'), 'error'); return; }
     const lines = dictMergedView.map(item => {
         const alias = item.aliases.includes(',') ? `"${item.aliases}"` : item.aliases;
         return `${item.tag},${item.color},${item.count},${alias},${item.zhCN}`;
@@ -1952,7 +2027,7 @@ dictExportBtn.addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = url; a.download = 'dictionary_merged.csv'; a.click();
     URL.revokeObjectURL(url);
-    showToast(`已导出 ${lines.length.toLocaleString()} 条`, 'success');
+    showToast(tf('toast_dict_exported', { count: lines.length.toLocaleString() }), 'success');
 });
 
 dictImportBtn.addEventListener('click', () => {
@@ -1988,7 +2063,7 @@ dictImportBtn.addEventListener('click', () => {
         }
         await saveDictOverlay();
         rebuildAndRender();
-        showToast(`已导入 ${count} 条记录`, 'success');
+        showToast(tf('toast_dict_imported', { count }), 'success');
     };
     inp.click();
 });
@@ -2072,12 +2147,12 @@ dictToggleChangesBtn.addEventListener('click', () => {
 
 
 dictResetBtn.addEventListener('click', async () => {
-    if (!await customConfirm('确认重置所有修改？将恢复为原始 CSV 数据。')) return;
+    if (!await customConfirm(t('confirm_reset_dict_changes'))) return;
     dictOverlay = {};
     dictNewEntries = [];
     await saveDictOverlay();
     rebuildAndRender();
-    showToast('已重置所有修改', 'success');
+    showToast(t('toast_dict_reset'), 'success');
 });
 
 let dictSearchTimer = null;
@@ -2106,9 +2181,9 @@ function updateDictStatus() {
     const filtered = dictFilteredIndices.length;
     const modCount = Object.keys(dictOverlay).length + dictNewEntries.length;
     dictStatTotal.textContent = dictCurrentQuery
-        ? `已筛选 ${filtered.toLocaleString()} / 共 ${total.toLocaleString()} 条`
-        : `共 ${total.toLocaleString()} 条`;
-    dictStatModified.textContent = modCount > 0 ? `已修改 ${modCount} 条` : '';
+        ? tf('dict_stat_total_filtered', { filtered: filtered.toLocaleString(), total: total.toLocaleString() })
+        : tf('dict_stat_total_all', { total: total.toLocaleString() });
+    dictStatModified.textContent = modCount > 0 ? tf('dict_stat_modified', { count: modCount }) : '';
     dictStatModified.className = modCount > 0 ? 'stat-modified' : '';
 }
 
@@ -2150,16 +2225,17 @@ viewSwitcher.addEventListener('click', async (e) => {
 // Section 14: Initialization
 // ============================
 async function init() {
-    log('初始化...', 'info');
+    await initI18n();
+    log(t('log_initializing'), 'info');
     if (typeof chrome === 'undefined' || typeof chrome.storage === 'undefined') {
-        log('错误: Chrome API 不可用', 'error');
-        statusText.textContent = 'Chrome API 不可用';
+        log(t('log_error_chrome_api'), 'error');
+        statusText.textContent = t('status_chrome_api_unavailable');
         linkBtn.disabled = true;
         return;
     }
     if (typeof window.showDirectoryPicker !== 'function') {
-        log('错误: File System Access API 不可用', 'error');
-        statusText.textContent = 'API 不可用';
+        log(t('log_error_fs_api'), 'error');
+        statusText.textContent = t('status_fs_api_unavailable');
         linkBtn.disabled = true;
         return;
     }
@@ -2172,25 +2248,25 @@ async function init() {
         if (handle && await verifyPermission(handle, false)) {
             boundDirHandle = handle;
             updateTopUI(handle.name, 'bound');
-            log(`已恢复绑定: ${handle.name}`, 'success');
+            log(tf('log_restored_bound', { dirName: handle.name }), 'success');
         } else if (handle) {
             boundDirHandle = handle;
             updateTopUI(handle.name, 'reauthorize');
-            log(`已恢复目录句柄，等待重新授权: ${handle.name}`, 'info');
+            log(tf('log_restored_waiting_reauth', { dirName: handle.name }), 'info');
         } else {
             boundDirHandle = null;
             updateTopUI(null, 'unbound');
-            log('未绑定文件夹', 'info');
+            log(t('log_no_folder_bound'), 'info');
         }
     } catch (e) {
-        log(`初始化错误: ${e.message}`, 'error');
+        log(tf('log_init_error', { message: e.message }), 'error');
         boundDirHandle = null;
         updateTopUI(null, 'unbound');
     }
     refreshFileTree();
     await loadDictionary();
     await renderSnapshotList();
-    log('初始化完成', 'success');
+    log(t('log_init_complete'), 'success');
 }
 
 document.addEventListener('DOMContentLoaded', init);

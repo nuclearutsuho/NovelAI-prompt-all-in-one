@@ -1242,16 +1242,16 @@
     <div class="topbar">
         <span class="topbar-logo">📚 NovelAI-prompt-all-in-one</span>
         <div class="view-switcher" id="viewSwitcher">
-            <button class="active" data-view="sync">📂 通配符管理</button>
-            <button data-view="dict">📖 字典编辑</button>
+            <button class="active" data-view="sync" data-i18n="view_sync">📂 通配符管理</button>
+            <button data-view="dict" data-i18n="view_dict">📖 字典编辑</button>
         </div>
-        <span id="statusText" class="topbar-status">检查中...</span>
+        <span id="statusText" class="topbar-status" data-i18n="status_checking">检查中...</span>
         <div class="topbar-actions" id="syncActions">
-            <button id="linkBtn" class="btn-primary btn-icon">📂 绑定文件夹</button>
-            <button id="unlinkBtn" class="btn-danger btn-icon" style="display:none;">✕ 解除绑定</button>
-            <button id="exportBtn" class="btn-icon" style="display:none;">⬆ 导出到本地</button>
-            <button id="importBtn" class="btn-icon" style="display:none;">⬇ 从本地导入</button>
-            <button id="snapshotBtn" class="btn-warning btn-icon" style="display:none;">📸 手动快照</button>
+            <button id="linkBtn" class="btn-primary btn-icon" data-i18n="action_bind_folder">📂 绑定文件夹</button>
+            <button id="unlinkBtn" class="btn-danger btn-icon" style="display:none;" data-i18n="action_unbind">✕ 解除绑定</button>
+            <button id="exportBtn" class="btn-icon" style="display:none;" data-i18n="action_export_to_local">⬆ 导出到本地</button>
+            <button id="importBtn" class="btn-icon" style="display:none;" data-i18n="action_import_from_local">⬇ 从本地导入</button>
+            <button id="snapshotBtn" class="btn-warning btn-icon" style="display:none;" data-i18n="action_manual_snapshot">📸 手动快照</button>
         </div>
     </div>
 
@@ -1260,9 +1260,9 @@
         <!-- Sidebar / File Tree -->
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <input type="text" id="newItemName" placeholder="新建名称...">
-                <button id="newFileBtn" class="btn-sm btn-icon" title="新建文件">📄+</button>
-                <button id="newFolderBtn" class="btn-sm btn-icon" title="新建文件夹">📁+</button>
+                <input type="text" id="newItemName" placeholder="新建名称..." data-i18n-placeholder="placeholder_new_item_name">
+                <button id="newFileBtn" class="btn-sm btn-icon" title="新建文件" data-i18n-title="title_new_file">📄+</button>
+                <button id="newFolderBtn" class="btn-sm btn-icon" title="新建文件夹" data-i18n-title="title_new_folder">📁+</button>
             </div>
             <div class="file-tree" id="fileTree"></div>
         </div>
@@ -1274,24 +1274,24 @@
         <div class="editor-panel">
             <!-- External change banner -->
             <div class="ext-change-banner" id="extChangeBanner">
-                <span>⚠ 文件已被外部修改</span>
-                <button class="btn-sm" id="reloadFileBtn">重新加载</button>
-                <button class="btn-sm" id="dismissBannerBtn">忽略</button>
+                <span data-i18n="banner_external_changed">⚠ 文件已被外部修改</span>
+                <button class="btn-sm" id="reloadFileBtn" data-i18n="action_reload">重新加载</button>
+                <button class="btn-sm" id="dismissBannerBtn" data-i18n="action_ignore">忽略</button>
             </div>
             <!-- Editor Header -->
             <div class="editor-header" id="editorHeader" style="display:none;">
                 <span class="file-label">📝</span>
-                <input type="text" id="fileNameInput" placeholder="文件名">
-                <button id="saveBtn" class="btn-success btn-sm btn-icon">💾 保存 (Ctrl+S)</button>
+                <input type="text" id="fileNameInput" placeholder="文件名" data-i18n-placeholder="placeholder_file_name">
+                <button id="saveBtn" class="btn-success btn-sm btn-icon" data-i18n="action_save_with_shortcut">💾 保存 (Ctrl+S)</button>
             </div>
             <!-- Editor Body -->
             <div class="editor-placeholder" id="editorPlaceholder">
-                <span>← 在左侧选择或新建一个文件开始编辑</span>
+                <span data-i18n="editor_placeholder">← 在左侧选择或新建一个文件开始编辑</span>
             </div>
             <div class="editor-container" id="editorContainer" style="display:none;"></div>
             <!-- Status Bar -->
             <div class="editor-statusbar" id="editorStatusbar" style="display:none;">
-                <span id="lineInfo">第 1 行 / 共 1 行</span>
+                <span id="lineInfo" data-i18n="line_info_initial">第 1 行 / 共 1 行</span>
                 <span id="saveStatus"></span>
             </div>
         </div>
@@ -1300,20 +1300,20 @@
     <!-- Dictionary View (hidden by default) -->
     <div class="dict-view" id="dictView">
         <div class="dict-toolbar">
-            <select id="dictFilterType" class="dict-select" title="按类型筛选">
-                <option value="-1">全部类型</option>
-                <option value="0">General (常规)</option>
-                <option value="1">Artist (画师)</option>
-                <option value="3">Copyright (版权)</option>
-                <option value="4">Character (角色)</option>
-                <option value="5">Meta (元数据)</option>
+            <select id="dictFilterType" class="dict-select" title="按类型筛选" data-i18n-title="dict_filter_title">
+                <option value="-1" data-i18n="dict_filter_all">全部类型</option>
+                <option value="0" data-i18n="dict_filter_general">General (常规)</option>
+                <option value="1" data-i18n="dict_filter_artist">Artist (画师)</option>
+                <option value="3" data-i18n="dict_filter_copyright">Copyright (版权)</option>
+                <option value="4" data-i18n="dict_filter_character">Character (角色)</option>
+                <option value="5" data-i18n="dict_filter_meta">Meta (元数据)</option>
             </select>
-            <input type="text" class="dict-search" id="dictSearch" placeholder="搜索 tag / 中文 / 别名...">
-            <button id="dictAddBtn" class="btn-sm btn-primary btn-icon">＋ 新增</button>
-            <button id="dictImportBtn" class="btn-sm btn-icon">⬇ 导入 CSV</button>
-            <button id="dictExportBtn" class="btn-sm btn-icon">⬆ 导出 CSV</button>
-            <button id="dictToggleChangesBtn" class="btn-sm btn-icon" title="只显示已修改项">👁️ 只看变更</button>
-            <button id="dictResetBtn" class="btn-sm btn-danger btn-icon">↺ 重置修改</button>
+            <input type="text" class="dict-search" id="dictSearch" placeholder="搜索 tag / 中文 / 别名..." data-i18n-placeholder="dict_search_placeholder">
+            <button id="dictAddBtn" class="btn-sm btn-primary btn-icon" data-i18n="dict_add">＋ 新增</button>
+            <button id="dictImportBtn" class="btn-sm btn-icon" data-i18n="dict_import_csv">⬇ 导入 CSV</button>
+            <button id="dictExportBtn" class="btn-sm btn-icon" data-i18n="dict_export_csv">⬆ 导出 CSV</button>
+            <button id="dictToggleChangesBtn" class="btn-sm btn-icon" title="只显示已修改项" data-i18n-title="dict_toggle_changes_title" data-i18n="dict_toggle_changes">👁️ 只看变更</button>
+            <button id="dictResetBtn" class="btn-sm btn-danger btn-icon" data-i18n="dict_reset">↺ 重置修改</button>
         </div>
         <div class="dict-grid-viewport" id="dictViewport">
             <div class="dict-grid-spacer" id="dictSpacer">
@@ -1321,7 +1321,7 @@
             </div>
         </div>
         <div class="dict-statusbar" id="dictStatusbar">
-            <span id="dictStatTotal">加载中...</span>
+            <span id="dictStatTotal" data-i18n="dict_loading">加载中...</span>
             <span id="dictStatModified"></span>
         </div>
     </div>
@@ -1332,23 +1332,23 @@
     <!-- Bottom Panel -->
     <div class="bottom-panel" id="bottomPanel">
         <div class="bottom-tabs">
-            <button class="bottom-tab active" data-tab="log">📋 日志</button>
-            <button class="bottom-tab" data-tab="snapshots">📸 快照</button>
-            <button class="bottom-toggle" id="toggleBottom">▼ 折叠</button>
+            <button class="bottom-tab active" data-tab="log" data-i18n="tab_log">📋 日志</button>
+            <button class="bottom-tab" data-tab="snapshots" data-i18n="tab_snapshots">📸 快照</button>
+            <button class="bottom-toggle" id="toggleBottom" data-i18n="toggle_bottom_collapse">▼ 折叠</button>
         </div>
         <div class="bottom-content" id="bottomContent">
             <div id="logPanel" class="active"></div>
             <div id="snapshotsPanel">
                 <div class="snapshot-toolbar">
-                    <label class="checkbox-label"><input type="checkbox" id="selectAllSnapshots"> 全选</label>
-                    <button id="batchDeleteBtn" class="btn-sm btn-danger" disabled>🗑️ 批量删除</button>
-                    <button id="batchExportBtn" class="btn-sm" disabled>💾 批量导出</button>
+                    <label class="checkbox-label"><input type="checkbox" id="selectAllSnapshots"> <span data-i18n="select_all">全选</span></label>
+                    <button id="batchDeleteBtn" class="btn-sm btn-danger" disabled data-i18n="batch_delete">🗑️ 批量删除</button>
+                    <button id="batchExportBtn" class="btn-sm" disabled data-i18n="batch_export">💾 批量导出</button>
                     <div style="flex:1"></div>
-                    <button id="snapshotSettingsBtn" class="btn-sm" title="快照设置">⚙️ 设置</button>
+                    <button id="snapshotSettingsBtn" class="btn-sm" title="快照设置" data-i18n-title="snapshot_settings_title" data-i18n="snapshot_settings">⚙️ 设置</button>
                 </div>
                 <div style="flex:1; overflow-y:auto">
                     <ul class="snapshot-list" id="snapshotList"></ul>
-                    <div id="noSnapshots" style="color:#666; text-align:center; padding:16px;">暂无快照</div>
+                    <div id="noSnapshots" style="color:#666; text-align:center; padding:16px;" data-i18n="no_snapshots">暂无快照</div>
                 </div>
             </div>
         </div>
@@ -1357,20 +1357,20 @@
     <!-- Snapshots Settings Modal -->
     <div id="snapSettingsModal" class="modal">
         <div class="modal-content" style="width: 300px;">
-            <h3 style="margin-top:0">快照设置</h3>
+            <h3 style="margin-top:0" data-i18n="snapshot_settings_title">快照设置</h3>
             <div style="margin: 16px 0;">
                 <label style="display:flex; align-items:center; margin-bottom:12px;">
-                    <span style="flex:1">快照保留数量:</span>
+                    <span style="flex:1" data-i18n="snapshot_keep_count">快照保留数量:</span>
                     <input type="number" id="settingMaxSnapshots" min="1" max="100"
                         style="width:60px; padding:4px; background:#222238; color:#fff; border:1px solid #3a3a55; border-radius:4px;">
                 </label>
                 <label style="display:flex; align-items:center; cursor:pointer;">
-                    <input type="checkbox" id="settingConfirmDelete" style="margin-right:8px;"> 删除快照时确认
+                    <input type="checkbox" id="settingConfirmDelete" style="margin-right:8px;"> <span data-i18n="snapshot_confirm_delete">删除快照时确认</span>
                 </label>
             </div>
             <div class="modal-actions">
-                <button id="saveSnapSettingsBtn" class="btn-primary">保存</button>
-                <button id="closeSnapSettingsBtn" class="btn">取消</button>
+                <button id="saveSnapSettingsBtn" class="btn-primary" data-i18n="action_save_plain">保存</button>
+                <button id="closeSnapSettingsBtn" class="btn" data-i18n="action_cancel">取消</button>
             </div>
         </div>
     </div>
@@ -1378,13 +1378,13 @@
     <!-- Diff Modal -->
     <div id="diffModal" class="modal">
         <div class="modal-content" style="width: 800px; max-width:95%; height: 80vh;">
-            <h3 style="margin-top:0; margin-bottom:10px;">快照对比</h3>
+            <h3 style="margin-top:0; margin-bottom:10px;" data-i18n="diff_title">快照对比</h3>
             <div id="diffSummary" style="margin-bottom: 10px; font-weight: bold; font-size:0.9rem;"></div>
             <div id="diffContainer"
                 style="flex: 1; overflow: auto; border: 1px solid #2a2a44; background: #0f0f1a; padding: 10px; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;">
             </div>
             <div class="modal-actions">
-                <button id="closeDiffBtn" class="btn">关闭</button>
+                <button id="closeDiffBtn" class="btn" data-i18n="action_close">关闭</button>
             </div>
         </div>
     </div>
@@ -1392,13 +1392,13 @@
     <!-- Custom Prompt Modal -->
     <div class="modal" id="promptModal">
         <div class="modal-content" style="width: 380px;">
-            <h3 style="margin-top:0" id="promptTitle">输入</h3>
+            <h3 style="margin-top:0" id="promptTitle" data-i18n="prompt_title_input">输入</h3>
             <input type="text" id="promptInput"
                 style="width:100%; padding:8px 12px; background:#222238; color:#d4d4e0; border:1px solid #3a3a55; border-radius:6px; font-size:0.9rem; margin-top:8px;"
                 placeholder="">
             <div class="modal-actions">
-                <button id="promptOkBtn" class="btn-primary">确认</button>
-                <button id="promptCancelBtn" class="btn">取消</button>
+                <button id="promptOkBtn" class="btn-primary" data-i18n="action_confirm">确认</button>
+                <button id="promptCancelBtn" class="btn" data-i18n="action_cancel">取消</button>
             </div>
         </div>
     </div>
@@ -1410,8 +1410,8 @@
         <div class="modal-box">
             <p id="confirmMessage"></p>
             <div class="modal-actions">
-                <button id="confirmYes" class="btn-danger">确认</button>
-                <button id="confirmNo">取消</button>
+                <button id="confirmYes" class="btn-danger" data-i18n="action_confirm">确认</button>
+                <button id="confirmNo" data-i18n="action_cancel">取消</button>
             </div>
         </div>
     </div>
@@ -1419,7 +1419,7 @@
     <!-- Scripts -->
     <script src="../lib/codemirror-bundle.js"></script>
     <script src="../lib/group-tags-data.js"></script>
-    <script src="sync.js"></script>
+    <script type="module" src="sync.js"></script>
 </body>
 
 </html>
