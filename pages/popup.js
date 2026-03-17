@@ -1,6 +1,7 @@
 import TagEditor from '../lib/TagEditor.js';
 import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
+import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
 
 let editor;
 let autocomplete;
@@ -36,304 +37,7 @@ const groupTagsPickerState = {
 // type: 'base' | 'character', charIndex: number, mode: 'positive'|'negative'|'pos'|'neg'
 let activeEditorTarget = { type: 'base', mode: 'positive' };
 
-// Language Support
-const translations = {
-  en: {
-    tab_positive: "Positive Prompts",
-    tab_positive_short: "Pos",
-    tab_negative: "Negative Prompts",
-    tab_negative_short: "Neg",
-    status_ready: "Ready",
-    loading: "Connecting to NovelAI...",
-    input_placeholder: "Enter tag...",
-    btn_add: "Add",
-    settings_title: "Settings",
-    setting_preserve: "Keep Prompts Same on Enhance (img2img)",
-    setting_preserve_desc: "When checked, Enhance (img2img) temporarily disables wildcards, keeping prompts identical to the input image.",
-    setting_alt_autocomplete: "Enable Plugin Danbooru Autocomplete",
-    setting_alt_autocomplete_desc: "Use A1111 WebUI style autocomplete UI and logic.",
-    setting_trigger_keys: "Webpage Native Input Autocomplete Trigger Keys:",
-    setting_space: "Space",
-    setting_tab: "Tab",
-    status_linked: "Connection Normal",
-    btn_library: "Resource Center",
-    btn_settings: "Settings",
-    tag_help_tooltip: "Left-Click: Edit | Double-Click: Disable/Enable | Drag: Reorder",
-    setting_render_newlines: "Render Newline Separators",
-    setting_render_newlines_desc: "Show a dividing line when newline tags are encountered in the UI.",
-    btn_quick_wildcard: "Random Draw",
-    btn_quick_wildcard_short: "Rnd",
-    btn_quick_seq_wildcard: "Sequential Draw",
-    btn_quick_seq_wildcard_short: "Seq",
-    btn_quick_random: "Dynamic Draw",
-    btn_quick_random_short: "Dyn",
-    btn_add_char: "+ Add Character",
-    btn_add_char_short: "+ Char",
-    char_title: "Character Prompts",
-    char_title_short: "Characters",
-    btn_remove_char: "Remove Character",
-    dyn_min: "Min Picks",
-    dyn_max: "Max Picks",
-    dyn_sep: "Custom Separator",
-    btn_fav: "Favorite",
-    btn_copy: "Copy This Tag",
-    btn_dec_weight: "Decrease Weight",
-    btn_edit_weight: "Edit Weight",
-    btn_inc_weight: "Increase Weight",
-    btn_dec_dyn_weight: "Decrease Draw Probability",
-    btn_edit_dyn_weight: "Edit Draw Probability",
-    btn_inc_dyn_weight: "Increase Draw Probability",
-    btn_split: "Split into Independent Tags",
-    btn_merge: "Merge into Group",
-    btn_toggle: "Enable/Disable",
-    btn_del: "Delete",
-    res_sp: "Small Portrait",
-    res_sl: "Small Landscape",
-    res_ss: "Small Square",
-    res_np: "Normal Portrait",
-    res_nl: "Normal Landscape",
-    res_ns: "Normal Square",
-    res_lp: "Large Portrait",
-    res_ll: "Large Landscape",
-    res_ls: "Large Square",
-    res_custom: "Custom",
-    res_presets: "Presets",
-    res_seq: "Sequential",
-    res_rnd: "Random",
-    res_add_preset: "Add Preset",
-    res_selected_none: "None",
-    res_selected_none_short: "0",
-    res_selected_count: "[{n} Selected]",
-    res_selected_count_short: "[ {n} ]",
-    res_multi_trigger: "Multi-Resolution Settings",
-    btn_swap_res: "Swap Width/Height",
-    res_w: "W",
-    res_h: "H",
-    setting_hide_autoclicker: "Hide Count Bar",
-    setting_hide_autoclicker_desc: "Hide the auto-clicker status bar at the bottom.",
-    btn_history: "History & Favorites",
-    ac_mode_fixed_short: "Fixed",
-    ac_mode_on_image_short: "On Img",
-    ac_mode_fixed_title: "Fixed Interval",
-    ac_mode_on_image_title: "On Image",
-    btn_group_tags: "Group Tags",
-    btn_group_tags_short: "Groups",
-    btn_group_tags_title: "Open Group Tags Panel",
-    btn_add_to_group_tags: "Add to Group Tags",
-    group_tags_picker_title: "Add to Group Tags",
-    group_tags_picker_empty: "No Group Tags groups available. Create one first.",
-    group_tags_picker_expand: "Expand category",
-    group_tags_picker_collapse: "Collapse category",
-    group_tags_picker_duplicate: "Already exists in",
-    group_tags_picker_missing: "The selected Group Tags group no longer exists.",
-    group_tags_picker_added_prefix: "Added to",
-    toast_success: "Success",
-    toast_warning: "Notice",
-    toast_error: "Error",
-    toast_close: "Close notification",
-    group_tags_picker_close: "Close panel",
-    group_tags_picker_trans_placeholder: "Enter translation",
-    setting_storage_usage: "Storage Usage",
-    btn_toggle_char_prompts: "Toggle Character Prompts"
-  },
-  zh: {
-    tab_positive: "正向提示词",
-    tab_positive_short: "正",
-    tab_negative: "负向提示词",
-    tab_negative_short: "负",
-    status_ready: "就绪",
-    loading: "正在连接 NovelAI...",
-    input_placeholder: "输入tag...",
-    btn_add: "添加",
-    settings_title: "设置",
-    setting_preserve: "图生图(Enhance)时使用相同提示词",
-    setting_preserve_desc: "勾选此选项时,图生图(Enhance)时暂时禁用通配符功能,通配符固定使用与输入图像相同的提示词。",
-    setting_alt_autocomplete: "开启插件 Danbooru 自动补全",
-    setting_alt_autocomplete_desc: "使用A1111 WebUI 风格的补全UI与逻辑。",
-    setting_trigger_keys: "网页原生输入框自动补全触发按键:",
-    setting_space: "空格",
-    setting_tab: "Tab 键",
-    status_linked: "连接正常",
-    btn_library: "资源中心",
-    btn_settings: "设置",
-    tag_help_tooltip: "左键点击编辑 | 双击禁用/启用 | 拖动进行排序",
-    setting_render_newlines: "换行符渲染分隔线",
-    setting_render_newlines_desc: "在界面中遇到换行标签时显示分隔线。",
-    btn_quick_wildcard: "随机抽取",
-    btn_quick_wildcard_short: "随机",
-    btn_quick_seq_wildcard: "顺序抽取",
-    btn_quick_seq_wildcard_short: "顺序",
-    btn_quick_random: "动态抽取",
-    btn_quick_random_short: "动态",
-    btn_add_char: "+ 增加角色",
-    btn_add_char_short: "+ 角色",
-    char_title: "角色提示词",
-    char_title_short: "角色",
-    btn_remove_char: "删除角色",
-    dyn_min: "最小选取数",
-    dyn_max: "最大选取数",
-    dyn_sep: "自定义分隔符",
-    btn_fav: "收藏",
-    btn_copy: "复制此 Tag",
-    btn_dec_weight: "降低权重",
-    btn_edit_weight: "编辑权重",
-    btn_inc_weight: "增加权重",
-    btn_dec_dyn_weight: "降低被抽中概率",
-    btn_edit_dyn_weight: "编辑被抽中概率",
-    btn_inc_dyn_weight: "增加被抽中概率",
-    btn_split: "拆分为独立 Tag",
-    btn_merge: "合并为组合",
-    btn_toggle: "启用/禁用",
-    btn_del: "删除",
-    res_sp: "小型尺寸 (竖)",
-    res_sl: "小型尺寸 (横)",
-    res_ss: "小型尺寸 (方)",
-    res_np: "标准尺寸 (竖)",
-    res_nl: "标准尺寸 (横)",
-    res_ns: "标准尺寸 (方)",
-    res_lp: "大型尺寸 (竖)",
-    res_ll: "大型尺寸 (横)",
-    res_ls: "大型尺寸 (方)",
-    res_custom: "自定义",
-    res_presets: "预设分辨率",
-    res_seq: "顺序切换",
-    res_rnd: "随机切换",
-    res_add_preset: "添加预设",
-    res_selected_none: "未选择",
-    res_selected_none_short: "0",
-    res_selected_count: "[已选 {n} 项]",
-    res_selected_count_short: "[ {n} ]",
-    res_multi_trigger: "多选分辨率设置",
-    btn_swap_res: "交换宽高",
-    res_w: "宽",
-    res_h: "高",
-    setting_hide_autoclicker: "隐藏整个计数条",
-    setting_hide_autoclicker_desc: "隐藏页面底部的连点器状态条。",
-    btn_history: "历史与收藏",
-    ac_mode_fixed_short: "定时",
-    ac_mode_on_image_short: "看图",
-    ac_mode_fixed_title: "定时模式",
-    ac_mode_on_image_title: "出图后再点",
-    btn_group_tags: "分组标签",
-    btn_group_tags_short: "分组",
-    btn_group_tags_title: "打开分组标签面板",
-    btn_add_to_group_tags: "加入分组标签",
-    group_tags_picker_title: "加入分组标签",
-    group_tags_picker_empty: "当前没有可用的分组，请先在 Group Tags 中创建。",
-    group_tags_picker_expand: "展开分类",
-    group_tags_picker_collapse: "收起分类",
-    group_tags_picker_duplicate: "已存在于",
-    group_tags_picker_missing: "所选分组已不存在。",
-    group_tags_picker_added_prefix: "已加入",
-    toast_success: "成功",
-    toast_warning: "提示",
-    toast_error: "错误",
-    toast_close: "关闭通知",
-    group_tags_picker_close: "关闭面板",
-    group_tags_picker_trans_placeholder: "输入翻译",
-    setting_storage_usage: "存储空间占用",
-    btn_toggle_char_prompts: "切换角色提示词显示"
-  },
-  jp: {
-    tab_positive: "ポジティブプロンプト",
-    tab_positive_short: "ポジ",
-    tab_negative: "ネガティブプロンプト",
-    tab_negative_short: "ネガ",
-    status_ready: "準備完了",
-    loading: "NovelAIに接続中...",
-    input_placeholder: "タグを入力...",
-    btn_add: "追加",
-    settings_title: "設定",
-    setting_preserve: "Enhance(img2img)時に同じプロンプトを使用",
-    setting_preserve_desc: "有効にすると、Enhance(img2img)時にワイルドカードを一時無効にし、入力画像と全く同じプロンプトを使用します。",
-    setting_alt_autocomplete: "プラグインのDanbooru自動補完を有効化",
-    setting_alt_autocomplete_desc: "A1111 WebUIスタイルの自動補完UIとロジックを使用します。",
-    setting_trigger_keys: "Webページネイティブ入力の自動補完トリガーキー:",
-    setting_space: "スペース",
-    setting_tab: "Tabキー",
-    status_linked: "接続正常",
-    btn_library: "リソースセンター",
-    btn_settings: "設定",
-    tag_help_tooltip: "左クリック：編集 | ダブルクリック：無効/有効 | ドラッグ：並べ替え",
-    setting_render_newlines: "改行セパレーターを表示",
-    setting_render_newlines_desc: "UIで改行タグが検出された際に区切り線を表示します。",
-    btn_quick_wildcard: "ランダム抽出",
-    btn_quick_wildcard_short: "乱",
-    btn_quick_seq_wildcard: "順次抽出",
-    btn_quick_seq_wildcard_short: "順",
-    btn_quick_random: "ダイナミック抽出",
-    btn_quick_random_short: "動",
-    btn_add_char: "+ キャラクター追加",
-    btn_add_char_short: "+ キャラ",
-    char_title: "キャラクタープロンプト",
-    char_title_short: "キャラ",
-    btn_remove_char: "キャラクターを削除",
-    dyn_min: "最小抽出数",
-    dyn_max: "最大抽出数",
-    dyn_sep: "カスタム区切り文字",
-    btn_fav: "お気に入り",
-    btn_copy: "このタグをコピー",
-    btn_dec_weight: "重みを下げる",
-    btn_edit_weight: "重みを編集",
-    btn_inc_weight: "重みを上げる",
-    btn_dec_dyn_weight: "抽選確率を下げる",
-    btn_edit_dyn_weight: "抽選確率を編集",
-    btn_inc_dyn_weight: "抽選確率を上げる",
-    btn_split: "独立したタグに分割",
-    btn_merge: "グループとして結合",
-    btn_toggle: "有効化/無効化",
-    btn_del: "削除",
-    res_sp: "スモール (縦)",
-    res_sl: "スモール (横)",
-    res_ss: "スモール (正方形)",
-    res_np: "ノーマル (縦)",
-    res_nl: "ノーマル (横)",
-    res_ns: "ノーマル (正方形)",
-    res_lp: "ラージ (縦)",
-    res_ll: "ラージ (横)",
-    res_ls: "ラージ (正方形)",
-    res_custom: "カスタム",
-    res_presets: "プリセット",
-    res_seq: "順次",
-    res_rnd: "ランダム",
-    res_add_preset: "プリセットを追加",
-    res_selected_none: "未選択",
-    res_selected_none_short: "0",
-    res_selected_count: "[{n}件 選択中]",
-    res_selected_count_short: "[ {n} ]",
-    res_multi_trigger: "多解像度設定",
-    btn_swap_res: "幅と高さを入れ替え",
-    res_w: "幅",
-    res_h: "高",
-    setting_hide_autoclicker: "カウントバーを隠す",
-    setting_hide_autoclicker_desc: "ページ下部のオートクリッカーバーを非表示にします。",
-    btn_history: "履歴とお気に入り",
-    ac_mode_fixed_short: "固定",
-    ac_mode_on_image_short: "画像後",
-    ac_mode_fixed_title: "固定間隔",
-    ac_mode_on_image_title: "画像生成後",
-    btn_group_tags: "グループタグ",
-    btn_group_tags_short: "グループ",
-    btn_group_tags_title: "グループタグパネルを開く",
-    btn_add_to_group_tags: "グループタグに追加",
-    group_tags_picker_title: "グループタグに追加",
-    group_tags_picker_empty: "利用可能なグループがありません。先に Group Tags で作成してください。",
-    group_tags_picker_expand: "カテゴリを展開",
-    group_tags_picker_collapse: "カテゴリを折りたたむ",
-    group_tags_picker_duplicate: "既に存在",
-    group_tags_picker_missing: "選択したグループは既に存在しません。",
-    group_tags_picker_added_prefix: "追加先",
-    toast_success: "成功",
-    toast_warning: "案内",
-    toast_error: "エラー",
-    toast_close: "通知を閉じる",
-    group_tags_picker_close: "パネルを閉じる",
-    setting_storage_usage: "ストレージ使用量",
-    btn_toggle_char_prompts: "キャラクタープロンプトの表示切替"
-  }
-};
-
-let currentLang = 'en';
+let currentLang = DEFAULT_LANG;
 
 let hasReceivedInitialChars = false;
 
@@ -368,13 +72,11 @@ function cloneGroupTagsData(data) {
 }
 
 function getPopupDict() {
-  return translations[currentLang] || translations.en;
+  return getI18nDict(currentLang, 'popup');
 }
 
 function getLocalizedText(key, fallback = '') {
-  const dict = getPopupDict();
-  const fallbackDict = translations.en || {};
-  return dict[key] || fallbackDict[key] || fallback;
+  return getI18nText(currentLang, 'popup', key, fallback);
 }
 
 function escapeHtml(text) {
@@ -459,7 +161,7 @@ function showPopupToast(type, message) {
   toastEl.className = `popup-toast ${type}`;
 
   const closeBtnHtml = type === 'error'
-    ? `<button type="button" class="popup-toast-close" aria-label="${getLocalizedText('toast_close', 'Close notification')}">×</button>`
+    ? `<button type="button" class="popup-toast-close" aria-label="${getLocalizedText('toast_close')}">×</button>`
     : '';
 
   toastEl.innerHTML = `
@@ -629,7 +331,7 @@ function updateGroupTagsPickerStaticText() {
   const titleEl = document.getElementById('group-tags-picker-title');
   const closeBtn = document.getElementById('group-tags-picker-close');
   if (titleEl) titleEl.textContent = getLocalizedText('group_tags_picker_title', getAddToGroupTagsText());
-  if (closeBtn) closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close', 'Close panel'));
+  if (closeBtn) closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
 }
 
 function closeGroupTagsPicker(selection = null) {
@@ -698,7 +400,7 @@ function renderPickerTagContent(tagData) {
         
         let displayVal = fieldName === 'en' ? toDisplayGroupTagText(newVal) : newVal;
         if (!displayVal) {
-          displayVal = fieldName === 'en' ? '...' : getLocalizedText('group_tags_picker_trans_placeholder', '输入翻译');
+          displayVal = fieldName === 'en' ? '...' : getLocalizedText('group_tags_picker_trans_placeholder');
         }
         textEl.textContent = displayVal;
         
@@ -741,14 +443,14 @@ function renderPickerTagContent(tagData) {
 
   // 右侧：中文翻译 (可击穿编辑)
   // 如果当前没翻译，也填充给个底子使得它能被点到
-  const zhSpan = createEditableText(zh || getLocalizedText('group_tags_picker_trans_placeholder', '输入翻译'), 'group-tags-picker-tag-zh', 'zh');
+  const zhSpan = createEditableText(zh || getLocalizedText('group_tags_picker_trans_placeholder'), 'group-tags-picker-tag-zh', 'zh');
   container.appendChild(zhSpan);
 
   // 极简关闭按钮插在最右端
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'group-tags-picker-tag-close';
-  closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close', 'Close'));
+  closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
   closeBtn.innerHTML = '×';
   closeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -780,7 +482,7 @@ function renderGroupTagsPickerList(tagData, groupTagsData) {
   if (!hasGroups) {
     const emptyEl = document.createElement('div');
     emptyEl.className = 'group-tags-picker-empty';
-    emptyEl.textContent = getLocalizedText('group_tags_picker_empty', 'No Group Tags groups available. Create one first.');
+    emptyEl.textContent = getLocalizedText('group_tags_picker_empty');
     listEl.appendChild(emptyEl);
     return;
   }
@@ -793,7 +495,7 @@ function renderGroupTagsPickerList(tagData, groupTagsData) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `group-tags-picker-tab-btn ${groupTagsPickerState.activeCategoryId === category.id ? 'active' : ''}`;
-    btn.textContent = category.name || category.id || 'Category';
+    btn.textContent = category.name || category.id || getLocalizedText('group_tags_picker_category');
     btn.addEventListener('click', () => {
       setPickerCategory(category.id);
       renderGroupTagsPickerList(tagData, groupTagsData);
@@ -814,7 +516,7 @@ function renderGroupTagsPickerList(tagData, groupTagsData) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'group-tags-picker-group-btn';
-      button.textContent = group.name || group.id || 'Group';
+      button.textContent = group.name || group.id || getLocalizedText('group_tags_picker_group');
       button.addEventListener('click', () => {
         // 在正式加入前，确保所有的 input focus 已经被保存同步到了 tagData
         // 因为 activeElement blur 存在时间差，这里直接读取最新的 state 作为最终值返回
@@ -890,7 +592,7 @@ async function addTagToGroupTags(tagData) {
   const existingLocation = findExistingGroupTagLocation(effectiveData, canonicalEn);
   if (existingLocation) {
     // 全局唯一：同一个 tag 不允许再加入别的分组，否则颜色/翻译会变成顺序相关
-    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(existingLocation)}`);
+    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate')}: ${formatGroupTagLocation(existingLocation)}`);
     return;
   }
 
@@ -909,7 +611,7 @@ async function addTagToGroupTags(tagData) {
   if (!finalEn) return; 
   const latestExistingLocation = findExistingGroupTagLocation(latestData, finalEn);
   if (latestExistingLocation) {
-    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate', 'Already exists in')}: ${formatGroupTagLocation(latestExistingLocation)}`);
+    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate')}: ${formatGroupTagLocation(latestExistingLocation)}`);
     return;
   }
 
@@ -917,7 +619,7 @@ async function addTagToGroupTags(tagData) {
   const targetGroup = targetCategory?.groups?.find(group => group.id === selection.groupId);
   if (!targetGroup) {
     // 用户打开弹窗后，目标分组可能已被别的入口删除
-    showPopupToast('error', getLocalizedText('group_tags_picker_missing', 'The selected Group Tags group no longer exists.'));
+    showPopupToast('error', getLocalizedText('group_tags_picker_missing'));
     return;
   }
 
@@ -932,7 +634,7 @@ async function addTagToGroupTags(tagData) {
   
   const locationName = `${targetCategory.name} > ${targetGroup.name}`;
   const displayTag = toDisplayGroupTagText(finalEn);
-  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix', 'Added')}: ${displayTag} -> ${locationName}`);
+  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix')}: ${displayTag} -> ${locationName}`);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1104,7 +806,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const deleteBtn = clone.querySelector('.char-delete');
 
   // Apply translations directly to the new clone components
-  const dict = translations[currentLang] || translations.en;
+  const dict = getPopupDict();
   const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
 
   if(btnAdd && dict[getKey('btn_add')]) btnAdd.textContent = dict[getKey('btn_add')];
@@ -1375,11 +1077,11 @@ function initUI() {
     chrome.storage.local.set({ multiResConfig: config });
     
     // 更新触发按钮的文本
-    const dict = translations[currentLang] || translations.en;
+    const dict = getPopupDict();
     const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
 
     if (multiResActive.length === 0) {
-      resTrigger.textContent = (dict[getKey('res_selected_none')] || 'None') + ' ⏷';
+      resTrigger.textContent = getLocalizedText(getKey('res_selected_none')) + ' ⏷';
     } else if (multiResActive.length === 1) {
       resTrigger.textContent = multiResActive[0].replace('x', ' × ') + ' ⏷';
       // 单选时：同步网页 UI（用户预期看到该比例）
@@ -1388,7 +1090,7 @@ function initUI() {
       sendResolutionUpdate(parseInt(w), parseInt(h));
     } else {
       // 多选时：仅更新按钮文字，不触碰网页 UI
-      const t = dict[getKey('res_selected_count')] || '[{n} Selected]';
+      const t = getLocalizedText(getKey('res_selected_count'));
       resTrigger.textContent = t.replace('{n}', multiResActive.length) + ' ⏷';
     }
   }
@@ -1427,7 +1129,7 @@ function initUI() {
         const delBtn = document.createElement('button');
         delBtn.className = 'res-list-del';
         delBtn.textContent = '×';
-        delBtn.title = 'Delete';
+        delBtn.title = getLocalizedText('btn_del');
         delBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           multiResAll = multiResAll.filter(r => r !== res);
@@ -1528,9 +1230,11 @@ function initUI() {
     }
     
     // Ensure properly synced state for trigger visual
-    if (multiResActive.length === 0) resTrigger.textContent = 'None ⏷';
+    const noneLabel = getLocalizedText('res_selected_none');
+    const selectedLabel = getLocalizedText('res_selected_count').replace('{n}', multiResActive.length);
+    if (multiResActive.length === 0) resTrigger.textContent = `${noneLabel} ⏷`;
     else if (multiResActive.length === 1) resTrigger.textContent = multiResActive[0].replace('x', ' × ') + ' ⏷';
-    else resTrigger.textContent = `[${multiResActive.length} Selected] ⏷`;
+    else resTrigger.textContent = `${selectedLabel} ⏷`;
   });
 
   // Tabs
@@ -1542,7 +1246,7 @@ function initUI() {
 
   // Editor
   const container = document.getElementById('editor-container');
-  const dict = translations[currentLang] || translations.en;
+  const dict = getPopupDict();
   editor = new TagEditor(container, {
     dict: dict,
     onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
@@ -1764,7 +1468,7 @@ function initUI() {
 
   const applyTranslations = (lang) => {
     currentLang = lang;
-    const dict = translations[lang] || translations.en;
+    const dict = getI18nDict(lang, 'popup');
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const baseKey = el.getAttribute('data-i18n');
       const key = (isShortMode && dict[baseKey + '_short']) ? baseKey + '_short' : baseKey;
@@ -1811,12 +1515,12 @@ function initUI() {
     });
 
     // Handle button active state
-    ['btn-en', 'btn-jp', 'btn-zh'].forEach(id => {
+    ['btn-zh', 'btn-en', 'btn-jp'].forEach(id => {
       const btn = document.getElementById(id);
       if (btn) btn.classList.toggle('active', id === `btn-${lang}`);
     });
 
-    const fallback = translations.en || {};
+    const fallback = getI18nDict(DEFAULT_LANG, 'popup');
     const acI18n = {
       fixedShort: dict.ac_mode_fixed_short || fallback.ac_mode_fixed_short || 'Fixed',
       onImageShort: dict.ac_mode_on_image_short || fallback.ac_mode_on_image_short || 'On Img',
@@ -1850,9 +1554,9 @@ function initUI() {
 
   // Language Toggle
   const langBtns = {
+    'btn-zh': 'zh',
     'btn-en': 'en',
-    'btn-jp': 'jp',
-    'btn-zh': 'zh'
+    'btn-jp': 'jp'
   };
   Object.keys(langBtns).forEach(id => {
     document.getElementById(id).addEventListener('click', () => {
@@ -1867,7 +1571,7 @@ function initUI() {
     } else {
       // 首次加载，获取浏览器语言
       const browserLang = navigator.language || navigator.userLanguage || 'en';
-      let defaultLang = 'en';
+      let defaultLang = DEFAULT_LANG;
       if (browserLang.toLowerCase().startsWith('zh')) {
         defaultLang = 'zh';
       } else if (browserLang.toLowerCase().startsWith('ja')) {
