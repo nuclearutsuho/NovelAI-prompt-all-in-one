@@ -55,8 +55,5 @@
   ],
   "background": {
     "service_worker": "background.js"
-  },
-  "action": {
-    "default_popup": "pages/popup.html"
   }
 }
