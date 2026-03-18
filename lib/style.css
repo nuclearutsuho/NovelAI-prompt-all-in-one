@@ -129,7 +129,16 @@
     border-color: rgba(45, 212, 191, 0.6);
 }
 
-.tag-item.tag-ai-pending .tag-controls > :not(.tbtn-del) {
+.tag-capsule.tag-ai-pending-failed {
+    background: linear-gradient(135deg, #3f1d2e 0%, #7f1d1d 100%);
+    border-color: rgba(248, 113, 113, 0.65);
+}
+
+.tag-item.tag-ai-pending .tag-controls > :not(.tbtn-del):not(.tbtn-retry) {
+    display: none;
+}
+
+.tag-item.tag-ai-pending:not(.tag-ai-pending-failed) .tbtn-retry {
     display: none;
 }
 

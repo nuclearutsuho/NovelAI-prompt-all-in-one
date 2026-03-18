@@ -55,6 +55,7 @@ const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
   systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
 });
 let aiPendingVisualTimer = null;
+const aiPendingRequestMap = new Map();
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
@@ -88,6 +89,14 @@ function isPendingAiTag(tag = {}) {
   return !!tag?.aiPending;
 }
 
+function isFailedPendingAiTag(tag = {}) {
+  return isPendingAiTag(tag) && !!tag?.aiPendingFailed;
+}
+
+function isActivePendingAiTag(tag = {}) {
+  return isPendingAiTag(tag) && !isFailedPendingAiTag(tag);
+}
+
 function getSyncableTagList(tags = []) {
   return (tags || []).filter((tag) => !isPendingAiTag(tag));
 }
@@ -95,6 +104,92 @@ function getSyncableTagList(tags = []) {
 function serializeTagList(tags = [], { includePending = false } = {}) {
   const tagList = includePending ? (tags || []) : getSyncableTagList(tags);
   return tagList.map(normalizeTagObject).filter(Boolean);
+}
+
+function createAiPendingRequestId() {
+  return `ai_pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getAiPendingRequestId(value) {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  return String(value?.aiPendingRequestId || '').trim();
+}
+
+function registerAiPendingRequest(requestId, meta = {}) {
+  if (!requestId) return null;
+  const state = {
+    requestId,
+    controller: null,
+    canceled: false,
+    cancelReason: '',
+    ...meta
+  };
+  aiPendingRequestMap.set(requestId, state);
+  return state;
+}
+
+function getAiPendingRequestState(requestId) {
+  if (!requestId) return null;
+  return aiPendingRequestMap.get(requestId) || null;
+}
+
+function setAiPendingRequestController(requestId, controller) {
+  const state = getAiPendingRequestState(requestId);
+  if (!state) return;
+  state.controller = controller || null;
+  if (state.canceled && controller && !controller.signal.aborted) {
+    controller.abort();
+  }
+}
+
+function isAiPendingRequestCanceled(requestId) {
+  return !!getAiPendingRequestState(requestId)?.canceled;
+}
+
+function cancelAiPendingRequest(requestId, reason = 'user') {
+  const state = getAiPendingRequestState(requestId);
+  if (!state) return false;
+  state.canceled = true;
+  state.cancelReason = reason;
+  if (state.controller && !state.controller.signal.aborted) {
+    state.controller.abort();
+  }
+  return true;
+}
+
+function cleanupAiPendingRequest(requestId) {
+  if (!requestId) return;
+  aiPendingRequestMap.delete(requestId);
+}
+
+function findPendingAiTagIndex(tagList = [], pendingTagOrRequestId) {
+  const requestId = getAiPendingRequestId(pendingTagOrRequestId);
+  if (requestId) {
+    return tagList.findIndex((tag) => isPendingAiTag(tag) && getAiPendingRequestId(tag) === requestId);
+  }
+  if (!pendingTagOrRequestId) return -1;
+  return tagList.indexOf(pendingTagOrRequestId);
+}
+
+function preservePendingAiTags(oldTags = [], newTags = []) {
+  const merged = Array.isArray(newTags) ? newTags.slice() : [];
+  const pendingEntries = (oldTags || [])
+    .map((tag, index) => ({ tag, index, requestId: getAiPendingRequestId(tag) }))
+    .filter(({ tag }) => isPendingAiTag(tag));
+
+  if (!pendingEntries.length) return merged;
+
+  pendingEntries.forEach(({ tag, index, requestId }) => {
+    if (requestId && merged.some((item) => getAiPendingRequestId(item) === requestId)) {
+      return;
+    }
+    const insertIndex = Math.max(0, Math.min(index, merged.length));
+    merged.splice(insertIndex, 0, tag);
+  });
+
+  return merged;
 }
 
 function getIncomingTagList(incomingTags, promptText = '') {
@@ -431,17 +526,17 @@ function setAiTranslateButtonLoading(button, isLoading) {
   button.classList.toggle('is-loading', nextCount > 0);
 }
 
-function hasPendingAiTags(tags = []) {
-  return (tags || []).some((tag) => isPendingAiTag(tag));
+function hasPendingAiTags(tags = [], { activeOnly = false } = {}) {
+  return (tags || []).some((tag) => (activeOnly ? isActivePendingAiTag(tag) : isPendingAiTag(tag)));
 }
 
-function hasAnyPendingAiTags() {
-  if (hasPendingAiTags(positiveTags) || hasPendingAiTags(negativeTags)) {
+function hasAnyPendingAiTags({ activeOnly = false } = {}) {
+  if (hasPendingAiTags(positiveTags, { activeOnly }) || hasPendingAiTags(negativeTags, { activeOnly })) {
     return true;
   }
 
   return (characterPromptsData || []).some((character) => (
-    hasPendingAiTags(character?.posTags || []) || hasPendingAiTags(character?.negTags || [])
+    hasPendingAiTags(character?.posTags || [], { activeOnly }) || hasPendingAiTags(character?.negTags || [], { activeOnly })
   ));
 }
 
@@ -452,8 +547,25 @@ function refreshPendingAiVisuals() {
   });
 }
 
+function cancelPendingAiRequestsInTags(tags = [], reason = 'user') {
+  let canceledAny = false;
+  (tags || []).forEach((tag) => {
+    const requestId = getAiPendingRequestId(tag);
+    if (!requestId) return;
+    canceledAny = cancelAiPendingRequest(requestId, reason) || canceledAny;
+  });
+  return canceledAny;
+}
+
+function handleRemovedPendingAiTags(removedTags = []) {
+  const canceledAny = cancelPendingAiRequestsInTags(removedTags, 'user');
+  if (canceledAny) {
+    syncPendingAiVisualTimer();
+  }
+}
+
 function syncPendingAiVisualTimer() {
-  if (!hasAnyPendingAiTags()) {
+  if (!hasAnyPendingAiTags({ activeOnly: true })) {
     if (aiPendingVisualTimer !== null) {
       window.clearInterval(aiPendingVisualTimer);
       aiPendingVisualTimer = null;
@@ -465,7 +577,7 @@ function syncPendingAiVisualTimer() {
 
   if (aiPendingVisualTimer !== null) return;
   aiPendingVisualTimer = window.setInterval(() => {
-    if (!hasAnyPendingAiTags()) {
+    if (!hasAnyPendingAiTags({ activeOnly: true })) {
       window.clearInterval(aiPendingVisualTimer);
       aiPendingVisualTimer = null;
       return;
@@ -529,14 +641,38 @@ function renderAiTargetIfVisible(targetContext) {
   }
 }
 
-function removePendingAiTag(targetContext, pendingTag) {
+function removePendingAiTag(targetContext, pendingTagOrRequestId, { cancelRequest = false, reason = 'user' } = {}) {
   const tagList = getAiTargetTagList(targetContext);
-  if (!tagList || !pendingTag) return false;
+  const requestId = getAiPendingRequestId(pendingTagOrRequestId);
+  if (cancelRequest && requestId) {
+    cancelAiPendingRequest(requestId, reason);
+  }
+  if (!tagList || !pendingTagOrRequestId) return false;
 
-  const pendingIndex = tagList.indexOf(pendingTag);
+  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
   if (pendingIndex === -1) return false;
 
   tagList.splice(pendingIndex, 1);
+  renderAiTargetIfVisible(targetContext);
+  syncPendingAiVisualTimer();
+  return true;
+}
+
+function restartPendingAiTag(targetContext, pendingTagOrRequestId, requestId) {
+  const tagList = getAiTargetTagList(targetContext);
+  if (!tagList || !pendingTagOrRequestId || !requestId) return false;
+
+  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+  if (pendingIndex === -1) return false;
+
+  const pendingTag = tagList[pendingIndex];
+  pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
+  pendingTag.aiPending = true;
+  pendingTag.aiPendingStartedAt = Date.now();
+  pendingTag.aiPendingRequestId = requestId;
+  delete pendingTag.aiPendingFailed;
+  delete pendingTag.aiPendingErrorMessage;
+
   renderAiTargetIfVisible(targetContext);
   syncPendingAiVisualTimer();
   return true;
@@ -570,28 +706,43 @@ function syncAiTargetAfterResolve(targetContext, source = 'popup') {
   syncCharactersToPage(source);
 }
 
-function resolvePendingAiTag(targetContext, pendingTag, translatedText) {
+function resolvePendingAiTag(targetContext, pendingTagOrRequestId, translatedText) {
   const tagList = getAiTargetTagList(targetContext);
-  if (!tagList || !pendingTag) return false;
+  if (!tagList || !pendingTagOrRequestId) return false;
 
-  const pendingIndex = tagList.indexOf(pendingTag);
+  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
   if (pendingIndex === -1) return false;
 
   const resolvedTag = tagList[pendingIndex];
   resolvedTag.value = translatedText;
   delete resolvedTag.aiPending;
+  delete resolvedTag.aiPendingFailed;
+  delete resolvedTag.aiPendingErrorMessage;
   delete resolvedTag.aiPendingStartedAt;
+  delete resolvedTag.aiPendingRequestId;
 
   syncPendingAiVisualTimer();
   syncAiTargetAfterResolve(targetContext, 'popup');
   return true;
 }
 
-function restoreAiSourceToInput(inputEl, sourceText) {
-  if (!inputEl) return;
-  if (String(inputEl.value || '').trim()) return;
-  inputEl.value = sourceText;
-  inputEl.focus();
+function markPendingAiTagFailed(targetContext, pendingTagOrRequestId, errorMessage = '') {
+  const tagList = getAiTargetTagList(targetContext);
+  if (!tagList || !pendingTagOrRequestId) return false;
+
+  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+  if (pendingIndex === -1) return false;
+
+  const pendingTag = tagList[pendingIndex];
+  pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
+  pendingTag.aiPending = true;
+  pendingTag.aiPendingFailed = true;
+  pendingTag.aiPendingErrorMessage = String(errorMessage || '').trim();
+  delete pendingTag.aiPendingStartedAt;
+
+  renderAiTargetIfVisible(targetContext);
+  syncPendingAiVisualTimer();
+  return true;
 }
 
 function getOriginPatternFromApiUrl(apiUrl) {
@@ -637,9 +788,9 @@ function extractTranslatedText(responseJson) {
   return '';
 }
 
-async function aiTranslateText(sourceText, profile) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
+async function aiTranslateText(sourceText, profile, { controller = null } = {}) {
+  const requestController = controller || new AbortController();
+  const timer = window.setTimeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
 
   try {
     const headers = {
@@ -653,7 +804,7 @@ async function aiTranslateText(sourceText, profile) {
     const response = await fetch(profile.apiUrl, {
       method: 'POST',
       headers,
-      signal: controller.signal,
+      signal: requestController.signal,
       body: JSON.stringify({
         model: profile.model,
         messages: [
@@ -769,10 +920,11 @@ function formatAiTranslateError(error) {
   return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
 }
 
-async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext }) {
+async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null }) {
   if (!tagEditor) return;
 
-  const sourceText = String(inputEl?.value || '').trim();
+  const retrySourceText = String(pendingTag?.aiOriginal || '').trim();
+  const sourceText = pendingTag ? retrySourceText : String(inputEl?.value || '').trim();
   if (!sourceText) {
     showPopupToast('warning', getLocalizedText('toast_ai_missing_input', 'Enter text before translating.'));
     return;
@@ -810,19 +962,41 @@ async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollCon
 
   const target = normalizeAiTargetContext(targetContext);
   if (!target) return;
+  const requestId = createAiPendingRequestId();
+  registerAiPendingRequest(requestId, {
+    targetType: target.type,
+    targetMode: target.mode,
+    charIndex: target.type === 'character' ? target.charIndex : -1,
+    sourceText
+  });
 
   // 先插入本地占位 tag，让输入框立刻释放出来；翻译返回后再回填真正英文。
-  const pendingTag = tagEditor.addTag({
-    value: AI_PENDING_PLACEHOLDER_VALUE,
-    aiOriginal: sourceText,
-    aiPending: true,
-    aiPendingStartedAt: Date.now()
-  });
-  if (!pendingTag) return;
+  let activePendingTag = pendingTag;
+  // 新翻译直接插入占位胶囊；重试则复用原来的失败胶囊，避免原文丢失或位置变化。
+  activePendingTag = pendingTag;
+  if (activePendingTag) {
+    const restarted = restartPendingAiTag(target, activePendingTag, requestId);
+    if (!restarted) {
+      cleanupAiPendingRequest(requestId);
+      return;
+    }
+  } else {
+    activePendingTag = tagEditor.addTag({
+      value: AI_PENDING_PLACEHOLDER_VALUE,
+      aiOriginal: sourceText,
+      aiPending: true,
+      aiPendingStartedAt: Date.now(),
+      aiPendingRequestId: requestId
+    });
+    if (!activePendingTag) {
+      cleanupAiPendingRequest(requestId);
+      return;
+    }
 
-  if (inputEl) {
-    inputEl.value = '';
-    inputEl.focus();
+    if (inputEl) {
+      inputEl.value = '';
+      inputEl.focus();
+    }
   }
 
   if (scrollContainer) {
@@ -832,28 +1006,43 @@ async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollCon
   syncPendingAiVisualTimer();
 
   const granted = await ensureAiApiPermission(profile.apiUrl);
+  if (isAiPendingRequestCanceled(requestId)) {
+    cleanupAiPendingRequest(requestId);
+    syncPendingAiVisualTimer();
+    return;
+  }
   if (!granted) {
-    removePendingAiTag(target, pendingTag);
-    restoreAiSourceToInput(inputEl, sourceText);
-    showPopupToast('warning', getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.'));
+    const message = getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.');
+    markPendingAiTagFailed(target, requestId, message);
+    cleanupAiPendingRequest(requestId);
+    showPopupToast('warning', message);
     return;
   }
 
   setAiTranslateButtonLoading(buttonEl, true);
   try {
-    const translatedText = await aiTranslateText(sourceText, profile);
-    const replaced = resolvePendingAiTag(target, pendingTag, translatedText);
+    const controller = new AbortController();
+    setAiPendingRequestController(requestId, controller);
+    const translatedText = await aiTranslateText(sourceText, profile, { controller });
+    if (isAiPendingRequestCanceled(requestId)) {
+      return;
+    }
+    const replaced = resolvePendingAiTag(target, requestId, translatedText);
     if (!replaced) return;
 
     if (scrollContainer) {
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
     }
   } catch (error) {
+    if (isAiPendingRequestCanceled(requestId)) {
+      return;
+    }
+    const errorMessage = formatAiTranslateError(error);
     console.error('[AI Translate] 翻译失败:', error);
-    removePendingAiTag(target, pendingTag);
-    restoreAiSourceToInput(inputEl, sourceText);
-    showPopupToast('error', formatAiTranslateError(error));
+    markPendingAiTagFailed(target, requestId, errorMessage);
+    showPopupToast('error', errorMessage);
   } finally {
+    cleanupAiPendingRequest(requestId);
     setAiTranslateButtonLoading(buttonEl, false);
     syncPendingAiVisualTimer();
   }
@@ -1604,6 +1793,9 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Set up Delete
   deleteBtn.addEventListener('click', () => {
+    cancelPendingAiRequestsInTags(characterPromptsData[index]?.posTags || [], 'target-removed');
+    cancelPendingAiRequestsInTags(characterPromptsData[index]?.negTags || [], 'target-removed');
+    syncPendingAiVisualTimer();
     characterPromptsData.splice(index, 1);
     const editorObj = charEditors[index];
     if (editorObj && editorObj.editor && typeof editorObj.editor.destroy === 'function') {
@@ -1617,6 +1809,18 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   // Set up Editor
   const charEditor = new TagEditor(editorContainer, {
     dict: dict, // Pass localization dict down to TagEditor
+    onRemoveTags: handleRemovedPendingAiTags,
+    onRetryPendingTag: (tag) => handleAiTranslateAction({
+      buttonEl: btnAiTranslate,
+      tagEditor: charEditor,
+      scrollContainer: editorContainer,
+      targetContext: {
+        type: 'character',
+        charIndex: index,
+        mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+      },
+      pendingTag: tag
+    }),
     onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
@@ -2026,6 +2230,17 @@ function initUI() {
   const dict = getPopupDict();
   editor = new TagEditor(container, {
     dict: dict,
+    onRemoveTags: handleRemovedPendingAiTags,
+    onRetryPendingTag: (tag) => handleAiTranslateAction({
+      buttonEl: btnAiTranslate,
+      tagEditor: editor,
+      scrollContainer: container,
+      targetContext: {
+        type: 'base',
+        mode: currentMode
+      },
+      pendingTag: tag
+    }),
     onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
     onChange: (tags) => {
       // 检测是否为结构性变更（tag 数量变化 = 增删操作）
@@ -2861,16 +3076,16 @@ function initCommunication() {
           const parsedPosTags = getIncomingTagList(incomingPositiveTags, rawPositive);
           // 这里通过 mergeTagsPreservingDisabled() 能巧妙地将新入的数据与我们在启动期缝合的“完整带disabled态字典”比对！从而将 disabled 的 Tag 存留！
           positiveTags = Array.isArray(incomingPositiveTags)
-            ? parsedPosTags
-            : mergeTagsPreservingDisabled(positiveTags, parsedPosTags);
+            ? preservePendingAiTags(positiveTags, parsedPosTags)
+            : preservePendingAiTags(positiveTags, mergeTagsPreservingDisabled(positiveTags, parsedPosTags));
       }
 
       if (shouldUpdateNeg) {
           rawNegative = negative || '';
           const parsedNegTags = getIncomingTagList(incomingNegativeTags, rawNegative);
           negativeTags = Array.isArray(incomingNegativeTags)
-            ? parsedNegTags
-            : mergeTagsPreservingDisabled(negativeTags, parsedNegTags);
+            ? preservePendingAiTags(negativeTags, parsedNegTags)
+            : preservePendingAiTags(negativeTags, mergeTagsPreservingDisabled(negativeTags, parsedNegTags));
       }
 
       if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
@@ -2893,6 +3108,11 @@ function initCommunication() {
           uiNeedsRebuild = true;
           // Trim removed characters from memory instantly
           if (characterPromptsData.length > charPrompts.length) {
+              characterPromptsData.slice(charPrompts.length).forEach((character) => {
+                  cancelPendingAiRequestsInTags(character?.posTags || [], 'target-removed');
+                  cancelPendingAiRequestsInTags(character?.negTags || [], 'target-removed');
+              });
+              syncPendingAiVisualTimer();
               characterPromptsData.length = charPrompts.length;
               charEditors.length = charPrompts.length;
           }
@@ -2949,8 +3169,8 @@ function initCommunication() {
           if (shouldUpdatePos || charObj.posPrompt === undefined) {
               const parsedPosTags = getIncomingTagList(c.positiveTags, c.positive || '');
               newPosTags = Array.isArray(c.positiveTags)
-                ? parsedPosTags
-                : mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags);
+                ? preservePendingAiTags(charObj.posTags || [], parsedPosTags)
+                : preservePendingAiTags(charObj.posTags || [], mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags));
               charObj.posPrompt = c.positive || '';
               charObj.posTags = newPosTags;
           }
@@ -2958,8 +3178,8 @@ function initCommunication() {
           if (shouldUpdateNeg || charObj.negPrompt === undefined) {
               const parsedNegTags = getIncomingTagList(c.negativeTags, c.negative || '');
               newNegTags = Array.isArray(c.negativeTags)
-                ? parsedNegTags
-                : mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags);
+                ? preservePendingAiTags(charObj.negTags || [], parsedNegTags)
+                : preservePendingAiTags(charObj.negTags || [], mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags));
               charObj.negPrompt = c.negative || '';
               charObj.negTags = newNegTags;
           }
