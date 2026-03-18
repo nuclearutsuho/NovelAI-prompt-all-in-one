@@ -3,6 +3,7 @@ import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
 import createAiTranslateController from './popup/ai-translate-controller.js';
+import createPromptSyncController from './popup/prompt-sync-controller.js';
 
 let editor;
 let autocomplete;
@@ -41,8 +42,7 @@ let activeEditorTarget = { type: 'base', mode: 'positive' };
 
 let currentLang = DEFAULT_LANG;
 let aiTranslateController = null;
-
-let hasReceivedInitialChars = false;
+let promptSyncController = null;
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
@@ -95,16 +95,16 @@ function preservePendingAiTags(oldTags = [], newTags = []) {
   return Array.isArray(newTags) ? newTags.slice() : [];
 }
 
-function getIncomingTagList(incomingTags, promptText = '') {
-  if (Array.isArray(incomingTags)) {
-    return serializeTagList(incomingTags);
-  }
-  return parsePromptToTags(promptText || '');
-}
-
 // 首次回读网页时，如果 prompt 文本没变且本地已有更完整的结构化 tag，
 // 就保留本地状态，避免刷新页面后把 AI 原文和单胶囊结构冲掉。
-function shouldApplyIncomingPromptState({ isFirstTime = false, incomingPrompt, incomingTags, currentPrompt = '', currentTags = [] }) {
+function shouldApplyIncomingPromptState({
+  isFirstTime = false,
+  incomingPrompt,
+  incomingTags,
+  currentPrompt = '',
+  currentTags = [],
+  pendingInitialPromptRetries = 0
+}) {
   if (incomingPrompt === undefined) return false;
 
   // 刷新后的启动窗口期里，网页可能只恢复了一半字段。
@@ -319,24 +319,66 @@ function showPopupToast(type, message) {
   }, meta.duration);
 }
 
-function buildPromptSyncPayload() {
+function getBasePromptSyncState() {
   return {
-    positive: tagsToString(positiveTags),
-    negative: tagsToString(negativeTags),
-    positiveTags: serializeTagList(positiveTags),
-    negativeTags: serializeTagList(negativeTags)
+    rawPositive,
+    rawNegative,
+    positiveTags,
+    negativeTags,
+    currentMode
   };
 }
 
-function buildCharacterPromptPayload() {
-  return (characterPromptsData || []).map((char) => ({
-    positive: char.posPrompt || tagsToString(char.posTags || []),
-    negative: char.negPrompt || tagsToString(char.negTags || []),
-    positiveTags: serializeTagList(char.posTags || []),
-    negativeTags: serializeTagList(char.negTags || []),
-    gender: char.gender || 'other',
-    activeTab: char.activeTab || 'positive'
-  }));
+function setBasePromptSyncState(nextState = {}) {
+  if (Object.prototype.hasOwnProperty.call(nextState, 'rawPositive')) {
+    rawPositive = nextState.rawPositive || '';
+  }
+  if (Object.prototype.hasOwnProperty.call(nextState, 'rawNegative')) {
+    rawNegative = nextState.rawNegative || '';
+  }
+  if (Array.isArray(nextState.positiveTags)) {
+    positiveTags = nextState.positiveTags;
+  }
+  if (Array.isArray(nextState.negativeTags)) {
+    negativeTags = nextState.negativeTags;
+  }
+}
+
+function getCharacterPromptSyncState() {
+  return {
+    characterPromptsData,
+    charEditors
+  };
+}
+
+function setCharacterPromptSyncState(nextState = {}) {
+  if (Array.isArray(nextState.characterPromptsData)) {
+    characterPromptsData = nextState.characterPromptsData;
+  }
+  if (Array.isArray(nextState.charEditors)) {
+    charEditors = nextState.charEditors;
+  }
+}
+
+function renderBasePromptSyncEditor({ shouldUpdatePos = false, shouldUpdateNeg = false, positiveTags: nextPositiveTags = positiveTags, negativeTags: nextNegativeTags = negativeTags } = {}) {
+  if (!editor) return;
+  if (currentMode === 'positive' && shouldUpdatePos) {
+    editor.setTags(nextPositiveTags);
+  }
+  if (currentMode === 'negative' && shouldUpdateNeg) {
+    editor.setTags(nextNegativeTags);
+  }
+}
+
+function updateCharacterPromptSyncEditor({ index, shouldUpdatePos = false, shouldUpdateNeg = false, posTags = [], negTags = [] } = {}) {
+  const charEditorObj = charEditors[index];
+  if (!charEditorObj?.editor) return;
+
+  if (charEditorObj.activeTab === 'pos' && shouldUpdatePos) {
+    charEditorObj.editor.setTags(posTags);
+  } else if (charEditorObj.activeTab === 'neg' && shouldUpdateNeg) {
+    charEditorObj.editor.setTags(negTags);
+  }
 }
 
 function refreshPendingAiVisuals() {
@@ -887,6 +929,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('pagehide', () => {
   aiTranslateController?.destroy();
+  promptSyncController?.destroy();
 });
 
 function applySequentialCountersToEditors(counters) {
@@ -959,14 +1002,14 @@ async function initData() {
     _lastRecordedFingerprint = computeStateFingerprint(s.positiveTags, s.negativeTags, s.characters);
 
     // 将最近一次历史中的 Tag（即包含被禁用属性的数组）在启动时优先缝合进入常驻内存
-    if (!isEmbeddedPopup && !hasReceivedInitialData) {
+    if (!isEmbeddedPopup) {
       positiveTags = s.positiveTags ? JSON.parse(JSON.stringify(s.positiveTags)) : [];
       negativeTags = s.negativeTags ? JSON.parse(JSON.stringify(s.negativeTags)) : [];
       rawPositive = tagsToString(positiveTags);
       rawNegative = tagsToString(negativeTags);
     }
     
-    if (!isEmbeddedPopup && !hasReceivedInitialChars && s.characters && s.characters.length > 0) {
+    if (!isEmbeddedPopup && s.characters && s.characters.length > 0) {
       characterPromptsData = s.characters.map(c => ({
         posPrompt: tagsToString(c.posTags || []),
         posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : [],
@@ -1006,25 +1049,7 @@ function updateCharAddButton() {
 }
 
 function syncCharactersToPage(source) {
-  if (chrome.tabs) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        const payload = buildCharacterPromptPayload();
-
-        lastSentCharacterPrompts = payload;
-        console.log('[NAI-Prompt-All-In-One] Syncing Characters to Page =>', payload);
-        chrome.tabs.sendMessage(tabs[0].id, {
-          type: 'SET_CHARACTER_PROMPTS',
-          data: payload
-        });
-      }
-    });
-  } else {
-    console.log('[Phase 1 fallback] Local sync triggered. Current Data:\n', JSON.parse(JSON.stringify(characterPromptsData)));
-  }
-
-  // 角色编辑器变更后，记录历史快照
-  recordHistory(source || 'immediate');
+  promptSyncController?.syncCharacters(source);
 }
 
 function createCharacterEditor(index, initialPos = '', initialNeg = '', initialTab = 'pos') {
@@ -1326,6 +1351,38 @@ function initUI() {
     });
   }
   aiTranslateController.bindSettingsUI();
+
+  if (!promptSyncController) {
+    promptSyncController = createPromptSyncController({
+      isEmbeddedPopup,
+      popupHostSessionId,
+      getActiveTab,
+      shouldIgnoreRuntimeMessage,
+      getBaseState: getBasePromptSyncState,
+      setBaseState: setBasePromptSyncState,
+      getCharacterState: getCharacterPromptSyncState,
+      setCharacterState: setCharacterPromptSyncState,
+      renderBaseEditor: renderBasePromptSyncEditor,
+      updateCharacterEditor: updateCharacterPromptSyncEditor,
+      rebuildCharacterUI: rebuildCharacterPromptsUI,
+      syncActiveTagsToPanel,
+      handleRemovedPendingTags: handleRemovedPendingAiTags,
+      syncPendingVisualTimer: syncPendingAiVisualTimer,
+      tagsToString,
+      parsePromptToTags,
+      normalizePrompt,
+      mergeTagsPreservingDisabled,
+      preservePendingAiTags,
+      serializeTagList,
+      shouldApplyIncomingPromptState,
+      onLocalSync: ({ source }) => {
+        recordHistory(source || 'popup');
+      },
+      onRemoteStateApplied: ({ source }) => {
+        recordHistory(source || 'webpage');
+      }
+    });
+  }
 
   // Resolution controls
   const resWidth = document.getElementById('res-width');
@@ -2247,12 +2304,6 @@ function parsePromptToTags(promptText) {
   return result.filter(t => t.value !== '');
 }
 
-// Track last sent prompt to avoid echo loops destroying focus
-let lastSentPositive = null;
-let lastSentNegative = null;
-let lastSentCharacterPrompts = [];
-let pendingInitialPromptRetries = 0;
-
 /* Communication */
 
 function normalizePrompt(str) {
@@ -2266,23 +2317,26 @@ function hasMeaningfulPromptState(promptText = '', tags = []) {
   return normalizePrompt(promptText) !== '' || serializeTagList(tags).length > 0;
 }
 
-// 页面刷新时，NovelAI 可能会先回传一轮空 prompt，再异步恢复真正内容。
-// 如果本地已经从历史里恢复了完整状态，这一轮空值不应立刻覆盖并写入新历史。
-function shouldDeferInitialEmptyPromptSync({ positive, negative, positiveTags: incomingPositiveTags, negativeTags: incomingNegativeTags, currentPositive, currentNegative }) {
-  if (hasReceivedInitialData) return false;
-  if (pendingInitialPromptRetries <= 0) return false;
+function mergeTagMetadata(oldTag = {}, newTag = {}) {
+  const mergedTag = { ...newTag };
 
-  const hasIncomingStructuredTags =
-    (Array.isArray(incomingPositiveTags) && incomingPositiveTags.length > 0) ||
-    (Array.isArray(incomingNegativeTags) && incomingNegativeTags.length > 0);
-  if (hasIncomingStructuredTags) return false;
+  // 网页侧直接编辑时只会回传纯字符串解析结果。
+  // 对于仍然同值的 tag，这里把 popup 本地持有的元数据缝回去，避免 aiOriginal 等信息丢失。
+  if (oldTag.isStart && !mergedTag.isStart) {
+    mergedTag.isStart = true;
+  }
 
-  const hasLocalState =
-    hasMeaningfulPromptState(currentPositive, positiveTags) ||
-    hasMeaningfulPromptState(currentNegative, negativeTags);
-  if (!hasLocalState) return false;
+  const oldDynWeight = Number(oldTag.dynWeight);
+  const nextDynWeight = Number(mergedTag.dynWeight);
+  if (!Number.isNaN(oldDynWeight) && oldDynWeight !== 1 && (Number.isNaN(nextDynWeight) || nextDynWeight === 1)) {
+    mergedTag.dynWeight = oldDynWeight;
+  }
 
-  return normalizePrompt(positive || '') === '' && normalizePrompt(negative || '') === '';
+  if (typeof oldTag.aiOriginal === 'string' && oldTag.aiOriginal.trim() && !mergedTag.aiOriginal) {
+    mergedTag.aiOriginal = oldTag.aiOriginal;
+  }
+
+  return mergedTag;
 }
 
 function mergeTagsPreservingDisabled(oldTags, newTags) {
@@ -2302,10 +2356,12 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
       }
       if (foundIdx !== -1) {
         // Output any new active tags that were inserted *before* this match
-        while (newIdx <= foundIdx) {
+        while (newIdx < foundIdx) {
           merged.push(newTags[newIdx]);
           newIdx++;
         }
+        merged.push(mergeTagMetadata(old, newTags[foundIdx]));
+        newIdx = foundIdx + 1;
       }
     }
   }
@@ -2318,6 +2374,8 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
 }
 
 function initCommunication() {
+  promptSyncController?.init();
+
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (shouldIgnoreRuntimeMessage(msg)) return;
     if (msg.type === 'SEQUENTIAL_COUNTERS_UPDATED') {
@@ -2331,200 +2389,6 @@ function initCommunication() {
       }
       return;
     }
-
-    if (msg.type === 'RETURN_PROMPT') {
-      const { positive, negative, positiveTags: incomingPositiveTags, negativeTags: incomingNegativeTags } = msg.data;
-      const currentPosStr = tagsToString(positiveTags);
-      const currentNegStr = tagsToString(negativeTags);
-
-      // 如果尚未接到网页真正的框内文本数据（只传回undefined），不做任何处理直接等下一发
-      if (positive === undefined && negative === undefined && !hasReceivedInitialData) {
-          return;
-      }
-
-      if (shouldDeferInitialEmptyPromptSync({
-        positive,
-        negative,
-        positiveTags: incomingPositiveTags,
-        negativeTags: incomingNegativeTags,
-        currentPositive: currentPosStr,
-        currentNegative: currentNegStr
-      })) {
-          return;
-      }
-
-      const isFirstTime = !hasReceivedInitialData;
-      hasReceivedInitialData = true;
-      pendingInitialPromptRetries = 0;
-
-      // Skip echo: if this matches what we just sent, ignore
-      if (!isFirstTime && normalizePrompt(positive) === normalizePrompt(lastSentPositive) &&
-        normalizePrompt(negative) === normalizePrompt(lastSentNegative)) {
-        return;
-      }
-
-      let shouldUpdatePos = shouldApplyIncomingPromptState({
-        isFirstTime,
-        incomingPrompt: positive,
-        incomingTags: incomingPositiveTags,
-        currentPrompt: currentPosStr,
-        currentTags: positiveTags
-      });
-      let shouldUpdateNeg = shouldApplyIncomingPromptState({
-        isFirstTime,
-        incomingPrompt: negative,
-        incomingTags: incomingNegativeTags,
-        currentPrompt: currentNegStr,
-        currentTags: negativeTags
-      });
-
-      if (!shouldUpdatePos && !shouldUpdateNeg) {
-         lastSentPositive = currentPosStr;
-         lastSentNegative = currentNegStr;
-         syncActiveTagsToPanel();
-         return;
-      }
-
-      if (shouldUpdatePos) {
-          rawPositive = positive || '';
-          const parsedPosTags = getIncomingTagList(incomingPositiveTags, rawPositive);
-          // 这里通过 mergeTagsPreservingDisabled() 能巧妙地将新入的数据与我们在启动期缝合的“完整带disabled态字典”比对！从而将 disabled 的 Tag 存留！
-          positiveTags = Array.isArray(incomingPositiveTags)
-            ? preservePendingAiTags(positiveTags, parsedPosTags)
-            : preservePendingAiTags(positiveTags, mergeTagsPreservingDisabled(positiveTags, parsedPosTags));
-      }
-
-      if (shouldUpdateNeg) {
-          rawNegative = negative || '';
-          const parsedNegTags = getIncomingTagList(incomingNegativeTags, rawNegative);
-          negativeTags = Array.isArray(incomingNegativeTags)
-            ? preservePendingAiTags(negativeTags, parsedNegTags)
-            : preservePendingAiTags(negativeTags, mergeTagsPreservingDisabled(negativeTags, parsedNegTags));
-      }
-
-      if (currentMode === 'positive' && shouldUpdatePos) editor.setTags(positiveTags);
-      if (currentMode === 'negative' && shouldUpdateNeg) editor.setTags(negativeTags);
-      
-      // 不论是初始加载还是后续同步，更新 tags 后推送给 GroupTags
-      syncActiveTagsToPanel();
-      lastSentPositive = tagsToString(positiveTags);
-      lastSentNegative = tagsToString(negativeTags);
-      recordHistory('webpage');
-      
-    } else if (msg.type === 'RETURN_CHARACTER_PROMPTS') {
-      const charPrompts = msg.data || [];
-      
-      const isFirstTime = !hasReceivedInitialChars;
-      hasReceivedInitialChars = true;
-      
-      let uiNeedsRebuild = false;
-      if (characterPromptsData.length !== charPrompts.length && !isFirstTime) {
-          uiNeedsRebuild = true;
-          // Trim removed characters from memory instantly
-          if (characterPromptsData.length > charPrompts.length) {
-              characterPromptsData.slice(charPrompts.length).forEach((character) => {
-                  handleRemovedPendingAiTags([
-                    ...(character?.posTags || []),
-                    ...(character?.negTags || [])
-                  ], 'target-removed');
-              });
-              syncPendingAiVisualTimer();
-              characterPromptsData.length = charPrompts.length;
-              charEditors.length = charPrompts.length;
-          }
-      } else if (isFirstTime) {
-          uiNeedsRebuild = true;
-          // 首次空回读且本地已有历史态时，先保留本地角色数据，等待后续重试回读。
-          if (charPrompts.length === 0 && characterPromptsData.length === 0) {
-              characterPromptsData = [];
-              charEditors = [];
-          }
-      }
-
-      let changesApplied = false;
-
-      charPrompts.forEach((c, i) => {
-          const charObj = characterPromptsData[i] || { posTags: [], negTags: [], posPrompt: '', negPrompt: '', gender: 'other' };
-          
-          const currentPosPrompt = charObj.posPrompt || tagsToString(charObj.posTags || []);
-          const currentNegPrompt = charObj.negPrompt || tagsToString(charObj.negTags || []);
-          const currentPosStr = normalizePrompt(currentPosPrompt);
-          const currentNegStr = normalizePrompt(currentNegPrompt);
-          // If the webpage gives us undefined, it means that tab wasn't active. Ignore those in comparison.
-          const incomingPosStr = c.positive !== undefined ? normalizePrompt(c.positive) : currentPosStr;
-          const incomingNegStr = c.negative !== undefined ? normalizePrompt(c.negative) : currentNegStr;
-
-          let shouldUpdatePos = shouldApplyIncomingPromptState({
-            isFirstTime,
-            incomingPrompt: c.positive,
-            incomingTags: c.positiveTags,
-            currentPrompt: currentPosPrompt,
-            currentTags: charObj.posTags || []
-          });
-          let shouldUpdateNeg = shouldApplyIncomingPromptState({
-            isFirstTime,
-            incomingPrompt: c.negative,
-            incomingTags: c.negativeTags,
-            currentPrompt: currentNegPrompt,
-            currentTags: charObj.negTags || []
-          });
-          const nextGender = c.gender !== undefined ? c.gender : (charObj.gender || 'other');
-          const nextActiveTab = c.activeTab !== undefined ? c.activeTab : (charObj.activeTab || 'positive');
-          const shouldUpdateMeta = nextGender !== (charObj.gender || 'other') || nextActiveTab !== (charObj.activeTab || 'positive');
-          const hasExistingCharacter = i < characterPromptsData.length;
-
-          if (!shouldUpdatePos && !shouldUpdateNeg && !shouldUpdateMeta && hasExistingCharacter) {
-              return; // Skip if identical (Debounce echo naturally)
-          }
-
-          changesApplied = true;
-
-          let newPosTags = charObj.posTags || [];
-          let newNegTags = charObj.negTags || [];
-          
-          if (shouldUpdatePos || charObj.posPrompt === undefined) {
-              const parsedPosTags = getIncomingTagList(c.positiveTags, c.positive || '');
-              newPosTags = Array.isArray(c.positiveTags)
-                ? preservePendingAiTags(charObj.posTags || [], parsedPosTags)
-                : preservePendingAiTags(charObj.posTags || [], mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags));
-              charObj.posPrompt = c.positive || '';
-              charObj.posTags = newPosTags;
-          }
-
-          if (shouldUpdateNeg || charObj.negPrompt === undefined) {
-              const parsedNegTags = getIncomingTagList(c.negativeTags, c.negative || '');
-              newNegTags = Array.isArray(c.negativeTags)
-                ? preservePendingAiTags(charObj.negTags || [], parsedNegTags)
-                : preservePendingAiTags(charObj.negTags || [], mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags));
-              charObj.negPrompt = c.negative || '';
-              charObj.negTags = newNegTags;
-          }
-
-          charObj.gender = nextGender;
-          charObj.activeTab = nextActiveTab;
-          
-          // Apply changes to array
-          characterPromptsData[i] = charObj;
-
-          // Inline update of TagEditor if UI doesn't need full rebuild to protect current input focus
-          if (!uiNeedsRebuild && charEditors[i] && charEditors[i].editor) {
-              const activeTab = charEditors[i].activeTab;
-              if (activeTab === 'pos' && shouldUpdatePos) {
-                  charEditors[i].editor.setTags(newPosTags);
-              } else if (activeTab === 'neg' && shouldUpdateNeg) {
-                  charEditors[i].editor.setTags(newNegTags);
-              }
-          }
-      });
-
-      if (uiNeedsRebuild || (changesApplied && characterPromptsData.length === 0)) {
-          console.log('[Phase 2] Found structural changes, rebuilding UI...');
-          rebuildCharacterPromptsUI();
-      }
-
-      // 网页端角色提示词有实质变更，记录历史快照
-      if (changesApplied) recordHistory('webpage');
-    } // End of RETURN_CHARACTER_PROMPTS
 
     if (msg.type === '__CLEAN_NUMERIC_PREFIXES__') {
       console.log('[Popup] Received cleanup request for numeric prefixes');
@@ -2579,74 +2443,20 @@ function initCommunication() {
 
   // Initial Request — retry a few times to handle timing issues
   // (injector.js might not have registered its listeners yet)
-  requestPromptWithRetry(5, 800);
+  promptSyncController?.requestPromptWithRetry(5, 800);
 }
 
-let hasReceivedInitialData = false;
-
 function requestPromptWithRetry(retries, delayMs) {
-  pendingInitialPromptRetries = retries;
-  requestPrompt();
-  if (retries > 0) {
-    setTimeout(() => {
-      if (!hasReceivedInitialData) {
-        requestPromptWithRetry(retries - 1, delayMs);
-      } else {
-        pendingInitialPromptRetries = 0;
-      }
-    }, delayMs);
-  }
+  promptSyncController?.requestPromptWithRetry(retries, delayMs);
 }
 
 function requestPrompt() {
-  console.log('[Popup] Sending GET_PROMPT to active tab');
-
-  // Method 1: Target active tab (Standard Popup)
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) {
-      console.log('[Popup] Target tab ID:', tabs[0].id);
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_PROMPT' });
-    } else {
-      console.warn('[Popup] No active tab found');
-    }
-  });
-
-  // Method 2: Broadcast to Runtime (Manager Panel / Iframe / DevTools)
-  // If Popup is in an iframe, tabs.query might fail or return the wrong thing.
-  // Bridge.js listens to runtime.onMessage too.
-  chrome.runtime.sendMessage({ type: 'GET_PROMPT' }, (response) => {
-    if (chrome.runtime.lastError) {
-      // Ignore "Could not establish connection" if no background listener
-      // console.log('Runtime broadcast error (expected if no BG listener):', chrome.runtime.lastError);
-    }
-  });
+  promptSyncController?.requestPrompt();
 }
 
 function syncToPage(source) {
-  if (source) _syncSource = source;
-  const promptPayload = buildPromptSyncPayload();
-  const posStr = promptPayload.positive;
-  const negStr = promptPayload.negative;
-
-  // Update local echo logic
-  lastSentPositive = posStr;
-  lastSentNegative = negStr;
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) {
-      chrome.tabs.sendMessage(tabs[0].id, {
-        type: 'SET_PROMPT',
-        data: promptPayload
-      });
-    }
-  });
-
-  // 每次同步到页面时记录一次历史快照
-  recordHistory(_syncSource || 'popup');
-  _syncSource = null;
+  promptSyncController?.syncPrompt(source);
 }
-
-let _syncSource = null;
 
 // ═══════════════════════════════════════════════════════
 // 历史记录 & 收藏夹 核心逻辑
@@ -2698,9 +2508,8 @@ async function _commitSnapshot() {
   const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
   let history = data.promptHistory || [];
 
-  const promptPayload = buildPromptSyncPayload();
-  const posStr = promptPayload.positive;
-  const negStr = promptPayload.negative;
+  const posStr = tagsToString(positiveTags);
+  const negStr = tagsToString(negativeTags);
   const meaningfulCharacters = getMeaningfulCharacterHistoryData(characterPromptsData);
   const hasMeaningfulState = positiveTags.length > 0 || negativeTags.length > 0 || meaningfulCharacters.length > 0;
   const comparableSnapshot = findComparableHistorySnapshot(history, {
@@ -2792,23 +2601,7 @@ async function restoreFromSnapshot(snapshot) {
         rebuildCharacterPromptsUI();
       }
     }
-    const promptPayload = buildPromptSyncPayload();
-    const charPayload = buildCharacterPromptPayload();
-    const posStr = promptPayload.positive;
-    const negStr = promptPayload.negative;
-    lastSentPositive = posStr;
-    lastSentNegative = negStr;
-    clearTimeout(_popupDebounceTimer);
-    clearTimeout(_webpageDebounceTimer);
-    _popupDebounceTimer = null;
-    _webpageDebounceTimer = null;
-    await recordHistory('restore');
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_PROMPT', data: promptPayload });
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'SET_CHARACTER_PROMPTS', data: charPayload });
-      }
-    });
+    await promptSyncController?.syncAll('restore');
     return;
   }
 
@@ -2837,36 +2630,7 @@ async function restoreFromSnapshot(snapshot) {
 
   rebuildCharacterPromptsUI();
 
-  // 同步到页面
-  const promptPayload = buildPromptSyncPayload();
-  const charPayload = buildCharacterPromptPayload();
-  const posStr = promptPayload.positive;
-  const negStr = promptPayload.negative;
-  lastSentPositive = posStr;
-  lastSentNegative = negStr;
-
-  // 清除挂起的防抖计时器
-  clearTimeout(_popupDebounceTimer);
-  clearTimeout(_webpageDebounceTimer);
-  _popupDebounceTimer = null;
-  _webpageDebounceTimer = null;
-
-  // 显式记录这次“恢复”动作为一次新的历史快照（如果确实有变化）
-  await recordHistory('restore');
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) {
-      chrome.tabs.sendMessage(tabs[0].id, {
-        type: 'SET_PROMPT',
-        data: promptPayload
-      });
-      // 同时恢复角色
-      chrome.tabs.sendMessage(tabs[0].id, {
-        type: 'SET_CHARACTER_PROMPTS',
-        data: charPayload
-      });
-    }
-  });
+  await promptSyncController?.syncAll('restore');
 }
 
 // 监听跨组件通讯指令（通过 bridge 中转）
@@ -2878,33 +2642,7 @@ function cloneSnippetTags(tags, promptText) {
 }
 
 async function broadcastPromptStateAndRecord(source = 'restore') {
-  const promptPayload = buildPromptSyncPayload();
-  const charPayload = buildCharacterPromptPayload();
-  const posStr = promptPayload.positive;
-  const negStr = promptPayload.negative;
-  lastSentPositive = posStr;
-  lastSentNegative = negStr;
-
-  clearTimeout(_popupDebounceTimer);
-  clearTimeout(_webpageDebounceTimer);
-  _popupDebounceTimer = null;
-  _webpageDebounceTimer = null;
-
-  await recordHistory(source);
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs[0]) return;
-
-    chrome.tabs.sendMessage(tabs[0].id, {
-      type: 'SET_PROMPT',
-      data: promptPayload
-    });
-
-    chrome.tabs.sendMessage(tabs[0].id, {
-      type: 'SET_CHARACTER_PROMPTS',
-      data: charPayload
-    });
-  });
+  await promptSyncController?.syncAll(source);
 }
 
 async function appendHistorySnippet(snapshot, target) {
