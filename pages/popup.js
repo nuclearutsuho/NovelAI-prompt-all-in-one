@@ -3,6 +3,7 @@ import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
 import createAiTranslateController from './popup/ai-translate-controller.js';
+import createGroupTagsController from './popup/group-tags-controller.js';
 import createHistoryController from './popup/history-controller.js';
 import createPromptSyncController from './popup/prompt-sync-controller.js';
 
@@ -20,28 +21,13 @@ let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", 
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
 let maxCharacters = 6;
 let isShortMode = false;
-let currentGroupColorMap = {};
-let currentGroupTranslationMap = {};
 let currentSequentialCounters = {};
-
-const groupTagsDataUtils = window.GroupTagsDataUtils || {};
-const EMPTY_GROUP_TAGS_DATA = { categories: [] };
-let defaultGroupTagsPromise = null;
 let popupToastTimer = null;
 let popupToastFrame = null;
-const groupTagsPickerState = {
-  resolve: null,
-  activeCategoryId: null,
-  tagData: null,
-  groupTagsData: null
-};
-
-// 焦点追踪：当前 GroupTags 面板将追加标签的目标编辑器
-// type: 'base' | 'character', charIndex: number, mode: 'positive'|'negative'|'pos'|'neg'
-let activeEditorTarget = { type: 'base', mode: 'positive' };
 
 let currentLang = DEFAULT_LANG;
 let aiTranslateController = null;
+let groupTagsController = null;
 let historyController = null;
 let promptSyncController = null;
 
@@ -125,14 +111,6 @@ function shouldApplyIncomingPromptState({
   return !Array.isArray(currentTags) || currentTags.length === 0;
 }
 
-function cloneGroupTagsData(data) {
-  // 统一走深拷贝，避免 popup 直接修改到缓存中的默认数据对象
-  if (groupTagsDataUtils.cloneData) {
-    return groupTagsDataUtils.cloneData(data || EMPTY_GROUP_TAGS_DATA);
-  }
-  return JSON.parse(JSON.stringify(data || EMPTY_GROUP_TAGS_DATA));
-}
-
 function getPopupDict() {
   return getI18nDict(currentLang, 'popup');
 }
@@ -148,11 +126,6 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function getAddToGroupTagsText() {
-  const dict = getPopupDict();
-  return dict.btn_add_to_group_tags || `${dict.btn_add || 'Add'} ${dict.btn_group_tags || 'Group Tags'}`.trim();
 }
 
 function getToastMeta(type) {
@@ -415,447 +388,40 @@ function syncAiTargetAfterResolve(targetContext, source = 'popup') {
   renderAiTargetIfVisible(target);
   syncCharactersToPage(source);
 }
-function applyGroupMapsToEditors(colorMap = {}, translationMap = {}, shouldRender = true) {
-  // popup 与所有角色编辑器共用同一份分组颜色/翻译映射
-  currentGroupColorMap = colorMap || {};
-  currentGroupTranslationMap = translationMap || {};
+function getCurrentGroupTagsTarget() {
+  return groupTagsController?.getActiveTarget?.() || { type: 'base', mode: currentMode };
+}
+
+function setCurrentGroupTagsTarget(target) {
+  return groupTagsController?.setActiveTarget?.(target) || target || { type: 'base', mode: currentMode };
+}
+
+function addTagToGroupTarget(target, tag) {
+  if (target?.type === 'character') {
+    const charEditorObj = charEditors[target.charIndex];
+    if (charEditorObj?.editor) {
+      charEditorObj.editor.addTag(tag);
+      return;
+    }
+  }
 
   if (editor) {
-    editor.groupColorMap = currentGroupColorMap;
-    editor.groupTranslationMap = currentGroupTranslationMap;
-    if (shouldRender) editor.render();
+    editor.addTag(tag);
   }
-
-  charEditors.forEach(charEditorObj => {
-    if (!charEditorObj?.editor) return;
-    charEditorObj.editor.groupColorMap = currentGroupColorMap;
-    charEditorObj.editor.groupTranslationMap = currentGroupTranslationMap;
-    if (shouldRender) charEditorObj.editor.render();
-  });
 }
 
-async function loadDefaultGroupTagsData() {
-  if (!defaultGroupTagsPromise) {
-    // 默认库只加载一次，后续复用 Promise，避免每次点 +G 都重新 fetch
-    defaultGroupTagsPromise = fetch(chrome.runtime.getURL('data/default_group_tags.json'))
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Failed to load default Group Tags: ${response.status}`);
-        }
-        return response.json();
-      })
-      .catch(err => {
-        console.error('[Popup] Failed to load default Group Tags:', err);
-        return cloneGroupTagsData(EMPTY_GROUP_TAGS_DATA);
-      });
-  }
-
-  return cloneGroupTagsData(await defaultGroupTagsPromise);
-}
-
-async function loadEffectiveGroupTagsData() {
-  let storedGroupTagsData = (await chrome.storage.local.get('groupTagsUserData')).groupTagsUserData;
-  if (storedGroupTagsData?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
-    const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
-    storedGroupTagsData = migrated.data || storedGroupTagsData;
-  }
-  const defaultData = await loadDefaultGroupTagsData();
-  // popup 看到的数据必须和 Group Tags 面板一致：用户数据优先，默认库只补新增
-  if (groupTagsDataUtils.resolveEffectiveGroupTagsData) {
-    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultData, storedGroupTagsData);
-  }
-  return storedGroupTagsData?.categories ? cloneGroupTagsData(storedGroupTagsData) : cloneGroupTagsData(defaultData);
-}
-
-function buildGroupTagsColorMap(data) {
-  if (groupTagsDataUtils.buildColorMap) {
-    return groupTagsDataUtils.buildColorMap(data);
-  }
-  return {};
-}
-
-function buildGroupTagsTranslationMap(data) {
-  if (groupTagsDataUtils.buildTranslationMap) {
-    return groupTagsDataUtils.buildTranslationMap(data);
-  }
-  return {};
-}
-
-function normalizeGroupTagKey(value) {
-  if (groupTagsDataUtils.normalizeTagKey) {
-    return groupTagsDataUtils.normalizeTagKey(value);
-  }
-  return String(value || '').trim().toLowerCase();
-}
-
-function toCanonicalGroupTagKey(value) {
-  if (groupTagsDataUtils.toCanonicalTagKey) {
-    return groupTagsDataUtils.toCanonicalTagKey(value);
-  }
-  return normalizeGroupTagKey(value);
-}
-
-function toDisplayGroupTagText(value) {
-  if (groupTagsDataUtils.canonicalToDisplayTag) {
-    return groupTagsDataUtils.canonicalToDisplayTag(value);
-  }
-  return String(value || '').trim().replace(/_/g, ' ');
-}
-
-async function loadEffectiveDictionaryData() {
-  if (groupTagsDataUtils.loadEffectiveDictionaryData) {
-    return groupTagsDataUtils.loadEffectiveDictionaryData();
-  }
-  return { entryMap: new Map() };
-}
-
-async function upsertDictionaryEntry(tagKey, patch = {}) {
-  if (groupTagsDataUtils.upsertDictionaryEntry) {
-    return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
-  }
-  return {
-    tagKey: toCanonicalGroupTagKey(tagKey),
-    entry: null
-  };
-}
-
-function findExistingGroupTagLocation(groupTagsData, tagText) {
-  const targetKey = normalizeGroupTagKey(tagText);
-  if (!targetKey || !Array.isArray(groupTagsData?.categories)) return null;
-
-  // 颜色和翻译映射是全局 tag -> 单值表，所以这里直接按整个 Group Tags 全局查重
-  for (const category of groupTagsData.categories) {
-    const groups = Array.isArray(category.groups) ? category.groups : [];
-    for (const group of groups) {
-      const tags = Array.isArray(group.tags) ? group.tags : [];
-      const existingTag = tags.find(tag => normalizeGroupTagKey(tag.en) === targetKey);
-      if (existingTag) {
-        return {
-          categoryId: category.id,
-          categoryName: category.name,
-          groupId: group.id,
-          groupName: group.name
-        };
-      }
+function removeTagFromGroupTarget(target, tag) {
+  if (target?.type === 'character') {
+    const charEditorObj = charEditors[target.charIndex];
+    if (charEditorObj?.editor) {
+      charEditorObj.editor.removeTagByText(tag);
+      return;
     }
   }
 
-  return null;
-}
-
-function formatGroupTagLocation(location) {
-  if (!location) return '';
-  return `${location.categoryName} > ${location.groupName}`;
-}
-
-function updateGroupTagsPickerStaticText() {
-  const titleEl = document.getElementById('group-tags-picker-title');
-  const closeBtn = document.getElementById('group-tags-picker-close');
-  if (titleEl) titleEl.textContent = getLocalizedText('group_tags_picker_title', getAddToGroupTagsText());
-  if (closeBtn) closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
-}
-
-function closeGroupTagsPicker(selection = null) {
-  const modal = document.getElementById('group-tags-picker-modal');
-  if (modal) {
-    modal.classList.remove('visible');
+  if (editor) {
+    editor.removeTagByText(tag);
   }
-
-  groupTagsPickerState.tagData = null;
-  groupTagsPickerState.groupTagsData = null;
-
-  if (groupTagsPickerState.resolve) {
-    // 用 Promise 包装弹窗结果，避免把选择逻辑散落到多个回调里
-    const resolve = groupTagsPickerState.resolve;
-    groupTagsPickerState.resolve = null;
-    resolve(selection);
-  }
-}
-
-function initGroupTagsPickerModal() {
-  const modal = document.getElementById('group-tags-picker-modal');
-  const closeBtn = document.getElementById('group-tags-picker-close');
-
-  if (!modal || modal.dataset.bound === 'true') return;
-  modal.dataset.bound = 'true';
-
-  closeBtn?.addEventListener('click', () => closeGroupTagsPicker(null));
-  modal.addEventListener('click', (event) => {
-    if (event.target === modal) {
-      closeGroupTagsPicker(null);
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && modal.classList.contains('visible')) {
-      closeGroupTagsPicker(null);
-    }
-  });
-
-  updateGroupTagsPickerStaticText();
-}
-
-function renderPickerTagContent(tagData) {
-  const en = toDisplayGroupTagText(String(tagData?.en || '').trim());
-  const zh = String(tagData?.zh || '').trim();
-
-  const container = document.createElement('div');
-  container.className = 'group-tags-picker-tag-inner';
-
-  // 辅助函数：创建无缝内联编辑元素
-  const createEditableText = (initialText, className, fieldName) => {
-    const textEl = document.createElement('span');
-    textEl.className = className;
-    textEl.textContent = initialText;
-
-    textEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const inputEl = document.createElement('input');
-      inputEl.type = 'text';
-      inputEl.className = `${className} editing`;
-      inputEl.value = groupTagsPickerState.tagData[fieldName] || '';
-
-      const finishEditing = () => {
-        const newVal = inputEl.value.trim();
-        groupTagsPickerState.tagData[fieldName] = newVal; // 更新内存状态
-        
-        let displayVal = fieldName === 'en' ? toDisplayGroupTagText(newVal) : newVal;
-        if (!displayVal) {
-          displayVal = fieldName === 'en' ? '...' : getLocalizedText('group_tags_picker_trans_placeholder');
-        }
-        textEl.textContent = displayVal;
-        
-        if (inputEl.parentNode) {
-          inputEl.parentNode.replaceChild(textEl, inputEl);
-        }
-      };
-
-      inputEl.addEventListener('blur', finishEditing);
-      inputEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          inputEl.blur();
-        } else if (e.key === 'Escape') {
-          // ESC 放弃修改
-          e.preventDefault();
-          e.stopPropagation(); // 防止冒泡关闭整个模态框
-          inputEl.value = groupTagsPickerState.tagData[fieldName] || '';
-          inputEl.blur();
-        }
-      });
-
-      textEl.parentNode.replaceChild(inputEl, textEl);
-      inputEl.focus();
-      // 让光标出现在文字末尾
-      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
-    });
-
-    return textEl;
-  };
-
-  // 左半边：英文原名 (可击穿编辑)
-  const enSpan = createEditableText(en || '...', 'group-tags-picker-tag-en', 'en');
-  container.appendChild(enSpan);
-
-  // 中间分割线
-  const divider = document.createElement('span');
-  divider.className = 'group-tags-picker-tag-divider';
-  container.appendChild(divider);
-
-  // 右侧：中文翻译 (可击穿编辑)
-  // 如果当前没翻译，也填充给个底子使得它能被点到
-  const zhSpan = createEditableText(zh || getLocalizedText('group_tags_picker_trans_placeholder'), 'group-tags-picker-tag-zh', 'zh');
-  container.appendChild(zhSpan);
-
-  // 极简关闭按钮插在最右端
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'group-tags-picker-tag-close';
-  closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
-  closeBtn.innerHTML = '×';
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeGroupTagsPicker(null);
-  });
-  
-  container.appendChild(closeBtn);
-  return container;
-}
-
-function formatPickerTagText(tagData) {
-  const en = toDisplayGroupTagText(String(tagData?.en || '').trim());
-  const zh = String(tagData?.zh || '').trim();
-  return zh ? `${en}  ${zh}` : en;
-}
-
-function setPickerCategory(categoryId) {
-  groupTagsPickerState.activeCategoryId = categoryId;
-}
-
-function renderGroupTagsPickerList(tagData, groupTagsData) {
-  const listEl = document.getElementById('group-tags-picker-list');
-  const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
-  const hasGroups = categories.some(category => Array.isArray(category.groups) && category.groups.length > 0);
-
-  if (!listEl) return;
-  listEl.innerHTML = '';
-
-  if (!hasGroups) {
-    const emptyEl = document.createElement('div');
-    emptyEl.className = 'group-tags-picker-empty';
-    emptyEl.textContent = getLocalizedText('group_tags_picker_empty');
-    listEl.appendChild(emptyEl);
-    return;
-  }
-
-  // Row 1: Primary Tabs (Categories)
-  const primaryTabsEl = document.createElement('div');
-  primaryTabsEl.className = 'group-tags-picker-primary-tabs';
-
-  categories.forEach(category => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `group-tags-picker-tab-btn ${groupTagsPickerState.activeCategoryId === category.id ? 'active' : ''}`;
-    btn.textContent = category.name || category.id || getLocalizedText('group_tags_picker_category');
-    btn.addEventListener('click', () => {
-      setPickerCategory(category.id);
-      renderGroupTagsPickerList(tagData, groupTagsData);
-    });
-    primaryTabsEl.appendChild(btn);
-  });
-
-  // Row 2: Secondary Tabs (Groups)
-  const secondaryTabsEl = document.createElement('div');
-  secondaryTabsEl.className = 'group-tags-picker-secondary-tabs';
-
-  const activeCategory = categories.find(c => c.id === groupTagsPickerState.activeCategoryId) || categories[0];
-  if (activeCategory) {
-    groupTagsPickerState.activeCategoryId = activeCategory.id;
-    const groups = Array.isArray(activeCategory.groups) ? activeCategory.groups : [];
-    
-    groups.forEach(group => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'group-tags-picker-group-btn';
-      button.textContent = group.name || group.id || getLocalizedText('group_tags_picker_group');
-      button.addEventListener('click', () => {
-        // 在正式加入前，确保所有的 input focus 已经被保存同步到了 tagData
-        // 因为 activeElement blur 存在时间差，这里直接读取最新的 state 作为最终值返回
-        closeGroupTagsPicker({
-          categoryId: activeCategory.id,
-          groupId: group.id,
-          // 附带返回被编辑过的最新 Tag 内容给外部处理函数
-          editedEn: groupTagsPickerState.tagData?.en,
-          editedZh: groupTagsPickerState.tagData?.zh
-        });
-      });
-      secondaryTabsEl.appendChild(button);
-    });
-  }
-
-  listEl.appendChild(primaryTabsEl);
-  listEl.appendChild(secondaryTabsEl);
-}
-
-function openGroupTagsPicker(tagData, groupTagsData) {
-  initGroupTagsPickerModal();
-  if (groupTagsPickerState.resolve) {
-    // 理论上同一时间只允许一个选择弹窗处于待决状态
-    closeGroupTagsPicker(null);
-  }
-
-  const modal = document.getElementById('group-tags-picker-modal');
-  const tagEl = document.getElementById('group-tags-picker-tag');
-  const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
-  groupTagsPickerState.tagData = tagData;
-  groupTagsPickerState.groupTagsData = groupTagsData;
-  groupTagsPickerState.activeCategoryId = categories[0]?.id || null;
-
-  updateGroupTagsPickerStaticText();
-  if (tagEl) {
-    tagEl.innerHTML = '';
-    tagEl.appendChild(renderPickerTagContent(tagData));
-  }
-  renderGroupTagsPickerList(tagData, groupTagsData);
-
-  modal?.classList.add('visible');
-  return new Promise(resolve => {
-    groupTagsPickerState.resolve = resolve;
-  });
-}
-
-async function persistGroupTagsData(groupTagsData) {
-  if (groupTagsDataUtils.saveGroupTagsStorage) {
-    groupTagsData = await groupTagsDataUtils.saveGroupTagsStorage(groupTagsData);
-  } else {
-    const colorMap = buildGroupTagsColorMap(groupTagsData);
-    const translationMap = buildGroupTagsTranslationMap(groupTagsData);
-    await chrome.storage.local.set({
-      groupTagsUserData: groupTagsData,
-      groupColorMap: colorMap,
-      groupTranslationMap: translationMap
-    });
-  }
-  const colorMap = buildGroupTagsColorMap(groupTagsData);
-  const translationMap = buildGroupTagsTranslationMap(groupTagsData);
-  // 写回 storage 后立刻刷新 popup 内存态，让当前编辑器马上吃到颜色和翻译
-  applyGroupMapsToEditors(colorMap, translationMap);
-}
-
-async function addTagToGroupTags(tagData) {
-  const en = String(tagData?.en || '').trim();
-  const zh = String(tagData?.zh || '').trim();
-  if (!en) return;
-  const canonicalEn = toCanonicalGroupTagKey(en);
-  if (!canonicalEn) return;
-
-  const effectiveData = await loadEffectiveGroupTagsData();
-  const existingLocation = findExistingGroupTagLocation(effectiveData, canonicalEn);
-  if (existingLocation) {
-    // 全局唯一：同一个 tag 不允许再加入别的分组，否则颜色/翻译会变成顺序相关
-    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate')}: ${formatGroupTagLocation(existingLocation)}`);
-    return;
-  }
-
-  // 因为在弹窗期间 tag 原本的值可能会被用户单击处于 input 状态修改，拿到最热数据
-  const selection = await openGroupTagsPicker({ en: toDisplayGroupTagText(canonicalEn), zh }, effectiveData);
-  if (!selection) return;
-
-  // 用户确认后重新读取最新有效数据，避免把弹窗打开期间的外部修改覆盖掉
-  const latestData = await loadEffectiveGroupTagsData();
-  
-  // 取出经过弹窗内可能已被用户编辑过的新名字 (如果没编辑回退到原来传参的字)
-  const finalEn = toCanonicalGroupTagKey(String(selection.editedEn || en).trim());
-  const finalZh = String(selection.editedZh || zh).trim();
-
-  // 如果原本没改但原来存在，或者改了以后撞车，都要拦截
-  if (!finalEn) return; 
-  const latestExistingLocation = findExistingGroupTagLocation(latestData, finalEn);
-  if (latestExistingLocation) {
-    showPopupToast('warning', `${getLocalizedText('group_tags_picker_duplicate')}: ${formatGroupTagLocation(latestExistingLocation)}`);
-    return;
-  }
-
-  const targetCategory = latestData.categories.find(category => category.id === selection.categoryId);
-  const targetGroup = targetCategory?.groups?.find(group => group.id === selection.groupId);
-  if (!targetGroup) {
-    // 用户打开弹窗后，目标分组可能已被别的入口删除
-    showPopupToast('error', getLocalizedText('group_tags_picker_missing'));
-    return;
-  }
-
-  const dictResult = await upsertDictionaryEntry(finalEn, { zhCN: finalZh });
-  const finalEntry = dictResult.entry || (await loadEffectiveDictionaryData()).entryMap.get(finalEn) || null;
-
-  targetGroup.tags.push({
-    en: finalEn,
-    zh: finalEntry ? (finalEntry.zhCN || '') : finalZh
-  });
-  await persistGroupTagsData(latestData);
-  
-  const locationName = `${targetCategory.name} > ${targetGroup.name}`;
-  const displayTag = toDisplayGroupTagText(finalEn);
-  showPopupToast('success', `${getLocalizedText('group_tags_picker_added_prefix')}: ${displayTag} -> ${locationName}`);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -866,6 +432,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('pagehide', () => {
   aiTranslateController?.destroy();
+  groupTagsController?.destroy();
   historyController?.destroy();
   promptSyncController?.destroy();
 });
@@ -1039,6 +606,19 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Set up Delete
   deleteBtn.addEventListener('click', () => {
+    const activeTarget = getCurrentGroupTagsTarget();
+    if (activeTarget.type === 'character') {
+      if (activeTarget.charIndex === index) {
+        setCurrentGroupTagsTarget({ type: 'base', mode: currentMode });
+      } else if (activeTarget.charIndex > index) {
+        setCurrentGroupTagsTarget({
+          type: 'character',
+          charIndex: activeTarget.charIndex - 1,
+          mode: activeTarget.mode
+        });
+      }
+    }
+
     handleRemovedPendingAiTags([
       ...(characterPromptsData[index]?.posTags || []),
       ...(characterPromptsData[index]?.negTags || [])
@@ -1051,6 +631,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     }
     charEditors.splice(index, 1);
     rebuildCharacterPromptsUI();
+    syncActiveTagsToPanel();
     syncCharactersToPage();
   });
 
@@ -1069,7 +650,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       },
       pendingTag: tag
     }),
-    onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
+    onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
       // 检测是否为结构性变更（tag 数量变化）
@@ -1085,18 +666,21 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       syncCharactersToPage(isStructural ? 'immediate' : 'popup');
       
       // 同步当前角色编辑器的 tags 到 GroupTags 面板
-      if (activeEditorTarget.type === 'character' && activeEditorTarget.charIndex === index) {
+      const activeTarget = getCurrentGroupTagsTarget();
+      if (activeTarget.type === 'character' && activeTarget.charIndex === index) {
         syncActiveTagsToPanel();
       }
     }
   });
-  charEditor.groupColorMap = currentGroupColorMap;
-  charEditor.groupTranslationMap = currentGroupTranslationMap;
   charEditor.setSequentialCounters(currentSequentialCounters);
 
   // ── 焦点追踪：点击角色编辑器容器时设为活动目标 ──
   editorContainer.addEventListener('mousedown', () => {
-    activeEditorTarget = { type: 'character', charIndex: index };
+    setCurrentGroupTagsTarget({
+      type: 'character',
+      charIndex: index,
+      mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+    });
     syncActiveTagsToPanel();
   });
 
@@ -1146,7 +730,17 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     }
 
     // 如果当前焦点正好在这个角色编辑器上，更新面板状态
-    if (activeEditorTarget.type === 'character' && activeEditorTarget.charIndex === index) {
+    let activeTarget = getCurrentGroupTagsTarget();
+    if (fromUserClick || (activeTarget.type === 'character' && activeTarget.charIndex === index)) {
+      setCurrentGroupTagsTarget({
+        type: 'character',
+        charIndex: index,
+        mode: tab === 'neg' ? 'negative' : 'positive'
+      });
+      activeTarget = getCurrentGroupTagsTarget();
+    }
+
+    if (activeTarget.type === 'character' && activeTarget.charIndex === index) {
       syncActiveTagsToPanel();
     }
   };
@@ -1250,6 +844,8 @@ function rebuildCharacterPromptsUI() {
   characterPromptsData.forEach((charData, index) => {
     createCharacterEditor(index, charData.posPrompt, charData.negPrompt, charData.activeTab === 'negative' ? 'neg' : 'pos');
   });
+
+  groupTagsController?.applyEditorMaps();
   
   updateCharAddButton();
 }
@@ -1258,7 +854,6 @@ function initUI() {
   // Autocomplete
   autocomplete = new Autocomplete();
   autocomplete.load();
-  initGroupTagsPickerModal();
   if (!aiTranslateController) {
     aiTranslateController = createAiTranslateController({
       getLocalizedText,
@@ -1272,6 +867,24 @@ function initUI() {
   }
   aiTranslateController.bindSettingsUI();
 
+  if (!groupTagsController) {
+    groupTagsController = createGroupTagsController({
+      getLocalizedText,
+      showToast: showPopupToast,
+      getActiveTab,
+      getBaseEditor: () => editor,
+      getCharacterEditors: () => charEditors,
+      addTagToTarget: addTagToGroupTarget,
+      removeTagFromTarget: removeTagFromGroupTarget,
+      setActiveTarget: () => {},
+      getActiveTarget: () => ({ type: 'base', mode: currentMode }),
+      onMapsChanged: () => {},
+      onPickerStateChanged: () => {},
+      loadPopupDict: () => getPopupDict()
+    });
+  }
+  groupTagsController.bindUI();
+
   if (!historyController) {
     historyController = createHistoryController({
       getBaseState: getBasePromptSyncState,
@@ -1280,7 +893,7 @@ function initUI() {
       setCharacterState: setCharacterPromptSyncState,
       getCurrentMode: () => currentMode,
       getEditor: () => editor,
-      getActiveEditorTarget: () => activeEditorTarget,
+      getActiveEditorTarget: getCurrentGroupTagsTarget,
       rebuildCharacterUI: rebuildCharacterPromptsUI,
       parsePromptToTags,
       tagsToString,
@@ -1552,7 +1165,7 @@ function initUI() {
       },
       pendingTag: tag
     }),
-    onAddToGroupTags: (tagData) => addTagToGroupTags(tagData),
+    onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
       // 检测是否为结构性变更（tag 数量变化 = 增删操作）
       const prevTags = currentMode === 'positive' ? positiveTags : negativeTags;
@@ -1564,29 +1177,17 @@ function initUI() {
       syncActiveTagsToPanel();
     }
   });
-  editor.groupColorMap = currentGroupColorMap;
-  editor.groupTranslationMap = currentGroupTranslationMap;
 
   // Bind Autocomplete to Editor (for inline edit)
   editor.bindAutocomplete(autocomplete);
+  groupTagsController?.init().catch((error) => {
+    console.error('[Popup] Failed to initialize Group Tags controller:', error);
+  });
 
   // ── 焦点追踪：点击 base editor 容器时设为活动目标 ──
   container.addEventListener('mousedown', () => {
-    activeEditorTarget = { type: 'base', mode: currentMode };
+    setCurrentGroupTagsTarget({ type: 'base', mode: currentMode });
     syncActiveTagsToPanel();
-  });
-
-  chrome.storage.local.get(['groupColorMap', 'groupTranslationMap'], (data) => {
-    applyGroupMapsToEditors(data.groupColorMap || {}, data.groupTranslationMap || {}, false);
-  });
-
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local') return;
-    if (!changes.groupColorMap && !changes.groupTranslationMap) return;
-    // popup 只关心映射结果，不重复推导来源，保证来自 popup / GroupTags 面板的更新都能收敛到一处
-    const nextColorMap = changes.groupColorMap ? (changes.groupColorMap.newValue || {}) : currentGroupColorMap;
-    const nextTranslationMap = changes.groupTranslationMap ? (changes.groupTranslationMap.newValue || {}) : currentGroupTranslationMap;
-    applyGroupMapsToEditors(nextColorMap, nextTranslationMap);
   });
 
   // Character Prompt Add Button
@@ -1764,18 +1365,6 @@ function initUI() {
     }
   });
 
-  // 分组标签入口按钮：发送消息到 bridge.js 切换面板显示
-  const btnGroupTags = document.getElementById('btn-group-tags');
-  if (btnGroupTags) {
-    btnGroupTags.addEventListener('click', () => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_GROUP_TAGS_PANEL' });
-        }
-      });
-    });
-  }
-
   // Library & Settings
   document.getElementById('btn-library').addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pages/sync.html') });
@@ -1852,20 +1441,7 @@ function initUI() {
 
     // 刷新多选分辨率按钮文字
     if (typeof syncMultiResStorage === 'function') syncMultiResStorage();
-    updateGroupTagsPickerStaticText();
-    if (document.getElementById('group-tags-picker-modal')?.classList.contains('visible')) {
-      const { tagData, groupTagsData } = groupTagsPickerState;
-      if (tagData) {
-        const tagEl = document.getElementById('group-tags-picker-tag');
-        if (tagEl) {
-          tagEl.innerHTML = '';
-          tagEl.appendChild(renderPickerTagContent(tagData));
-        }
-      }
-      if (tagData && groupTagsData) {
-        renderGroupTagsPickerList(tagData, groupTagsData);
-      }
-    }
+    groupTagsController?.handleLanguageChange();
   };
 
   const setLanguage = (lang) => {
@@ -2057,6 +1633,11 @@ function switchTab(mode, fromUserClick = false) {
     });
   }
 
+  const activeTarget = getCurrentGroupTagsTarget();
+  if (fromUserClick || activeTarget.type === 'base') {
+    setCurrentGroupTagsTarget({ type: 'base', mode });
+  }
+
   // 切换后立即同步正确的 tags 状态给面板，刷新灰阶
   syncActiveTagsToPanel();
 }
@@ -2065,25 +1646,28 @@ function syncActiveTagsToPanel() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabsList) => {
     if (tabsList[0]) {
       let activeTags, inactiveTags, targetLabel;
+      let activeTarget = getCurrentGroupTagsTarget();
 
-      if (activeEditorTarget.type === 'base') {
+      if (activeTarget.type === 'base') {
         // 当前焦点在 Base 编辑器
-        activeEditorTarget.mode = currentMode; // 保持同步
+        if (activeTarget.mode !== currentMode) {
+          activeTarget = setCurrentGroupTagsTarget({ type: 'base', mode: currentMode });
+        }
         activeTags = currentMode === 'positive' ? positiveTags : negativeTags;
         inactiveTags = currentMode === 'positive' ? negativeTags : positiveTags;
         targetLabel = currentMode === 'positive' ? 'Base (+)' : 'Base (-)';
-      } else if (activeEditorTarget.type === 'character') {
-        const idx = activeEditorTarget.charIndex;
+      } else if (activeTarget.type === 'character') {
+        const idx = activeTarget.charIndex;
         const charData = characterPromptsData[idx];
         const charEdObj = charEditors[idx];
         if (charData && charEdObj) {
-          const tab = charEdObj.activeTab; // 'pos' | 'neg'
-          activeTags = tab === 'pos' ? (charData.posTags || []) : (charData.negTags || []);
-          inactiveTags = tab === 'pos' ? (charData.negTags || []) : (charData.posTags || []);
-          targetLabel = `Char ${idx + 1} (${tab === 'pos' ? '+' : '-'})`;
+          const mode = activeTarget.mode === 'negative' ? 'negative' : 'positive';
+          activeTags = mode === 'positive' ? (charData.posTags || []) : (charData.negTags || []);
+          inactiveTags = mode === 'positive' ? (charData.negTags || []) : (charData.posTags || []);
+          targetLabel = `Char ${idx + 1} (${mode === 'positive' ? '+' : '-'})`;
         } else {
           // 角色已被删除，回退到 base
-          activeEditorTarget = { type: 'base', mode: currentMode };
+          activeTarget = setCurrentGroupTagsTarget({ type: 'base', mode: currentMode });
           activeTags = currentMode === 'positive' ? positiveTags : negativeTags;
           inactiveTags = currentMode === 'positive' ? negativeTags : positiveTags;
           targetLabel = currentMode === 'positive' ? 'Base (+)' : 'Base (-)';
@@ -2415,55 +1999,13 @@ async function appendHistorySnippet(snapshot, target) {
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (shouldIgnoreRuntimeMessage(msg)) return;
+  if (groupTagsController?.handleRuntimeMessage(msg)) return;
   if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
     restoreFromSnapshot(msg.snapshot);
   }
 
   if (msg.type === 'APPEND_HISTORY_SNIPPET' && msg.snapshot && msg.target) {
     appendHistorySnippet(msg.snapshot, msg.target);
-  }
-  
-  if (msg.type === 'APPEND_TAG_FROM_PANEL' && msg.tag) {
-    // 根据当前焦点追踪目标，将标签追加到正确的编辑器
-    if (activeEditorTarget.type === 'base') {
-      if (editor) {
-        editor.addTag(msg.tag);
-      }
-    } else if (activeEditorTarget.type === 'character') {
-      const idx = activeEditorTarget.charIndex;
-      const charEdObj = charEditors[idx];
-      if (charEdObj && charEdObj.editor) {
-        charEdObj.editor.addTag(msg.tag);
-      }
-    }
-  }
-
-  if (msg.type === 'REMOVE_TAG_FROM_PANEL' && msg.tag) {
-    if (activeEditorTarget.type === 'base') {
-      if (editor) {
-        editor.removeTagByText(msg.tag);
-      }
-    } else if (activeEditorTarget.type === 'character') {
-      const idx = activeEditorTarget.charIndex;
-      const charEdObj = charEditors[idx];
-      if (charEdObj && charEdObj.editor) {
-        charEdObj.editor.removeTagByText(msg.tag);
-      }
-    }
-  }
-
-  // 接收来自 GroupTags 面板的分组颜色映射，应用到所有 TagEditor 实例
-  if (msg.type === 'SYNC_GROUP_COLORS' && msg.colorMap) {
-    // 持久化保存到 storage
-    chrome.storage.local.set({ groupColorMap: msg.colorMap });
-    applyGroupMapsToEditors(msg.colorMap, currentGroupTranslationMap);
-  }
-
-  // 接收来自 GroupTags 面板的分组翻译映射，应用到所有 TagEditor 实例
-  if (msg.type === 'SYNC_GROUP_TRANSLATIONS' && msg.translationMap) {
-    // 持久化保存到 storage
-    chrome.storage.local.set({ groupTranslationMap: msg.translationMap });
-    applyGroupMapsToEditors(currentGroupColorMap, msg.translationMap);
   }
 });
 
