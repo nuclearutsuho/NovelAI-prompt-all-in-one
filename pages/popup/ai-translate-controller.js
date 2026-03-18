@@ -1,0 +1,743 @@
+const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
+const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 60000;
+const AI_PENDING_PLACEHOLDER_VALUE = '__AI_TRANSLATING__';
+const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
+const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
+  providerPreset: 'openai',
+  apiUrl: 'https://api.openai.com/v1/chat/completions',
+  apiKey: '',
+  model: 'gpt-4o-mini',
+  systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
+});
+
+function cloneDeep(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function createAiProfileId() {
+  return `ai_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getDefaultAiProfileName(index = 1) {
+  return `OpenAI ${index}`;
+}
+
+function createDefaultAiProfile(index = 1) {
+  return {
+    id: createAiProfileId(),
+    name: getDefaultAiProfileName(index),
+    ...DEFAULT_AI_PROFILE_TEMPLATE
+  };
+}
+
+function normalizeAiProfile(profile = {}, index = 1) {
+  const fallback = createDefaultAiProfile(index);
+  return {
+    id: String(profile.id || fallback.id),
+    name: String(profile.name || fallback.name).trim() || fallback.name,
+    providerPreset: 'openai',
+    apiUrl: String(profile.apiUrl || fallback.apiUrl).trim() || fallback.apiUrl,
+    apiKey: String(profile.apiKey || '').trim(),
+    model: String(profile.model || fallback.model).trim() || fallback.model,
+    systemPrompt: typeof profile.systemPrompt === 'string' && profile.systemPrompt.trim()
+      ? profile.systemPrompt
+      : fallback.systemPrompt
+  };
+}
+
+function normalizeAiTranslateConfig(rawConfig) {
+  let profiles = [];
+
+  // 兼容旧的单配置结构，自动迁移为多配置结构。
+  if (rawConfig && Array.isArray(rawConfig.profiles)) {
+    profiles = rawConfig.profiles.map((profile, index) => normalizeAiProfile(profile, index + 1));
+  } else if (rawConfig && typeof rawConfig === 'object' && (rawConfig.apiUrl || rawConfig.apiKey || rawConfig.model || rawConfig.systemPrompt)) {
+    profiles = [normalizeAiProfile(rawConfig, 1)];
+  }
+
+  if (profiles.length === 0) {
+    profiles = [createDefaultAiProfile(1)];
+  }
+
+  const activeProfileId = profiles.some((profile) => profile.id === rawConfig?.activeProfileId)
+    ? rawConfig.activeProfileId
+    : profiles[0].id;
+
+  return {
+    activeProfileId,
+    profiles
+  };
+}
+
+function getOriginPatternFromApiUrl(apiUrl) {
+  const parsed = new URL(apiUrl);
+  return `${parsed.origin}/*`;
+}
+
+function containsOriginPermission(origins) {
+  return new Promise((resolve) => {
+    chrome.permissions.contains({ origins }, (granted) => resolve(!!granted));
+  });
+}
+
+function requestOriginPermission(origins) {
+  return new Promise((resolve) => {
+    chrome.permissions.request({ origins }, (granted) => resolve(!!granted));
+  });
+}
+
+function extractTranslatedText(responseJson) {
+  const messageContent = responseJson?.choices?.[0]?.message?.content;
+  if (typeof messageContent === 'string') {
+    return messageContent.trim();
+  }
+  if (Array.isArray(messageContent)) {
+    return messageContent
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+export default function createAiTranslateController(deps = {}) {
+  const {
+    getLocalizedText = (key, fallback = '') => fallback || key,
+    showToast = () => {},
+    normalizeTargetContext = (targetContext) => targetContext,
+    getTargetTagList = () => null,
+    renderTargetIfVisible = () => {},
+    syncTargetAfterResolve = () => {},
+    refreshPendingVisuals = () => {}
+  } = deps;
+
+  let aiTranslateConfigState = null;
+  let aiPendingVisualTimer = null;
+  let settingsSaveTimer = null;
+  const aiPendingRequestMap = new Map();
+
+  function getActiveAiProfile(config = aiTranslateConfigState) {
+    const normalizedConfig = normalizeAiTranslateConfig(config);
+    return normalizedConfig.profiles.find((profile) => profile.id === normalizedConfig.activeProfileId) || normalizedConfig.profiles[0];
+  }
+
+  async function loadConfig() {
+    const stored = (await chrome.storage.local.get(AI_TRANSLATE_STORAGE_KEY))[AI_TRANSLATE_STORAGE_KEY];
+    const normalized = normalizeAiTranslateConfig(stored);
+    aiTranslateConfigState = normalized;
+
+    if (!stored || JSON.stringify(stored) !== JSON.stringify(normalized)) {
+      await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: normalized });
+    }
+
+    return normalized;
+  }
+
+  async function saveConfig(config) {
+    aiTranslateConfigState = normalizeAiTranslateConfig(config);
+    await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: aiTranslateConfigState });
+    return aiTranslateConfigState;
+  }
+
+  function setAiTranslateButtonLoading(button, isLoading) {
+    if (!button) return;
+    const currentCount = Number(button.dataset.loadingCount || 0);
+    const nextCount = Math.max(0, currentCount + (isLoading ? 1 : -1));
+    if (nextCount === 0) {
+      delete button.dataset.loadingCount;
+    } else {
+      button.dataset.loadingCount = String(nextCount);
+    }
+    button.classList.toggle('is-loading', nextCount > 0);
+  }
+
+  function getAiPendingRequestId(value) {
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+    return String(value?.aiPendingRequestId || '').trim();
+  }
+
+  function createAiPendingRequestId() {
+    return `ai_pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function registerAiPendingRequest(requestId, meta = {}) {
+    if (!requestId) return null;
+    // 以 requestId 为唯一锚点，避免网页回读后 tag 数组重建导致回填目标丢失。
+    const state = {
+      requestId,
+      controller: null,
+      canceled: false,
+      cancelReason: '',
+      ...meta
+    };
+    aiPendingRequestMap.set(requestId, state);
+    return state;
+  }
+
+  function getAiPendingRequestState(requestId) {
+    if (!requestId) return null;
+    return aiPendingRequestMap.get(requestId) || null;
+  }
+
+  function setAiPendingRequestController(requestId, controller) {
+    const state = getAiPendingRequestState(requestId);
+    if (!state) return;
+    state.controller = controller || null;
+    if (state.canceled && controller && !controller.signal.aborted) {
+      controller.abort();
+    }
+  }
+
+  function isAiPendingRequestCanceled(requestId) {
+    return !!getAiPendingRequestState(requestId)?.canceled;
+  }
+
+  function cancelAiPendingRequest(requestId, reason = 'user') {
+    const state = getAiPendingRequestState(requestId);
+    if (!state) return false;
+    state.canceled = true;
+    state.cancelReason = reason;
+    if (state.controller && !state.controller.signal.aborted) {
+      state.controller.abort();
+    }
+    return true;
+  }
+
+  function cleanupAiPendingRequest(requestId) {
+    if (!requestId) return;
+    aiPendingRequestMap.delete(requestId);
+  }
+
+  function findPendingAiTagIndex(tagList = [], pendingTagOrRequestId) {
+    const requestId = getAiPendingRequestId(pendingTagOrRequestId);
+    if (requestId) {
+      return tagList.findIndex((tag) => isPendingTag(tag) && getAiPendingRequestId(tag) === requestId);
+    }
+    if (!pendingTagOrRequestId) return -1;
+    return tagList.indexOf(pendingTagOrRequestId);
+  }
+
+  function isPendingTag(tag = {}) {
+    return !!tag?.aiPending;
+  }
+
+  function getSyncableTagList(tags = []) {
+    return (tags || []).filter((tag) => !isPendingTag(tag));
+  }
+
+  function preservePendingTags(oldTags = [], newTags = []) {
+    const merged = Array.isArray(newTags) ? newTags.slice() : [];
+    const pendingEntries = (oldTags || [])
+      .map((tag, index) => ({ tag, index, requestId: getAiPendingRequestId(tag) }))
+      .filter(({ tag }) => isPendingTag(tag));
+
+    if (!pendingEntries.length) return merged;
+
+    // 网页回读会重建一份新 tag 列表，这里把本地仍在进行中的 pending tag 按原位置缝回去。
+    pendingEntries.forEach(({ tag, index, requestId }) => {
+      if (requestId && merged.some((item) => getAiPendingRequestId(item) === requestId)) {
+        return;
+      }
+      const insertIndex = Math.max(0, Math.min(index, merged.length));
+      merged.splice(insertIndex, 0, tag);
+    });
+
+    return merged;
+  }
+
+  function hasActivePendingRequests() {
+    for (const state of aiPendingRequestMap.values()) {
+      if (!state.canceled) return true;
+    }
+    return false;
+  }
+
+  function syncPendingVisualTimer() {
+    if (!hasActivePendingRequests()) {
+      if (aiPendingVisualTimer !== null) {
+        window.clearInterval(aiPendingVisualTimer);
+        aiPendingVisualTimer = null;
+      }
+      return;
+    }
+
+    refreshPendingVisuals();
+
+    if (aiPendingVisualTimer !== null) return;
+    aiPendingVisualTimer = window.setInterval(() => {
+      if (!hasActivePendingRequests()) {
+        window.clearInterval(aiPendingVisualTimer);
+        aiPendingVisualTimer = null;
+        return;
+      }
+      refreshPendingVisuals();
+    }, 1000);
+  }
+
+  function handleRemovedTags(removedTags = [], reason = 'user') {
+    let canceledAny = false;
+    (removedTags || []).forEach((tag) => {
+      const requestId = getAiPendingRequestId(tag);
+      if (!requestId) return;
+      canceledAny = cancelAiPendingRequest(requestId, reason) || canceledAny;
+    });
+    if (canceledAny) {
+      syncPendingVisualTimer();
+    }
+  }
+
+  function restartPendingAiTag(targetContext, pendingTagOrRequestId, requestId) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId || !requestId) return false;
+
+    const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const pendingTag = tagList[pendingIndex];
+    pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
+    pendingTag.aiPending = true;
+    pendingTag.aiPendingStartedAt = Date.now();
+    pendingTag.aiPendingRequestId = requestId;
+    delete pendingTag.aiPendingFailed;
+    delete pendingTag.aiPendingErrorMessage;
+
+    renderTargetIfVisible(target);
+    syncPendingVisualTimer();
+    return true;
+  }
+
+  function resolvePendingAiTag(targetContext, pendingTagOrRequestId, translatedText) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const resolvedTag = tagList[pendingIndex];
+    resolvedTag.value = translatedText;
+    delete resolvedTag.aiPending;
+    delete resolvedTag.aiPendingFailed;
+    delete resolvedTag.aiPendingErrorMessage;
+    delete resolvedTag.aiPendingStartedAt;
+    delete resolvedTag.aiPendingRequestId;
+
+    syncPendingVisualTimer();
+    syncTargetAfterResolve(target, 'popup');
+    return true;
+  }
+
+  function markPendingAiTagFailed(targetContext, pendingTagOrRequestId, errorMessage = '') {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const pendingTag = tagList[pendingIndex];
+    pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
+    pendingTag.aiPending = true;
+    pendingTag.aiPendingFailed = true;
+    pendingTag.aiPendingErrorMessage = String(errorMessage || '').trim();
+    delete pendingTag.aiPendingStartedAt;
+
+    renderTargetIfVisible(target);
+    syncPendingVisualTimer();
+    return true;
+  }
+
+  async function ensureAiApiPermission(apiUrl) {
+    const originPattern = getOriginPatternFromApiUrl(apiUrl);
+    if (await containsOriginPermission([originPattern])) {
+      return true;
+    }
+    return requestOriginPermission([originPattern]);
+  }
+
+  async function aiTranslateText(sourceText, profile, { controller = null } = {}) {
+    const requestController = controller || new AbortController();
+    const timer = window.setTimeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
+
+    try {
+      const headers = {
+        'Content-Type': 'application/json'
+      };
+
+      if (profile.apiKey) {
+        headers.Authorization = `Bearer ${profile.apiKey}`;
+      }
+
+      const response = await fetch(profile.apiUrl, {
+        method: 'POST',
+        headers,
+        signal: requestController.signal,
+        body: JSON.stringify({
+          model: profile.model,
+          messages: [
+            { role: 'system', content: profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT },
+            { role: 'user', content: sourceText }
+          ],
+          temperature: 0.3
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(errorText || `HTTP ${response.status}`);
+      }
+
+      const responseJson = await response.json();
+      const translatedText = extractTranslatedText(responseJson).replace(/\s+/g, ' ').trim();
+      if (!translatedText) {
+        throw new Error('EMPTY_TRANSLATION');
+      }
+
+      return translatedText;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  function renderAiTranslateProfileOptions() {
+    const profileSelect = document.getElementById('ai-profile-select');
+    const deleteButton = document.getElementById('btn-ai-profile-delete');
+    if (!profileSelect || !aiTranslateConfigState) return;
+
+    profileSelect.innerHTML = '';
+    aiTranslateConfigState.profiles.forEach((profile, index) => {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.name || getDefaultAiProfileName(index + 1);
+      profileSelect.appendChild(option);
+    });
+    profileSelect.value = aiTranslateConfigState.activeProfileId;
+
+    if (deleteButton) {
+      deleteButton.disabled = aiTranslateConfigState.profiles.length <= 1;
+    }
+  }
+
+  function populateAiTranslateProfileForm() {
+    const profile = getActiveAiProfile();
+    if (!profile) return;
+
+    const profileNameInput = document.getElementById('ai-profile-name');
+    const apiUrlInput = document.getElementById('ai-api-url');
+    const apiKeyInput = document.getElementById('ai-api-key');
+    const modelInput = document.getElementById('ai-model');
+    const systemPromptInput = document.getElementById('ai-system-prompt');
+
+    if (profileNameInput) profileNameInput.value = profile.name || '';
+    if (apiUrlInput) apiUrlInput.value = profile.apiUrl || '';
+    if (apiKeyInput) apiKeyInput.value = profile.apiKey || '';
+    if (modelInput) modelInput.value = profile.model || '';
+    if (systemPromptInput) systemPromptInput.value = profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT;
+
+    renderAiTranslateProfileOptions();
+  }
+
+  async function persistAiTranslateProfileForm() {
+    if (!aiTranslateConfigState) {
+      await loadConfig();
+    }
+
+    // 先把设置面板里当前编辑的值落盘，避免刚改完配置就发请求。
+    const profile = getActiveAiProfile();
+    if (!profile) return;
+
+    const profileNameInput = document.getElementById('ai-profile-name');
+    const apiUrlInput = document.getElementById('ai-api-url');
+    const apiKeyInput = document.getElementById('ai-api-key');
+    const modelInput = document.getElementById('ai-model');
+    const systemPromptInput = document.getElementById('ai-system-prompt');
+
+    const nextConfig = cloneDeep(aiTranslateConfigState);
+    const profileIndex = nextConfig.profiles.findIndex((item) => item.id === profile.id);
+    if (profileIndex === -1) return;
+
+    nextConfig.profiles[profileIndex] = normalizeAiProfile({
+      ...nextConfig.profiles[profileIndex],
+      name: profileNameInput?.value,
+      apiUrl: apiUrlInput?.value,
+      apiKey: apiKeyInput?.value,
+      model: modelInput?.value,
+      systemPrompt: systemPromptInput?.value
+    }, profileIndex + 1);
+
+    await saveConfig(nextConfig);
+    renderAiTranslateProfileOptions();
+  }
+
+  function formatAiTranslateError(error) {
+    if (error?.name === 'AbortError') {
+      return getLocalizedText('toast_ai_translate_timeout', 'Translation request timed out.');
+    }
+
+    const message = String(error?.message || '').trim();
+    if (message === 'EMPTY_TRANSLATION') {
+      return getLocalizedText('toast_ai_translate_empty', 'The API returned an empty translation.');
+    }
+
+    if (!message) {
+      return getLocalizedText('toast_ai_translate_failed', 'Translation failed.');
+    }
+
+    return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
+  }
+
+  async function translateFromInput({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null }) {
+    if (!tagEditor) return;
+
+    const retrySourceText = String(pendingTag?.aiOriginal || '').trim();
+    const sourceText = pendingTag ? retrySourceText : String(inputEl?.value || '').trim();
+    if (!sourceText) {
+      showToast('warning', getLocalizedText('toast_ai_missing_input', 'Enter text before translating.'));
+      return;
+    }
+
+    if (!aiTranslateConfigState) {
+      await loadConfig();
+    }
+
+    await persistAiTranslateProfileForm();
+
+    const profile = getActiveAiProfile();
+    if (!profile) {
+      showToast('error', getLocalizedText('toast_ai_missing_profile', 'No AI profile is available.'));
+      return;
+    }
+
+    if (!profile.apiUrl) {
+      showToast('warning', getLocalizedText('toast_ai_missing_api_url', 'Please configure an API URL first.'));
+      return;
+    }
+
+    if (!profile.model) {
+      showToast('warning', getLocalizedText('toast_ai_missing_model', 'Please configure a model name first.'));
+      return;
+    }
+
+    try {
+      new URL(profile.apiUrl);
+    } catch (error) {
+      showToast('error', getLocalizedText('toast_ai_invalid_api_url', 'The API URL is invalid.'));
+      return;
+    }
+
+    const target = normalizeTargetContext(targetContext);
+    if (!target) return;
+
+    const requestId = createAiPendingRequestId();
+    registerAiPendingRequest(requestId, {
+      targetType: target.type,
+      targetMode: target.mode,
+      charIndex: target.type === 'character' ? target.charIndex : -1,
+      sourceText
+    });
+
+    let activePendingTag = pendingTag;
+    if (activePendingTag) {
+      // 重试时复用原胶囊，只重置请求状态，不改变用户看到的位置。
+      const restarted = restartPendingAiTag(target, activePendingTag, requestId);
+      if (!restarted) {
+        cleanupAiPendingRequest(requestId);
+        return;
+      }
+    } else {
+      activePendingTag = tagEditor.addTag({
+        value: AI_PENDING_PLACEHOLDER_VALUE,
+        aiOriginal: sourceText,
+        aiPending: true,
+        aiPendingStartedAt: Date.now(),
+        aiPendingRequestId: requestId
+      });
+      if (!activePendingTag) {
+        cleanupAiPendingRequest(requestId);
+        return;
+      }
+
+      if (inputEl) {
+        inputEl.value = '';
+        inputEl.focus();
+      }
+    }
+
+    if (scrollContainer) {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    }
+
+    syncPendingVisualTimer();
+
+    const granted = await ensureAiApiPermission(profile.apiUrl);
+    if (isAiPendingRequestCanceled(requestId)) {
+      cleanupAiPendingRequest(requestId);
+      syncPendingVisualTimer();
+      return;
+    }
+
+    if (!granted) {
+      const message = getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.');
+      markPendingAiTagFailed(target, requestId, message);
+      cleanupAiPendingRequest(requestId);
+      showToast('warning', message);
+      return;
+    }
+
+    setAiTranslateButtonLoading(buttonEl, true);
+    try {
+      const controller = new AbortController();
+      setAiPendingRequestController(requestId, controller);
+      const translatedText = await aiTranslateText(sourceText, profile, { controller });
+      if (isAiPendingRequestCanceled(requestId)) {
+        return;
+      }
+
+      const replaced = resolvePendingAiTag(target, requestId, translatedText);
+      if (!replaced) return;
+
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    } catch (error) {
+      if (isAiPendingRequestCanceled(requestId)) {
+        return;
+      }
+
+      const errorMessage = formatAiTranslateError(error);
+      console.error('[AI Translate] 翻译失败:', error);
+      markPendingAiTagFailed(target, requestId, errorMessage);
+      showToast('error', errorMessage);
+    } finally {
+      cleanupAiPendingRequest(requestId);
+      setAiTranslateButtonLoading(buttonEl, false);
+      syncPendingVisualTimer();
+    }
+  }
+
+  function bindSettingsUI() {
+    const settingsRoot = document.getElementById('ai-translate-settings');
+    if (!settingsRoot || settingsRoot.dataset.bound === 'true') return;
+    settingsRoot.dataset.bound = 'true';
+
+    const profileSelect = document.getElementById('ai-profile-select');
+    const newProfileButton = document.getElementById('btn-ai-profile-new');
+    const deleteProfileButton = document.getElementById('btn-ai-profile-delete');
+    const watchedInputs = [
+      document.getElementById('ai-profile-name'),
+      document.getElementById('ai-api-url'),
+      document.getElementById('ai-api-key'),
+      document.getElementById('ai-model'),
+      document.getElementById('ai-system-prompt')
+    ].filter(Boolean);
+
+    const scheduleSave = () => {
+      window.clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = window.setTimeout(() => {
+        persistAiTranslateProfileForm().catch((error) => {
+          console.error('[AI Translate] 保存配置失败:', error);
+        });
+      }, 250);
+    };
+
+    const flushPendingSave = async () => {
+      if (settingsSaveTimer !== null) {
+        window.clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = null;
+      }
+      await persistAiTranslateProfileForm();
+    };
+
+    profileSelect?.addEventListener('change', async (event) => {
+      const nextProfileId = String(event?.target?.value || profileSelect.value || '').trim();
+      if (!nextProfileId) return;
+
+      await flushPendingSave();
+      const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
+      if (!nextConfig.profiles.some((profile) => profile.id === nextProfileId)) return;
+      nextConfig.activeProfileId = nextProfileId;
+      await saveConfig(nextConfig);
+      populateAiTranslateProfileForm();
+    });
+
+    newProfileButton?.addEventListener('click', async () => {
+      await flushPendingSave();
+      const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
+      const newProfile = createDefaultAiProfile(nextConfig.profiles.length + 1);
+      nextConfig.profiles.push(newProfile);
+      nextConfig.activeProfileId = newProfile.id;
+      await saveConfig(nextConfig);
+      populateAiTranslateProfileForm();
+      showToast('success', getLocalizedText('toast_ai_profile_created', 'AI profile created.'));
+    });
+
+    deleteProfileButton?.addEventListener('click', async () => {
+      await flushPendingSave();
+      if (!aiTranslateConfigState || aiTranslateConfigState.profiles.length <= 1) {
+        showToast('warning', getLocalizedText('toast_ai_profile_delete_last', 'Keep at least one AI profile.'));
+        return;
+      }
+
+      const nextConfig = cloneDeep(aiTranslateConfigState);
+      const profileIndex = nextConfig.profiles.findIndex((profile) => profile.id === nextConfig.activeProfileId);
+      if (profileIndex === -1) return;
+
+      nextConfig.profiles.splice(profileIndex, 1);
+      nextConfig.activeProfileId = nextConfig.profiles[Math.max(0, profileIndex - 1)].id;
+      await saveConfig(nextConfig);
+      populateAiTranslateProfileForm();
+      showToast('success', getLocalizedText('toast_ai_profile_deleted', 'AI profile deleted.'));
+    });
+
+    watchedInputs.forEach((input) => {
+      input.addEventListener('input', scheduleSave);
+      input.addEventListener('change', scheduleSave);
+    });
+
+    loadConfig()
+      .then(() => {
+        populateAiTranslateProfileForm();
+      })
+      .catch((error) => {
+        console.error('[AI Translate] 加载配置失败:', error);
+      });
+  }
+
+  function destroy() {
+    for (const [requestId, state] of aiPendingRequestMap.entries()) {
+      if (state?.controller && !state.controller.signal.aborted) {
+        state.controller.abort();
+      }
+      state.canceled = true;
+      state.cancelReason = 'destroy';
+      aiPendingRequestMap.delete(requestId);
+    }
+    if (aiPendingVisualTimer !== null) {
+      window.clearInterval(aiPendingVisualTimer);
+      aiPendingVisualTimer = null;
+    }
+    if (settingsSaveTimer !== null) {
+      window.clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = null;
+    }
+  }
+
+  return {
+    loadConfig,
+    bindSettingsUI,
+    translateFromInput,
+    handleRemovedTags,
+    preservePendingTags,
+    isPendingTag,
+    getSyncableTagList,
+    syncPendingVisualTimer,
+    destroy
+  };
+}

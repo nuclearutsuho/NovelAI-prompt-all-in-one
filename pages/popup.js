@@ -2,6 +2,7 @@ import TagEditor from '../lib/TagEditor.js';
 import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
+import createAiTranslateController from './popup/ai-translate-controller.js';
 
 let editor;
 let autocomplete;
@@ -39,23 +40,9 @@ const groupTagsPickerState = {
 let activeEditorTarget = { type: 'base', mode: 'positive' };
 
 let currentLang = DEFAULT_LANG;
-let aiTranslateConfigState = null;
+let aiTranslateController = null;
 
 let hasReceivedInitialChars = false;
-
-const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
-const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 30000;
-const AI_PENDING_PLACEHOLDER_VALUE = '__AI_TRANSLATING__';
-const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
-const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
-  providerPreset: 'openai',
-  apiUrl: 'https://api.openai.com/v1/chat/completions',
-  apiKey: '',
-  model: 'gpt-4o-mini',
-  systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
-});
-let aiPendingVisualTimer = null;
-const aiPendingRequestMap = new Map();
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
@@ -86,19 +73,14 @@ function normalizeTagObject(tag = {}) {
 }
 
 function isPendingAiTag(tag = {}) {
-  return !!tag?.aiPending;
-}
-
-function isFailedPendingAiTag(tag = {}) {
-  return isPendingAiTag(tag) && !!tag?.aiPendingFailed;
-}
-
-function isActivePendingAiTag(tag = {}) {
-  return isPendingAiTag(tag) && !isFailedPendingAiTag(tag);
+  return aiTranslateController?.isPendingTag(tag) || !!tag?.aiPending;
 }
 
 function getSyncableTagList(tags = []) {
-  return (tags || []).filter((tag) => !isPendingAiTag(tag));
+  if (aiTranslateController) {
+    return aiTranslateController.getSyncableTagList(tags);
+  }
+  return (tags || []).filter((tag) => !tag?.aiPending);
 }
 
 function serializeTagList(tags = [], { includePending = false } = {}) {
@@ -106,90 +88,11 @@ function serializeTagList(tags = [], { includePending = false } = {}) {
   return tagList.map(normalizeTagObject).filter(Boolean);
 }
 
-function createAiPendingRequestId() {
-  return `ai_pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getAiPendingRequestId(value) {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-  return String(value?.aiPendingRequestId || '').trim();
-}
-
-function registerAiPendingRequest(requestId, meta = {}) {
-  if (!requestId) return null;
-  const state = {
-    requestId,
-    controller: null,
-    canceled: false,
-    cancelReason: '',
-    ...meta
-  };
-  aiPendingRequestMap.set(requestId, state);
-  return state;
-}
-
-function getAiPendingRequestState(requestId) {
-  if (!requestId) return null;
-  return aiPendingRequestMap.get(requestId) || null;
-}
-
-function setAiPendingRequestController(requestId, controller) {
-  const state = getAiPendingRequestState(requestId);
-  if (!state) return;
-  state.controller = controller || null;
-  if (state.canceled && controller && !controller.signal.aborted) {
-    controller.abort();
-  }
-}
-
-function isAiPendingRequestCanceled(requestId) {
-  return !!getAiPendingRequestState(requestId)?.canceled;
-}
-
-function cancelAiPendingRequest(requestId, reason = 'user') {
-  const state = getAiPendingRequestState(requestId);
-  if (!state) return false;
-  state.canceled = true;
-  state.cancelReason = reason;
-  if (state.controller && !state.controller.signal.aborted) {
-    state.controller.abort();
-  }
-  return true;
-}
-
-function cleanupAiPendingRequest(requestId) {
-  if (!requestId) return;
-  aiPendingRequestMap.delete(requestId);
-}
-
-function findPendingAiTagIndex(tagList = [], pendingTagOrRequestId) {
-  const requestId = getAiPendingRequestId(pendingTagOrRequestId);
-  if (requestId) {
-    return tagList.findIndex((tag) => isPendingAiTag(tag) && getAiPendingRequestId(tag) === requestId);
-  }
-  if (!pendingTagOrRequestId) return -1;
-  return tagList.indexOf(pendingTagOrRequestId);
-}
-
 function preservePendingAiTags(oldTags = [], newTags = []) {
-  const merged = Array.isArray(newTags) ? newTags.slice() : [];
-  const pendingEntries = (oldTags || [])
-    .map((tag, index) => ({ tag, index, requestId: getAiPendingRequestId(tag) }))
-    .filter(({ tag }) => isPendingAiTag(tag));
-
-  if (!pendingEntries.length) return merged;
-
-  pendingEntries.forEach(({ tag, index, requestId }) => {
-    if (requestId && merged.some((item) => getAiPendingRequestId(item) === requestId)) {
-      return;
-    }
-    const insertIndex = Math.max(0, Math.min(index, merged.length));
-    merged.splice(insertIndex, 0, tag);
-  });
-
-  return merged;
+  if (aiTranslateController) {
+    return aiTranslateController.preservePendingTags(oldTags, newTags);
+  }
+  return Array.isArray(newTags) ? newTags.slice() : [];
 }
 
 function getIncomingTagList(incomingTags, promptText = '') {
@@ -219,84 +122,6 @@ function shouldApplyIncomingPromptState({ isFirstTime = false, incomingPrompt, i
   if (!samePrompt) return true;
   if (Array.isArray(incomingTags)) return true;
   return !Array.isArray(currentTags) || currentTags.length === 0;
-}
-
-function createAiProfileId() {
-  return `ai_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getDefaultAiProfileName(index = 1) {
-  return `OpenAI ${index}`;
-}
-
-function createDefaultAiProfile(index = 1) {
-  return {
-    id: createAiProfileId(),
-    name: getDefaultAiProfileName(index),
-    ...DEFAULT_AI_PROFILE_TEMPLATE
-  };
-}
-
-function normalizeAiProfile(profile = {}, index = 1) {
-  const fallback = createDefaultAiProfile(index);
-  return {
-    id: String(profile.id || fallback.id),
-    name: String(profile.name || fallback.name).trim() || fallback.name,
-    providerPreset: 'openai',
-    apiUrl: String(profile.apiUrl || fallback.apiUrl).trim() || fallback.apiUrl,
-    apiKey: String(profile.apiKey || '').trim(),
-    model: String(profile.model || fallback.model).trim() || fallback.model,
-    systemPrompt: typeof profile.systemPrompt === 'string' && profile.systemPrompt.trim()
-      ? profile.systemPrompt
-      : fallback.systemPrompt
-  };
-}
-
-function normalizeAiTranslateConfig(rawConfig) {
-  let profiles = [];
-
-  // 兼容旧的单配置结构，自动迁移为多配置结构。
-  if (rawConfig && Array.isArray(rawConfig.profiles)) {
-    profiles = rawConfig.profiles.map((profile, index) => normalizeAiProfile(profile, index + 1));
-  } else if (rawConfig && typeof rawConfig === 'object' && (rawConfig.apiUrl || rawConfig.apiKey || rawConfig.model || rawConfig.systemPrompt)) {
-    profiles = [normalizeAiProfile(rawConfig, 1)];
-  }
-
-  if (profiles.length === 0) {
-    profiles = [createDefaultAiProfile(1)];
-  }
-
-  const activeProfileId = profiles.some((profile) => profile.id === rawConfig?.activeProfileId)
-    ? rawConfig.activeProfileId
-    : profiles[0].id;
-
-  return {
-    activeProfileId,
-    profiles
-  };
-}
-
-function getActiveAiProfile(config = aiTranslateConfigState) {
-  const normalizedConfig = normalizeAiTranslateConfig(config);
-  return normalizedConfig.profiles.find((profile) => profile.id === normalizedConfig.activeProfileId) || normalizedConfig.profiles[0];
-}
-
-async function loadAiTranslateConfig() {
-  const stored = (await chrome.storage.local.get(AI_TRANSLATE_STORAGE_KEY))[AI_TRANSLATE_STORAGE_KEY];
-  const normalized = normalizeAiTranslateConfig(stored);
-  aiTranslateConfigState = normalized;
-
-  if (!stored || JSON.stringify(stored) !== JSON.stringify(normalized)) {
-    await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: normalized });
-  }
-
-  return normalized;
-}
-
-async function saveAiTranslateConfig(config) {
-  aiTranslateConfigState = normalizeAiTranslateConfig(config);
-  await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: aiTranslateConfigState });
-  return aiTranslateConfigState;
 }
 
 function computeStateFingerprint(posT, negT, charD) {
@@ -514,32 +339,6 @@ function buildCharacterPromptPayload() {
   }));
 }
 
-function setAiTranslateButtonLoading(button, isLoading) {
-  if (!button) return;
-  const currentCount = Number(button.dataset.loadingCount || 0);
-  const nextCount = Math.max(0, currentCount + (isLoading ? 1 : -1));
-  if (nextCount === 0) {
-    delete button.dataset.loadingCount;
-  } else {
-    button.dataset.loadingCount = String(nextCount);
-  }
-  button.classList.toggle('is-loading', nextCount > 0);
-}
-
-function hasPendingAiTags(tags = [], { activeOnly = false } = {}) {
-  return (tags || []).some((tag) => (activeOnly ? isActivePendingAiTag(tag) : isPendingAiTag(tag)));
-}
-
-function hasAnyPendingAiTags({ activeOnly = false } = {}) {
-  if (hasPendingAiTags(positiveTags, { activeOnly }) || hasPendingAiTags(negativeTags, { activeOnly })) {
-    return true;
-  }
-
-  return (characterPromptsData || []).some((character) => (
-    hasPendingAiTags(character?.posTags || [], { activeOnly }) || hasPendingAiTags(character?.negTags || [], { activeOnly })
-  ));
-}
-
 function refreshPendingAiVisuals() {
   editor?.refreshPendingAiVisuals?.();
   charEditors.forEach((charEditorObj) => {
@@ -547,43 +346,12 @@ function refreshPendingAiVisuals() {
   });
 }
 
-function cancelPendingAiRequestsInTags(tags = [], reason = 'user') {
-  let canceledAny = false;
-  (tags || []).forEach((tag) => {
-    const requestId = getAiPendingRequestId(tag);
-    if (!requestId) return;
-    canceledAny = cancelAiPendingRequest(requestId, reason) || canceledAny;
-  });
-  return canceledAny;
-}
-
-function handleRemovedPendingAiTags(removedTags = []) {
-  const canceledAny = cancelPendingAiRequestsInTags(removedTags, 'user');
-  if (canceledAny) {
-    syncPendingAiVisualTimer();
-  }
+function handleRemovedPendingAiTags(removedTags = [], reason = 'user') {
+  aiTranslateController?.handleRemovedTags(removedTags, reason);
 }
 
 function syncPendingAiVisualTimer() {
-  if (!hasAnyPendingAiTags({ activeOnly: true })) {
-    if (aiPendingVisualTimer !== null) {
-      window.clearInterval(aiPendingVisualTimer);
-      aiPendingVisualTimer = null;
-    }
-    return;
-  }
-
-  refreshPendingAiVisuals();
-
-  if (aiPendingVisualTimer !== null) return;
-  aiPendingVisualTimer = window.setInterval(() => {
-    if (!hasAnyPendingAiTags({ activeOnly: true })) {
-      window.clearInterval(aiPendingVisualTimer);
-      aiPendingVisualTimer = null;
-      return;
-    }
-    refreshPendingAiVisuals();
-  }, 1000);
+  aiTranslateController?.syncPendingVisualTimer();
 }
 
 function normalizeAiTargetContext(targetContext = {}) {
@@ -641,43 +409,6 @@ function renderAiTargetIfVisible(targetContext) {
   }
 }
 
-function removePendingAiTag(targetContext, pendingTagOrRequestId, { cancelRequest = false, reason = 'user' } = {}) {
-  const tagList = getAiTargetTagList(targetContext);
-  const requestId = getAiPendingRequestId(pendingTagOrRequestId);
-  if (cancelRequest && requestId) {
-    cancelAiPendingRequest(requestId, reason);
-  }
-  if (!tagList || !pendingTagOrRequestId) return false;
-
-  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
-  if (pendingIndex === -1) return false;
-
-  tagList.splice(pendingIndex, 1);
-  renderAiTargetIfVisible(targetContext);
-  syncPendingAiVisualTimer();
-  return true;
-}
-
-function restartPendingAiTag(targetContext, pendingTagOrRequestId, requestId) {
-  const tagList = getAiTargetTagList(targetContext);
-  if (!tagList || !pendingTagOrRequestId || !requestId) return false;
-
-  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
-  if (pendingIndex === -1) return false;
-
-  const pendingTag = tagList[pendingIndex];
-  pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
-  pendingTag.aiPending = true;
-  pendingTag.aiPendingStartedAt = Date.now();
-  pendingTag.aiPendingRequestId = requestId;
-  delete pendingTag.aiPendingFailed;
-  delete pendingTag.aiPendingErrorMessage;
-
-  renderAiTargetIfVisible(targetContext);
-  syncPendingAiVisualTimer();
-  return true;
-}
-
 function syncAiTargetAfterResolve(targetContext, source = 'popup') {
   const target = normalizeAiTargetContext(targetContext);
   if (!target) return;
@@ -705,440 +436,6 @@ function syncAiTargetAfterResolve(targetContext, source = 'popup') {
   renderAiTargetIfVisible(target);
   syncCharactersToPage(source);
 }
-
-function resolvePendingAiTag(targetContext, pendingTagOrRequestId, translatedText) {
-  const tagList = getAiTargetTagList(targetContext);
-  if (!tagList || !pendingTagOrRequestId) return false;
-
-  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
-  if (pendingIndex === -1) return false;
-
-  const resolvedTag = tagList[pendingIndex];
-  resolvedTag.value = translatedText;
-  delete resolvedTag.aiPending;
-  delete resolvedTag.aiPendingFailed;
-  delete resolvedTag.aiPendingErrorMessage;
-  delete resolvedTag.aiPendingStartedAt;
-  delete resolvedTag.aiPendingRequestId;
-
-  syncPendingAiVisualTimer();
-  syncAiTargetAfterResolve(targetContext, 'popup');
-  return true;
-}
-
-function markPendingAiTagFailed(targetContext, pendingTagOrRequestId, errorMessage = '') {
-  const tagList = getAiTargetTagList(targetContext);
-  if (!tagList || !pendingTagOrRequestId) return false;
-
-  const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
-  if (pendingIndex === -1) return false;
-
-  const pendingTag = tagList[pendingIndex];
-  pendingTag.value = AI_PENDING_PLACEHOLDER_VALUE;
-  pendingTag.aiPending = true;
-  pendingTag.aiPendingFailed = true;
-  pendingTag.aiPendingErrorMessage = String(errorMessage || '').trim();
-  delete pendingTag.aiPendingStartedAt;
-
-  renderAiTargetIfVisible(targetContext);
-  syncPendingAiVisualTimer();
-  return true;
-}
-
-function getOriginPatternFromApiUrl(apiUrl) {
-  const parsed = new URL(apiUrl);
-  return `${parsed.origin}/*`;
-}
-
-function containsOriginPermission(origins) {
-  return new Promise((resolve) => {
-    chrome.permissions.contains({ origins }, (granted) => resolve(!!granted));
-  });
-}
-
-function requestOriginPermission(origins) {
-  return new Promise((resolve) => {
-    chrome.permissions.request({ origins }, (granted) => resolve(!!granted));
-  });
-}
-
-async function ensureAiApiPermission(apiUrl) {
-  const originPattern = getOriginPatternFromApiUrl(apiUrl);
-  if (await containsOriginPermission([originPattern])) {
-    return true;
-  }
-  return requestOriginPermission([originPattern]);
-}
-
-function extractTranslatedText(responseJson) {
-  const messageContent = responseJson?.choices?.[0]?.message?.content;
-  if (typeof messageContent === 'string') {
-    return messageContent.trim();
-  }
-  if (Array.isArray(messageContent)) {
-    return messageContent
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (typeof part?.text === 'string') return part.text;
-        return '';
-      })
-      .join('')
-      .trim();
-  }
-  return '';
-}
-
-async function aiTranslateText(sourceText, profile, { controller = null } = {}) {
-  const requestController = controller || new AbortController();
-  const timer = window.setTimeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
-
-  try {
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-
-    if (profile.apiKey) {
-      headers.Authorization = `Bearer ${profile.apiKey}`;
-    }
-
-    const response = await fetch(profile.apiUrl, {
-      method: 'POST',
-      headers,
-      signal: requestController.signal,
-      body: JSON.stringify({
-        model: profile.model,
-        messages: [
-          { role: 'system', content: profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT },
-          { role: 'user', content: sourceText }
-        ],
-        temperature: 0.3
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(errorText || `HTTP ${response.status}`);
-    }
-
-    const responseJson = await response.json();
-    const translatedText = extractTranslatedText(responseJson).replace(/\s+/g, ' ').trim();
-    if (!translatedText) {
-      throw new Error('EMPTY_TRANSLATION');
-    }
-
-    return translatedText;
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
-function renderAiTranslateProfileOptions() {
-  const profileSelect = document.getElementById('ai-profile-select');
-  const deleteButton = document.getElementById('btn-ai-profile-delete');
-  if (!profileSelect || !aiTranslateConfigState) return;
-
-  profileSelect.innerHTML = '';
-  aiTranslateConfigState.profiles.forEach((profile, index) => {
-    const option = document.createElement('option');
-    option.value = profile.id;
-    option.textContent = profile.name || getDefaultAiProfileName(index + 1);
-    profileSelect.appendChild(option);
-  });
-  profileSelect.value = aiTranslateConfigState.activeProfileId;
-
-  if (deleteButton) {
-    deleteButton.disabled = aiTranslateConfigState.profiles.length <= 1;
-  }
-}
-
-function populateAiTranslateProfileForm() {
-  const profile = getActiveAiProfile();
-  if (!profile) return;
-
-  const profileNameInput = document.getElementById('ai-profile-name');
-  const apiUrlInput = document.getElementById('ai-api-url');
-  const apiKeyInput = document.getElementById('ai-api-key');
-  const modelInput = document.getElementById('ai-model');
-  const systemPromptInput = document.getElementById('ai-system-prompt');
-
-  if (profileNameInput) profileNameInput.value = profile.name || '';
-  if (apiUrlInput) apiUrlInput.value = profile.apiUrl || '';
-  if (apiKeyInput) apiKeyInput.value = profile.apiKey || '';
-  if (modelInput) modelInput.value = profile.model || '';
-  if (systemPromptInput) systemPromptInput.value = profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT;
-
-  renderAiTranslateProfileOptions();
-}
-
-async function persistAiTranslateProfileForm() {
-  if (!aiTranslateConfigState) {
-    await loadAiTranslateConfig();
-  }
-
-  // 翻译前先把设置面板里当前正在编辑的值落盘，避免用户刚修改 API 配置却未触发 blur。
-
-  const profile = getActiveAiProfile();
-  if (!profile) return;
-
-  const profileNameInput = document.getElementById('ai-profile-name');
-  const apiUrlInput = document.getElementById('ai-api-url');
-  const apiKeyInput = document.getElementById('ai-api-key');
-  const modelInput = document.getElementById('ai-model');
-  const systemPromptInput = document.getElementById('ai-system-prompt');
-
-  const nextConfig = cloneDeep(aiTranslateConfigState);
-  const profileIndex = nextConfig.profiles.findIndex((item) => item.id === profile.id);
-  if (profileIndex === -1) return;
-
-  nextConfig.profiles[profileIndex] = normalizeAiProfile({
-    ...nextConfig.profiles[profileIndex],
-    name: profileNameInput?.value,
-    apiUrl: apiUrlInput?.value,
-    apiKey: apiKeyInput?.value,
-    model: modelInput?.value,
-    systemPrompt: systemPromptInput?.value
-  }, profileIndex + 1);
-
-  await saveAiTranslateConfig(nextConfig);
-  renderAiTranslateProfileOptions();
-}
-
-function formatAiTranslateError(error) {
-  if (error?.name === 'AbortError') {
-    return getLocalizedText('toast_ai_translate_timeout', 'Translation request timed out.');
-  }
-
-  const message = String(error?.message || '').trim();
-  if (message === 'EMPTY_TRANSLATION') {
-    return getLocalizedText('toast_ai_translate_empty', 'The API returned an empty translation.');
-  }
-
-  if (!message) {
-    return getLocalizedText('toast_ai_translate_failed', 'Translation failed.');
-  }
-
-  return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
-}
-
-async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null }) {
-  if (!tagEditor) return;
-
-  const retrySourceText = String(pendingTag?.aiOriginal || '').trim();
-  const sourceText = pendingTag ? retrySourceText : String(inputEl?.value || '').trim();
-  if (!sourceText) {
-    showPopupToast('warning', getLocalizedText('toast_ai_missing_input', 'Enter text before translating.'));
-    return;
-  }
-
-  if (!aiTranslateConfigState) {
-    await loadAiTranslateConfig();
-  }
-
-  // 翻译前先把设置表单中的当前输入落盘，避免请求仍使用旧配置。
-  await persistAiTranslateProfileForm();
-
-  const profile = getActiveAiProfile();
-  if (!profile) {
-    showPopupToast('error', getLocalizedText('toast_ai_missing_profile', 'No AI profile is available.'));
-    return;
-  }
-
-  if (!profile.apiUrl) {
-    showPopupToast('warning', getLocalizedText('toast_ai_missing_api_url', 'Please configure an API URL first.'));
-    return;
-  }
-
-  if (!profile.model) {
-    showPopupToast('warning', getLocalizedText('toast_ai_missing_model', 'Please configure a model name first.'));
-    return;
-  }
-
-  try {
-    new URL(profile.apiUrl);
-  } catch (error) {
-    showPopupToast('error', getLocalizedText('toast_ai_invalid_api_url', 'The API URL is invalid.'));
-    return;
-  }
-
-  const target = normalizeAiTargetContext(targetContext);
-  if (!target) return;
-  const requestId = createAiPendingRequestId();
-  registerAiPendingRequest(requestId, {
-    targetType: target.type,
-    targetMode: target.mode,
-    charIndex: target.type === 'character' ? target.charIndex : -1,
-    sourceText
-  });
-
-  // 先插入本地占位 tag，让输入框立刻释放出来；翻译返回后再回填真正英文。
-  let activePendingTag = pendingTag;
-  // 新翻译直接插入占位胶囊；重试则复用原来的失败胶囊，避免原文丢失或位置变化。
-  activePendingTag = pendingTag;
-  if (activePendingTag) {
-    const restarted = restartPendingAiTag(target, activePendingTag, requestId);
-    if (!restarted) {
-      cleanupAiPendingRequest(requestId);
-      return;
-    }
-  } else {
-    activePendingTag = tagEditor.addTag({
-      value: AI_PENDING_PLACEHOLDER_VALUE,
-      aiOriginal: sourceText,
-      aiPending: true,
-      aiPendingStartedAt: Date.now(),
-      aiPendingRequestId: requestId
-    });
-    if (!activePendingTag) {
-      cleanupAiPendingRequest(requestId);
-      return;
-    }
-
-    if (inputEl) {
-      inputEl.value = '';
-      inputEl.focus();
-    }
-  }
-
-  if (scrollContainer) {
-    scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  }
-
-  syncPendingAiVisualTimer();
-
-  const granted = await ensureAiApiPermission(profile.apiUrl);
-  if (isAiPendingRequestCanceled(requestId)) {
-    cleanupAiPendingRequest(requestId);
-    syncPendingAiVisualTimer();
-    return;
-  }
-  if (!granted) {
-    const message = getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.');
-    markPendingAiTagFailed(target, requestId, message);
-    cleanupAiPendingRequest(requestId);
-    showPopupToast('warning', message);
-    return;
-  }
-
-  setAiTranslateButtonLoading(buttonEl, true);
-  try {
-    const controller = new AbortController();
-    setAiPendingRequestController(requestId, controller);
-    const translatedText = await aiTranslateText(sourceText, profile, { controller });
-    if (isAiPendingRequestCanceled(requestId)) {
-      return;
-    }
-    const replaced = resolvePendingAiTag(target, requestId, translatedText);
-    if (!replaced) return;
-
-    if (scrollContainer) {
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    }
-  } catch (error) {
-    if (isAiPendingRequestCanceled(requestId)) {
-      return;
-    }
-    const errorMessage = formatAiTranslateError(error);
-    console.error('[AI Translate] 翻译失败:', error);
-    markPendingAiTagFailed(target, requestId, errorMessage);
-    showPopupToast('error', errorMessage);
-  } finally {
-    cleanupAiPendingRequest(requestId);
-    setAiTranslateButtonLoading(buttonEl, false);
-    syncPendingAiVisualTimer();
-  }
-}
-
-function bindAiTranslateSettingsUI() {
-  const settingsRoot = document.getElementById('ai-translate-settings');
-  if (!settingsRoot || settingsRoot.dataset.bound === 'true') return;
-  settingsRoot.dataset.bound = 'true';
-
-  const profileSelect = document.getElementById('ai-profile-select');
-  const newProfileButton = document.getElementById('btn-ai-profile-new');
-  const deleteProfileButton = document.getElementById('btn-ai-profile-delete');
-  const watchedInputs = [
-    document.getElementById('ai-profile-name'),
-    document.getElementById('ai-api-url'),
-    document.getElementById('ai-api-key'),
-    document.getElementById('ai-model'),
-    document.getElementById('ai-system-prompt')
-  ].filter(Boolean);
-
-  let saveTimer = null;
-  const scheduleSave = () => {
-    window.clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(() => {
-      persistAiTranslateProfileForm().catch((error) => {
-        console.error('[AI Translate] 保存配置失败:', error);
-      });
-    }, 250);
-  };
-
-  const flushPendingSave = async () => {
-    if (saveTimer !== null) {
-      window.clearTimeout(saveTimer);
-      saveTimer = null;
-    }
-    await persistAiTranslateProfileForm();
-  };
-
-  profileSelect?.addEventListener('change', async (event) => {
-    // 先缓存目标 profile id，避免保存当前表单时重绘下拉框，把选中项又写回旧 profile。
-    const nextProfileId = String(event?.target?.value || profileSelect.value || '').trim();
-    if (!nextProfileId) return;
-
-    // 先保存当前 profile 的编辑值，再切换到新的 profile。
-    await flushPendingSave();
-    const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
-    if (!nextConfig.profiles.some((profile) => profile.id === nextProfileId)) return;
-    nextConfig.activeProfileId = nextProfileId;
-    await saveAiTranslateConfig(nextConfig);
-    populateAiTranslateProfileForm();
-  });
-
-  newProfileButton?.addEventListener('click', async () => {
-    await flushPendingSave();
-    const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
-    const newProfile = createDefaultAiProfile(nextConfig.profiles.length + 1);
-    nextConfig.profiles.push(newProfile);
-    nextConfig.activeProfileId = newProfile.id;
-    await saveAiTranslateConfig(nextConfig);
-    populateAiTranslateProfileForm();
-    showPopupToast('success', getLocalizedText('toast_ai_profile_created', 'AI profile created.'));
-  });
-
-  deleteProfileButton?.addEventListener('click', async () => {
-    await flushPendingSave();
-    if (!aiTranslateConfigState || aiTranslateConfigState.profiles.length <= 1) {
-      showPopupToast('warning', getLocalizedText('toast_ai_profile_delete_last', 'Keep at least one AI profile.'));
-      return;
-    }
-
-    const nextConfig = cloneDeep(aiTranslateConfigState);
-    const profileIndex = nextConfig.profiles.findIndex((profile) => profile.id === nextConfig.activeProfileId);
-    if (profileIndex === -1) return;
-
-    nextConfig.profiles.splice(profileIndex, 1);
-    nextConfig.activeProfileId = nextConfig.profiles[Math.max(0, profileIndex - 1)].id;
-    await saveAiTranslateConfig(nextConfig);
-    populateAiTranslateProfileForm();
-    showPopupToast('success', getLocalizedText('toast_ai_profile_deleted', 'AI profile deleted.'));
-  });
-
-  watchedInputs.forEach((input) => {
-    input.addEventListener('input', scheduleSave);
-    input.addEventListener('change', scheduleSave);
-  });
-
-  loadAiTranslateConfig()
-    .then(() => {
-      populateAiTranslateProfileForm();
-    })
-    .catch((error) => {
-      console.error('[AI Translate] 加载配置失败:', error);
-    });
-}
-
 function applyGroupMapsToEditors(colorMap = {}, translationMap = {}, shouldRender = true) {
   // popup 与所有角色编辑器共用同一份分组颜色/翻译映射
   currentGroupColorMap = colorMap || {};
@@ -1588,6 +885,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   initCommunication();
 });
 
+window.addEventListener('pagehide', () => {
+  aiTranslateController?.destroy();
+});
+
 function applySequentialCountersToEditors(counters) {
   currentSequentialCounters = counters || {};
   if (editor) {
@@ -1793,8 +1094,10 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Set up Delete
   deleteBtn.addEventListener('click', () => {
-    cancelPendingAiRequestsInTags(characterPromptsData[index]?.posTags || [], 'target-removed');
-    cancelPendingAiRequestsInTags(characterPromptsData[index]?.negTags || [], 'target-removed');
+    handleRemovedPendingAiTags([
+      ...(characterPromptsData[index]?.posTags || []),
+      ...(characterPromptsData[index]?.negTags || [])
+    ], 'target-removed');
     syncPendingAiVisualTimer();
     characterPromptsData.splice(index, 1);
     const editorObj = charEditors[index];
@@ -1810,7 +1113,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const charEditor = new TagEditor(editorContainer, {
     dict: dict, // Pass localization dict down to TagEditor
     onRemoveTags: handleRemovedPendingAiTags,
-    onRetryPendingTag: (tag) => handleAiTranslateAction({
+    onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
       tagEditor: charEditor,
       scrollContainer: editorContainer,
@@ -1975,7 +1278,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   });
 
   btnAiTranslate?.addEventListener('click', () => {
-    handleAiTranslateAction({
+    aiTranslateController?.translateFromInput({
       inputEl: input,
       buttonEl: btnAiTranslate,
       tagEditor: charEditor,
@@ -2011,7 +1314,18 @@ function initUI() {
   autocomplete = new Autocomplete();
   autocomplete.load();
   initGroupTagsPickerModal();
-  bindAiTranslateSettingsUI();
+  if (!aiTranslateController) {
+    aiTranslateController = createAiTranslateController({
+      getLocalizedText,
+      showToast: showPopupToast,
+      normalizeTargetContext: normalizeAiTargetContext,
+      getTargetTagList: getAiTargetTagList,
+      renderTargetIfVisible: renderAiTargetIfVisible,
+      syncTargetAfterResolve: syncAiTargetAfterResolve,
+      refreshPendingVisuals: refreshPendingAiVisuals
+    });
+  }
+  aiTranslateController.bindSettingsUI();
 
   // Resolution controls
   const resWidth = document.getElementById('res-width');
@@ -2231,7 +1545,7 @@ function initUI() {
   editor = new TagEditor(container, {
     dict: dict,
     onRemoveTags: handleRemovedPendingAiTags,
-    onRetryPendingTag: (tag) => handleAiTranslateAction({
+    onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
       tagEditor: editor,
       scrollContainer: container,
@@ -2397,7 +1711,7 @@ function initUI() {
   }
 
   btnAiTranslate?.addEventListener('click', () => {
-    handleAiTranslateAction({
+    aiTranslateController?.translateFromInput({
       inputEl: input,
       buttonEl: btnAiTranslate,
       tagEditor: editor,
@@ -3109,8 +2423,10 @@ function initCommunication() {
           // Trim removed characters from memory instantly
           if (characterPromptsData.length > charPrompts.length) {
               characterPromptsData.slice(charPrompts.length).forEach((character) => {
-                  cancelPendingAiRequestsInTags(character?.posTags || [], 'target-removed');
-                  cancelPendingAiRequestsInTags(character?.negTags || [], 'target-removed');
+                  handleRemovedPendingAiTags([
+                    ...(character?.posTags || []),
+                    ...(character?.negTags || [])
+                  ], 'target-removed');
               });
               syncPendingAiVisualTimer();
               characterPromptsData.length = charPrompts.length;
