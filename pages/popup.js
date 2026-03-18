@@ -692,11 +692,16 @@ function bindAiTranslateSettingsUI() {
     await persistAiTranslateProfileForm();
   };
 
-  profileSelect?.addEventListener('change', async () => {
+  profileSelect?.addEventListener('change', async (event) => {
+    // 先缓存目标 profile id，避免保存当前表单时重绘下拉框，把选中项又写回旧 profile。
+    const nextProfileId = String(event?.target?.value || profileSelect.value || '').trim();
+    if (!nextProfileId) return;
+
     // 先保存当前 profile 的编辑值，再切换到新的 profile。
     await flushPendingSave();
     const nextConfig = cloneDeep(aiTranslateConfigState || normalizeAiTranslateConfig());
-    nextConfig.activeProfileId = profileSelect.value;
+    if (!nextConfig.profiles.some((profile) => profile.id === nextProfileId)) return;
+    nextConfig.activeProfileId = nextProfileId;
     await saveAiTranslateConfig(nextConfig);
     populateAiTranslateProfileForm();
   });
