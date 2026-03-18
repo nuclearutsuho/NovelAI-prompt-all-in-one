@@ -195,6 +195,30 @@ function getPersistableGroupTagsData(data = customGroupsData) {
   return stripSpecialFavoritesCategory(data);
 }
 
+function isDefaultCategory(categoryId) {
+  const normalizedCategoryId = sanitizeText(categoryId);
+  if (!normalizedCategoryId || !defaultGroupsData?.categories) return false;
+  return defaultGroupsData.categories.some(category => sanitizeText(category?.id) === normalizedCategoryId);
+}
+
+function isDefaultGroup(categoryId, groupId) {
+  const normalizedCategoryId = sanitizeText(categoryId);
+  const normalizedGroupId = sanitizeText(groupId);
+  if (!normalizedCategoryId || !normalizedGroupId || !defaultGroupsData?.categories) return false;
+  const category = defaultGroupsData.categories.find(item => sanitizeText(item?.id) === normalizedCategoryId);
+  return Array.isArray(category?.groups) && category.groups.some(group => sanitizeText(group?.id) === normalizedGroupId);
+}
+
+function markDeletedDefaultCategory(categoryId) {
+  if (!isDefaultCategory(categoryId) || !groupTagsDataUtils.markDefaultCategoryDeleted) return;
+  customGroupsData = groupTagsDataUtils.markDefaultCategoryDeleted(customGroupsData, categoryId);
+}
+
+function markDeletedDefaultGroup(categoryId, groupId) {
+  if (!isDefaultGroup(categoryId, groupId) || !groupTagsDataUtils.markDefaultGroupDeleted) return;
+  customGroupsData = groupTagsDataUtils.markDefaultGroupDeleted(customGroupsData, categoryId, groupId);
+}
+
 async function loadSpecialCategoryPosition() {
   if (groupTagsFavoritesUtils.loadSpecialCategoryPosition) {
     specialCategoryPosition = await groupTagsFavoritesUtils.loadSpecialCategoryPosition();
@@ -1256,6 +1280,7 @@ function deleteCategory(index) {
   `);
   document.getElementById('modal-del-cancel').onclick = () => hideModal();
   document.getElementById('modal-del-confirm').onclick = () => {
+    markDeletedDefaultCategory(cat.id);
     customGroupsData.categories.splice(index, 1);
     if (activeCategoryIndex >= customGroupsData.categories.length) {
       activeCategoryIndex = Math.max(0, customGroupsData.categories.length - 1);
@@ -1353,10 +1378,13 @@ function deleteGroup(index) {
   `);
   document.getElementById('modal-del-grp-cancel').onclick = () => hideModal();
   document.getElementById('modal-del-grp-confirm').onclick = () => {
-    currentCategory.groups.splice(index, 1);
-    currentCategory._modified = true;
-    if (activeGroupIndex >= currentCategory.groups.length) {
-      activeGroupIndex = Math.max(0, currentCategory.groups.length - 1);
+    markDeletedDefaultGroup(currentCategory.id, grp.id);
+    const nextCategory = customGroupsData.categories[activeCategoryIndex];
+    if (!nextCategory) return;
+    nextCategory.groups.splice(index, 1);
+    nextCategory._modified = true;
+    if (activeGroupIndex >= nextCategory.groups.length) {
+      activeGroupIndex = Math.max(0, nextCategory.groups.length - 1);
     }
     hideModal();
     renderSecondaryTabs();
