@@ -1,8 +1,9 @@
-import TagEditor from '../lib/TagEditor.js';
+﻿import TagEditor from '../lib/TagEditor.js';
 import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
 import createAiTranslateController from './popup/ai-translate-controller.js';
+import createHistoryController from './popup/history-controller.js';
 import createPromptSyncController from './popup/prompt-sync-controller.js';
 
 let editor;
@@ -14,7 +15,6 @@ let positiveTags = [];
 let negativeTags = [];
 const isEmbeddedPopup = window !== window.top;
 const popupHostSessionId = new URLSearchParams(window.location.search).get('hostSession') || '';
-let currentHistoryScopeId = '';
 // State now stores an object per character with both positive and negative prompts
 let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", negTags: [], gender: "other" }]
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
@@ -42,6 +42,7 @@ let activeEditorTarget = { type: 'base', mode: 'positive' };
 
 let currentLang = DEFAULT_LANG;
 let aiTranslateController = null;
+let historyController = null;
 let promptSyncController = null;
 
 function cloneDeep(value) {
@@ -122,70 +123,6 @@ function shouldApplyIncomingPromptState({
   if (!samePrompt) return true;
   if (Array.isArray(incomingTags)) return true;
   return !Array.isArray(currentTags) || currentTags.length === 0;
-}
-
-function computeStateFingerprint(posT, negT, charD) {
-  const posF = JSON.stringify(serializeTagList(posT || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']));
-  const negF = JSON.stringify(serializeTagList(negT || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']));
-  const charsStr = JSON.stringify(getMeaningfulCharacterHistoryData(charD).map(c => ({
-    p: c.posPrompt || '', n: c.negPrompt || '',
-    pd: serializeTagList(c.posTags || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || '']),
-    nd: serializeTagList(c.negTags || []).map(t => [t.value, !!t.disabled, !!t.isStart, t.dynWeight || 1, t.aiOriginal || ''])
-  })));
-  return posF + negF + charsStr;
-}
-
-function hasMeaningfulCharacterHistoryContent(character) {
-  if (!character) return false;
-  const posPrompt = normalizePrompt(character.posPrompt || tagsToString(character.posTags || []));
-  const negPrompt = normalizePrompt(character.negPrompt || tagsToString(character.negTags || []));
-  return !!posPrompt || !!negPrompt;
-}
-
-function getMeaningfulCharacterHistoryData(characters) {
-  return (characters || []).filter(character => hasMeaningfulCharacterHistoryContent(character));
-}
-
-function findLatestHistorySnapshotForScope(history) {
-  const ordinaryHistory = (history || []).filter(item => item && !item.isFavorite && !item.isFolder);
-  if (!ordinaryHistory.length) return null;
-
-  if (currentHistoryScopeId) {
-    const scopedSnapshot = ordinaryHistory.find(item => item.historyScopeId === currentHistoryScopeId);
-    if (scopedSnapshot) return scopedSnapshot;
-  }
-
-  return ordinaryHistory[0];
-}
-
-function buildHistoryStateSignature({ positive = '', negative = '', characters = [] }) {
-  const charSignature = getMeaningfulCharacterHistoryData(characters).map(character => ([
-    normalizePrompt(character.posPrompt || tagsToString(character.posTags || [])),
-    normalizePrompt(character.negPrompt || tagsToString(character.negTags || []))
-  ]));
-
-  return JSON.stringify({
-    p: normalizePrompt(positive || ''),
-    n: normalizePrompt(negative || ''),
-    c: charSignature
-  });
-}
-
-function findComparableHistorySnapshot(history, currentState) {
-  const ordinaryHistory = (history || []).filter(item => item && !item.isFavorite && !item.isFolder);
-  if (!ordinaryHistory.length) return null;
-
-  if (currentHistoryScopeId) {
-    const scopedSnapshot = ordinaryHistory.find(item => item.historyScopeId === currentHistoryScopeId);
-    if (scopedSnapshot) return scopedSnapshot;
-  }
-
-  const currentSignature = buildHistoryStateSignature(currentState);
-  return ordinaryHistory.find(item => buildHistoryStateSignature({
-    positive: item.positive || tagsToString(item.positiveTags || []),
-    negative: item.negative || tagsToString(item.negativeTags || []),
-    characters: item.characters || []
-  }) === currentSignature) || ordinaryHistory[0];
 }
 
 function cloneGroupTagsData(data) {
@@ -929,6 +866,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('pagehide', () => {
   aiTranslateController?.destroy();
+  historyController?.destroy();
   promptSyncController?.destroy();
 });
 
@@ -990,35 +928,17 @@ function shouldIgnoreRuntimeMessage(msg) {
 async function initData() {
   const data = await chrome.storage.local.get(['promptHistory']);
   const activeTab = await getActiveTab();
-  currentHistoryScopeId = isEmbeddedPopup && popupHostSessionId
+  const historyScopeId = isEmbeddedPopup && popupHostSessionId
     ? `host:${popupHostSessionId}`
     : (activeTab?.id ? `tab:${activeTab.id}` : '');
+  historyController?.setScopeId(historyScopeId);
 
   if (data.promptHistory && data.promptHistory.length > 0) {
-    // 应该找最近的一条非收藏、非文件夹的普通真实历史记录，作为最后状态
-    const s = findLatestHistorySnapshotForScope(data.promptHistory) || data.promptHistory[0];
-    
-    // 初始化防抖指纹，避免由于空初始导致的 F5 刷新重复记录历史
-    _lastRecordedFingerprint = computeStateFingerprint(s.positiveTags, s.negativeTags, s.characters);
-
-    // 将最近一次历史中的 Tag（即包含被禁用属性的数组）在启动时优先缝合进入常驻内存
-    if (!isEmbeddedPopup) {
-      positiveTags = s.positiveTags ? JSON.parse(JSON.stringify(s.positiveTags)) : [];
-      negativeTags = s.negativeTags ? JSON.parse(JSON.stringify(s.negativeTags)) : [];
-      rawPositive = tagsToString(positiveTags);
-      rawNegative = tagsToString(negativeTags);
-    }
-    
-    if (!isEmbeddedPopup && s.characters && s.characters.length > 0) {
-      characterPromptsData = s.characters.map(c => ({
-        posPrompt: tagsToString(c.posTags || []),
-        posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : [],
-        negPrompt: tagsToString(c.negTags || []),
-        negTags: c.negTags ? JSON.parse(JSON.stringify(c.negTags)) : [],
-        gender: c.gender || 'other',
-        activeTab: c.activeTab || 'positive'
-      }));
-    }
+    // 启动时优先用同作用域最近一条历史初始化状态与去重指纹。
+    historyController?.primeFromStoredHistory(data.promptHistory, {
+      restoreBase: !isEmbeddedPopup,
+      restoreCharacters: !isEmbeddedPopup
+    });
   }
 
   await refreshSequentialCountersFromActiveTab();
@@ -1351,6 +1271,26 @@ function initUI() {
     });
   }
   aiTranslateController.bindSettingsUI();
+
+  if (!historyController) {
+    historyController = createHistoryController({
+      getBaseState: getBasePromptSyncState,
+      setBaseState: setBasePromptSyncState,
+      getCharacterState: getCharacterPromptSyncState,
+      setCharacterState: setCharacterPromptSyncState,
+      getCurrentMode: () => currentMode,
+      getEditor: () => editor,
+      getActiveEditorTarget: () => activeEditorTarget,
+      rebuildCharacterUI: rebuildCharacterPromptsUI,
+      parsePromptToTags,
+      tagsToString,
+      normalizePrompt,
+      serializeTagList,
+      syncAll: async (source) => {
+        await promptSyncController?.syncAll(source);
+      }
+    });
+  }
 
   if (!promptSyncController) {
     promptSyncController = createPromptSyncController({
@@ -2460,235 +2400,17 @@ function syncToPage(source) {
 
 // ═══════════════════════════════════════════════════════
 // 历史记录 & 收藏夹 核心逻辑
-// ═══════════════════════════════════════════════════════
-
-/** 记录当前完整状态的快照（带来源区分的防抖机制） */
-let _lastRecordedFingerprint = null;
-let _popupDebounceTimer = null;   // Popup 操作（编辑器 onChange）的防抖计时器
-let _webpageDebounceTimer = null; // 网页端同步回传的防抖计时器
-
-const POPUP_DEBOUNCE_MS = 1500;   // Popup 权重修改防抖：1.5 秒
-const WEBPAGE_DEBOUNCE_MS = 2000; // 网页端打字防抖：2 秒
-
-/**
- * 请求记录一次历史快照。
- * @param {'immediate' | 'popup' | 'webpage'} source - 变更来源
- *   - 'immediate'：来自 Popup 结构性操作（添加、删除、拖拽排序等），立即记录。
- *   - 'popup'    ：来自 Popup 权重修改等连续微调操作，使用 1.5 秒防抖。
- *   - 'webpage'  ：来自网页端输入框的实时同步回传，使用 2 秒防抖。
- */
+// 历史状态机已经迁入 history-controller，这里只保留 popup 入口包装。
 function recordHistory(source = 'popup') {
-  if (source === 'immediate' || source === 'restore') {
-    // 结构性操作：立刻取消所有挂起计时并写入快照
-    clearTimeout(_popupDebounceTimer);
-    clearTimeout(_webpageDebounceTimer);
-    _popupDebounceTimer = null;
-    _webpageDebounceTimer = null;
-    return _commitSnapshot();
-  } else if (source === 'popup') {
-    // 权重修改等微调操作：取消网页端挂起计时，使用短防抖
-    clearTimeout(_webpageDebounceTimer);
-    clearTimeout(_popupDebounceTimer);
-    _popupDebounceTimer = setTimeout(() => _commitSnapshot(), POPUP_DEBOUNCE_MS);
-    return Promise.resolve();
-  } else {
-    // 网页端同步：如果 popup 计时器正在等待，不干扰它
-    if (_popupDebounceTimer) return Promise.resolve();
-    clearTimeout(_webpageDebounceTimer);
-    _webpageDebounceTimer = setTimeout(() => _commitSnapshot(), WEBPAGE_DEBOUNCE_MS);
-    return Promise.resolve();
-  }
+  return historyController?.recordHistory(source) || Promise.resolve();
 }
 
-/** 实际执行快照写入的内部方法 */
-async function _commitSnapshot() {
-  _popupDebounceTimer = null;
-  _webpageDebounceTimer = null;
-
-  const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
-  let history = data.promptHistory || [];
-
-  const posStr = tagsToString(positiveTags);
-  const negStr = tagsToString(negativeTags);
-  const meaningfulCharacters = getMeaningfulCharacterHistoryData(characterPromptsData);
-  const hasMeaningfulState = positiveTags.length > 0 || negativeTags.length > 0 || meaningfulCharacters.length > 0;
-  const comparableSnapshot = findComparableHistorySnapshot(history, {
-    positive: posStr,
-    negative: negStr,
-    characters: characterPromptsData
-  });
-
-  // 去重：使用提取好的统合指纹函数，与上次实际写入的记录完全相同时跳过
-  const fingerprint = computeStateFingerprint(positiveTags, negativeTags, characterPromptsData);
-  if (!hasMeaningfulState) {
-    _lastRecordedFingerprint = fingerprint;
-    return;
-  }
-  if (comparableSnapshot) {
-    const comparableFingerprint = computeStateFingerprint(comparableSnapshot.positiveTags, comparableSnapshot.negativeTags, comparableSnapshot.characters);
-    if (fingerprint === comparableFingerprint) {
-      _lastRecordedFingerprint = comparableFingerprint;
-      return;
-    }
-  }
-  if (fingerprint === _lastRecordedFingerprint) return;
-  _lastRecordedFingerprint = fingerprint;
-
-  const snapshot = {
-    id: Date.now(),
-    timestamp: Date.now(),
-    isFavorite: false,
-    name: '',
-    positive: posStr,
-    negative: negStr,
-    // [v2] 保存原始 tag 对象数组，用于完整还原禁用状态、换行、复合组等
-    positiveTags: serializeTagList(positiveTags),
-    negativeTags: serializeTagList(negativeTags),
-    ...(currentHistoryScopeId ? { historyScopeId: currentHistoryScopeId } : {}),
-    characters: meaningfulCharacters.map(c => ({
-      posPrompt: c.posPrompt || '',
-      negPrompt: c.negPrompt || '',
-      posTags: serializeTagList(c.posTags || []),
-      negTags: serializeTagList(c.negTags || []),
-      gender: c.gender || 'other',
-      activeTab: c.activeTab || 'positive'
-    }))
-  };
-  const limit = data.historyLimit || 100;
-
-  // 插入新快照到数组头部
-  history.unshift(snapshot);
-
-  // 安全裁剪：只删除非收藏的普通记录
-  const favorites = history.filter(s => s.isFavorite);
-  let normals = history.filter(s => !s.isFavorite);
-  if (normals.length > limit) {
-    normals = normals.slice(0, limit);
-  }
-  // 按时间戳倒序重新合并
-  history = [...normals, ...favorites].sort((a, b) => b.timestamp - a.timestamp);
-
-  await chrome.storage.local.set({ promptHistory: history });
-}
-
-/** 将某个历史快照恢复为当前状态（支持局部恢复） */
 async function restoreFromSnapshot(snapshot) {
-  if (!snapshot) return;
-
-  // ── 局部恢复分支：仅更新 partialType 对应的区块 ──
-  if (snapshot.isPartial && snapshot.partialType) {
-    const pt = snapshot.partialType;
-    if (pt === 'positive') {
-      rawPositive = snapshot.positive || '';
-      positiveTags = snapshot.positiveTags ? JSON.parse(JSON.stringify(snapshot.positiveTags)) : parsePromptToTags(rawPositive);
-      if (currentMode === 'positive') editor.setTags(positiveTags);
-    } else if (pt === 'negative') {
-      rawNegative = snapshot.negative || '';
-      negativeTags = snapshot.negativeTags ? JSON.parse(JSON.stringify(snapshot.negativeTags)) : parsePromptToTags(rawNegative);
-      if (currentMode === 'negative') editor.setTags(negativeTags);
-    } else if (pt === 'character' || pt.startsWith('character-')) {
-      const srcChar = (snapshot.characters || [])[0];
-      if (srcChar) {
-        // 角色片段恢复时统一追加到末尾，让用户后续手动调整顺序。
-        characterPromptsData.push({
-          posPrompt: srcChar.posPrompt || '',
-          posTags: srcChar.posTags ? JSON.parse(JSON.stringify(srcChar.posTags)) : parsePromptToTags(srcChar.posPrompt || ''),
-          negPrompt: srcChar.negPrompt || '',
-          negTags: srcChar.negTags ? JSON.parse(JSON.stringify(srcChar.negTags)) : parsePromptToTags(srcChar.negPrompt || ''),
-          gender: srcChar.gender || 'other',
-          activeTab: srcChar.activeTab || 'positive'
-        });
-        rebuildCharacterPromptsUI();
-      }
-    }
-    await promptSyncController?.syncAll('restore');
-    return;
-  }
-
-  // ── 全量恢复（原有逻辑不变） ──
-  rawPositive = snapshot.positive || '';
-  rawNegative = snapshot.negative || '';
-  positiveTags = snapshot.positiveTags ? JSON.parse(JSON.stringify(snapshot.positiveTags)) : parsePromptToTags(rawPositive);
-  negativeTags = snapshot.negativeTags ? JSON.parse(JSON.stringify(snapshot.negativeTags)) : parsePromptToTags(rawNegative);
-
-  // 恢复角色数据
-  characterPromptsData = (snapshot.characters || []).map(c => ({
-    posPrompt: c.posPrompt || '',
-    posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : parsePromptToTags(c.posPrompt || ''),
-    negPrompt: c.negPrompt || '',
-    negTags: c.negTags ? JSON.parse(JSON.stringify(c.negTags)) : parsePromptToTags(c.negPrompt || ''),
-    gender: c.gender || 'other',
-    activeTab: c.activeTab || 'positive'
-  }));
-
-  // 刷新 UI
-  if (currentMode === 'positive') {
-    editor.setTags(positiveTags);
-  } else {
-    editor.setTags(negativeTags);
-  }
-
-  rebuildCharacterPromptsUI();
-
-  await promptSyncController?.syncAll('restore');
-}
-
-// 监听跨组件通讯指令（通过 bridge 中转）
-function cloneSnippetTags(tags, promptText) {
-  if (Array.isArray(tags) && tags.length) {
-    return JSON.parse(JSON.stringify(tags));
-  }
-  return parsePromptToTags(promptText || '');
-}
-
-async function broadcastPromptStateAndRecord(source = 'restore') {
-  await promptSyncController?.syncAll(source);
+  await historyController?.restoreFromSnapshot(snapshot);
 }
 
 async function appendHistorySnippet(snapshot, target) {
-  if (!snapshot || (target !== 'positive' && target !== 'negative')) return;
-
-  // 片段追加只改目标侧，避免误覆盖另一侧内容。
-  const sourceTags = target === 'positive'
-    ? cloneSnippetTags(snapshot.positiveTags, snapshot.positive)
-    : cloneSnippetTags(snapshot.negativeTags, snapshot.negative);
-
-  if (!sourceTags.length) return;
-
-  if (activeEditorTarget.type === 'character') {
-    const index = activeEditorTarget.charIndex;
-    const charData = characterPromptsData[index];
-    const charEditorObj = charEditors[index];
-    if (!charData) return;
-
-    if (target === 'positive') {
-      charData.posTags = [...(charData.posTags || []), ...sourceTags];
-      charData.posPrompt = tagsToString(charData.posTags);
-      if (charEditorObj?.activeTab === 'pos') {
-        charEditorObj.editor.setTags(charData.posTags);
-      }
-    } else {
-      charData.negTags = [...(charData.negTags || []), ...sourceTags];
-      charData.negPrompt = tagsToString(charData.negTags);
-      if (charEditorObj?.activeTab === 'neg') {
-        charEditorObj.editor.setTags(charData.negTags);
-      }
-    }
-  } else if (target === 'positive') {
-    positiveTags = [...positiveTags, ...sourceTags];
-    rawPositive = tagsToString(positiveTags);
-    if (currentMode === 'positive' && editor) {
-      editor.setTags(positiveTags);
-    }
-  } else {
-    negativeTags = [...negativeTags, ...sourceTags];
-    rawNegative = tagsToString(negativeTags);
-    if (currentMode === 'negative' && editor) {
-      editor.setTags(negativeTags);
-    }
-  }
-
-  await broadcastPromptStateAndRecord('restore');
+  await historyController?.appendHistorySnippet(snapshot, target);
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
