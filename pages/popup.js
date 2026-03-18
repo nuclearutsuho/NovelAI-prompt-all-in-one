@@ -45,6 +45,7 @@ let hasReceivedInitialChars = false;
 
 const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
 const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 30000;
+const AI_PENDING_PLACEHOLDER_VALUE = '__AI_TRANSLATING__';
 const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
 const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
   providerPreset: 'openai',
@@ -53,6 +54,7 @@ const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
   model: 'gpt-4o-mini',
   systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
 });
+let aiPendingVisualTimer = null;
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
@@ -82,8 +84,17 @@ function normalizeTagObject(tag = {}) {
   return normalized;
 }
 
-function serializeTagList(tags = []) {
-  return (tags || []).map(normalizeTagObject).filter(Boolean);
+function isPendingAiTag(tag = {}) {
+  return !!tag?.aiPending;
+}
+
+function getSyncableTagList(tags = []) {
+  return (tags || []).filter((tag) => !isPendingAiTag(tag));
+}
+
+function serializeTagList(tags = [], { includePending = false } = {}) {
+  const tagList = includePending ? (tags || []) : getSyncableTagList(tags);
+  return tagList.map(normalizeTagObject).filter(Boolean);
 }
 
 function getIncomingTagList(incomingTags, promptText = '') {
@@ -410,8 +421,177 @@ function buildCharacterPromptPayload() {
 
 function setAiTranslateButtonLoading(button, isLoading) {
   if (!button) return;
-  button.disabled = !!isLoading;
-  button.classList.toggle('is-loading', !!isLoading);
+  const currentCount = Number(button.dataset.loadingCount || 0);
+  const nextCount = Math.max(0, currentCount + (isLoading ? 1 : -1));
+  if (nextCount === 0) {
+    delete button.dataset.loadingCount;
+  } else {
+    button.dataset.loadingCount = String(nextCount);
+  }
+  button.classList.toggle('is-loading', nextCount > 0);
+}
+
+function hasPendingAiTags(tags = []) {
+  return (tags || []).some((tag) => isPendingAiTag(tag));
+}
+
+function hasAnyPendingAiTags() {
+  if (hasPendingAiTags(positiveTags) || hasPendingAiTags(negativeTags)) {
+    return true;
+  }
+
+  return (characterPromptsData || []).some((character) => (
+    hasPendingAiTags(character?.posTags || []) || hasPendingAiTags(character?.negTags || [])
+  ));
+}
+
+function refreshPendingAiVisuals() {
+  editor?.refreshPendingAiVisuals?.();
+  charEditors.forEach((charEditorObj) => {
+    charEditorObj?.editor?.refreshPendingAiVisuals?.();
+  });
+}
+
+function syncPendingAiVisualTimer() {
+  if (!hasAnyPendingAiTags()) {
+    if (aiPendingVisualTimer !== null) {
+      window.clearInterval(aiPendingVisualTimer);
+      aiPendingVisualTimer = null;
+    }
+    return;
+  }
+
+  refreshPendingAiVisuals();
+
+  if (aiPendingVisualTimer !== null) return;
+  aiPendingVisualTimer = window.setInterval(() => {
+    if (!hasAnyPendingAiTags()) {
+      window.clearInterval(aiPendingVisualTimer);
+      aiPendingVisualTimer = null;
+      return;
+    }
+    refreshPendingAiVisuals();
+  }, 1000);
+}
+
+function normalizeAiTargetContext(targetContext = {}) {
+  if (targetContext?.type === 'character') {
+    const charIndex = Number(targetContext.charIndex);
+    if (!Number.isInteger(charIndex) || charIndex < 0) return null;
+    return {
+      type: 'character',
+      charIndex,
+      mode: targetContext.mode === 'negative' ? 'negative' : 'positive'
+    };
+  }
+
+  return {
+    type: 'base',
+    mode: targetContext?.mode === 'negative' ? 'negative' : 'positive'
+  };
+}
+
+function getAiTargetTagList(targetContext) {
+  const target = normalizeAiTargetContext(targetContext);
+  if (!target) return null;
+
+  if (target.type === 'base') {
+    return target.mode === 'negative' ? negativeTags : positiveTags;
+  }
+
+  const charData = characterPromptsData[target.charIndex];
+  if (!charData) return null;
+  if (target.mode === 'negative') {
+    if (!Array.isArray(charData.negTags)) charData.negTags = [];
+    return charData.negTags;
+  }
+
+  if (!Array.isArray(charData.posTags)) charData.posTags = [];
+  return charData.posTags;
+}
+
+function renderAiTargetIfVisible(targetContext) {
+  const target = normalizeAiTargetContext(targetContext);
+  if (!target) return;
+
+  if (target.type === 'base') {
+    if (editor && currentMode === target.mode) {
+      editor.render();
+    }
+    return;
+  }
+
+  const charEditorObj = charEditors[target.charIndex];
+  if (!charEditorObj?.editor) return;
+  const activeMode = charEditorObj.activeTab === 'neg' ? 'negative' : 'positive';
+  if (activeMode === target.mode) {
+    charEditorObj.editor.render();
+  }
+}
+
+function removePendingAiTag(targetContext, pendingTag) {
+  const tagList = getAiTargetTagList(targetContext);
+  if (!tagList || !pendingTag) return false;
+
+  const pendingIndex = tagList.indexOf(pendingTag);
+  if (pendingIndex === -1) return false;
+
+  tagList.splice(pendingIndex, 1);
+  renderAiTargetIfVisible(targetContext);
+  syncPendingAiVisualTimer();
+  return true;
+}
+
+function syncAiTargetAfterResolve(targetContext, source = 'popup') {
+  const target = normalizeAiTargetContext(targetContext);
+  if (!target) return;
+
+  if (target.type === 'base') {
+    if (target.mode === 'negative') {
+      rawNegative = tagsToString(negativeTags);
+    } else {
+      rawPositive = tagsToString(positiveTags);
+    }
+    renderAiTargetIfVisible(target);
+    syncToPage(source);
+    return;
+  }
+
+  const charData = characterPromptsData[target.charIndex];
+  if (!charData) return;
+
+  if (target.mode === 'negative') {
+    charData.negPrompt = tagsToString(charData.negTags || []);
+  } else {
+    charData.posPrompt = tagsToString(charData.posTags || []);
+  }
+
+  renderAiTargetIfVisible(target);
+  syncCharactersToPage(source);
+}
+
+function resolvePendingAiTag(targetContext, pendingTag, translatedText) {
+  const tagList = getAiTargetTagList(targetContext);
+  if (!tagList || !pendingTag) return false;
+
+  const pendingIndex = tagList.indexOf(pendingTag);
+  if (pendingIndex === -1) return false;
+
+  const resolvedTag = tagList[pendingIndex];
+  resolvedTag.value = translatedText;
+  delete resolvedTag.aiPending;
+  delete resolvedTag.aiPendingStartedAt;
+
+  syncPendingAiVisualTimer();
+  syncAiTargetAfterResolve(targetContext, 'popup');
+  return true;
+}
+
+function restoreAiSourceToInput(inputEl, sourceText) {
+  if (!inputEl) return;
+  if (String(inputEl.value || '').trim()) return;
+  inputEl.value = sourceText;
+  inputEl.focus();
 }
 
 function getOriginPatternFromApiUrl(apiUrl) {
@@ -589,7 +769,7 @@ function formatAiTranslateError(error) {
   return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
 }
 
-async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer }) {
+async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext }) {
   if (!tagEditor) return;
 
   const sourceText = String(inputEl?.value || '').trim();
@@ -628,8 +808,33 @@ async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollCon
     return;
   }
 
+  const target = normalizeAiTargetContext(targetContext);
+  if (!target) return;
+
+  // 先插入本地占位 tag，让输入框立刻释放出来；翻译返回后再回填真正英文。
+  const pendingTag = tagEditor.addTag({
+    value: AI_PENDING_PLACEHOLDER_VALUE,
+    aiOriginal: sourceText,
+    aiPending: true,
+    aiPendingStartedAt: Date.now()
+  });
+  if (!pendingTag) return;
+
+  if (inputEl) {
+    inputEl.value = '';
+    inputEl.focus();
+  }
+
+  if (scrollContainer) {
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+  }
+
+  syncPendingAiVisualTimer();
+
   const granted = await ensureAiApiPermission(profile.apiUrl);
   if (!granted) {
+    removePendingAiTag(target, pendingTag);
+    restoreAiSourceToInput(inputEl, sourceText);
     showPopupToast('warning', getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.'));
     return;
   }
@@ -637,24 +842,20 @@ async function handleAiTranslateAction({ inputEl, buttonEl, tagEditor, scrollCon
   setAiTranslateButtonLoading(buttonEl, true);
   try {
     const translatedText = await aiTranslateText(sourceText, profile);
-    tagEditor.addTag({
-      value: translatedText,
-      aiOriginal: sourceText
-    });
-
-    if (inputEl) {
-      inputEl.value = '';
-      inputEl.focus();
-    }
+    const replaced = resolvePendingAiTag(target, pendingTag, translatedText);
+    if (!replaced) return;
 
     if (scrollContainer) {
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
     }
   } catch (error) {
     console.error('[AI Translate] 翻译失败:', error);
+    removePendingAiTag(target, pendingTag);
+    restoreAiSourceToInput(inputEl, sourceText);
     showPopupToast('error', formatAiTranslateError(error));
   } finally {
     setAiTranslateButtonLoading(buttonEl, false);
+    syncPendingAiVisualTimer();
   }
 }
 
@@ -1475,6 +1676,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
         // Load neg tags
         charEditor.setTags(characterPromptsData[index].negTags || []);
     }
+    syncPendingAiVisualTimer();
     
     // Sync the tab switch to the injecting page so it switches the active view there
     if (fromUserClick && chrome.tabs) {
@@ -1572,7 +1774,12 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     handleAiTranslateAction({
       inputEl: input,
       buttonEl: btnAiTranslate,
-      tagEditor: charEditor
+      tagEditor: charEditor,
+      targetContext: {
+        type: 'character',
+        charIndex: index,
+        mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+      }
     });
   });
 
@@ -1979,7 +2186,11 @@ function initUI() {
       inputEl: input,
       buttonEl: btnAiTranslate,
       tagEditor: editor,
-      scrollContainer: container
+      scrollContainer: container,
+      targetContext: {
+        type: 'base',
+        mode: currentMode
+      }
     });
   });
 
@@ -2303,6 +2514,7 @@ function switchTab(mode, fromUserClick = false) {
   } else {
     editor.setTags(negativeTags);
   }
+  syncPendingAiVisualTimer();
 
   // Notify webpage about the tab switch
   if (fromUserClick) {
@@ -2354,8 +2566,8 @@ function syncActiveTagsToPanel() {
 
       chrome.tabs.sendMessage(tabsList[0].id, { 
         type: 'SYNC_ACTIVE_TAGS', 
-        activeTags,
-        inactiveTags,
+        activeTags: getSyncableTagList(activeTags),
+        inactiveTags: getSyncableTagList(inactiveTags),
         targetLabel
       });
     }
@@ -2372,7 +2584,7 @@ function updateTagsFromEditor(updatedTags) {
 
 function tagsToString(tags) {
   let result = '';
-  const activeTags = tags.filter(t => !t.disabled);
+  const activeTags = getSyncableTagList(tags).filter(t => !t.disabled);
   let inDynamic = false;
 
   activeTags.forEach((t, i) => {
@@ -2522,7 +2734,7 @@ function normalizePrompt(str) {
 }
 
 function hasMeaningfulPromptState(promptText = '', tags = []) {
-  return normalizePrompt(promptText) !== '' || (Array.isArray(tags) && tags.length > 0);
+  return normalizePrompt(promptText) !== '' || serializeTagList(tags).length > 0;
 }
 
 // 页面刷新时，NovelAI 可能会先回传一轮空 prompt，再异步恢复真正内容。
@@ -3288,6 +3500,4 @@ window.addEventListener('message', (e) => {
         applyTagEditorDensity(e.data.value);
     }
 });
-
-init();
 
