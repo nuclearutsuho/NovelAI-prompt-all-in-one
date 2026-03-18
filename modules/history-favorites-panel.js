@@ -9,6 +9,10 @@ const MODAL_ID = 'nai-history-modal';
 
   (function initHistoryModal() {
     const MODAL_ID = 'nai-history-modal';
+    
+    function getGroupTagsDataUtils() {
+      return typeof window !== 'undefined' ? (window.GroupTagsDataUtils || {}) : {};
+    }
 
     // ───── CSS 样式 ─────────────────────────────────────────────
     const STYLE = `
@@ -972,6 +976,7 @@ const MODAL_ID = 'nai-history-modal';
         // 显示文本
         let displayTagName = isNewline ? '↵' : cleanText;
         if (isCompHeader || isCompFooter || isDynHeader || isDynFooter) displayTagName = '';
+        const lookupTagKey = toCanonicalHistoryTagKey(cleanText);
 
         // 查找标签信息（翻译+颜色）
         let info = null;
@@ -996,6 +1001,12 @@ const MODAL_ID = 'nai-history-modal';
           }
         }
 
+        // GroupTags 翻译优先于字典翻译，和 popup 的 TagEditor 保持一致。
+        if (currentGroupTranslationMap && currentGroupTranslationMap[lookupTagKey]) {
+          if (!info) info = {};
+          info.zhCN = currentGroupTranslationMap[lookupTagKey];
+        }
+
         // === 构建 DOM ===
         const itemNode = document.createElement('div');
         itemNode.className = 'nhm-tag-item';
@@ -1017,6 +1028,11 @@ const MODAL_ID = 'nai-history-modal';
           capsule.style.borderColor = info.color;
           capsule.style.borderWidth = '1.5px';
           capsule.style.background = `linear-gradient(135deg, #3b3b4f 0%, ${info.color}15 100%)`;
+        }
+
+        // GroupTags 颜色只覆盖胶囊背景，保留字典给出的边框提示色。
+        if (currentGroupColorMap && currentGroupColorMap[lookupTagKey]) {
+          capsule.style.background = currentGroupColorMap[lookupTagKey];
         }
 
         const primary = document.createElement('div');
@@ -1107,6 +1123,16 @@ const MODAL_ID = 'nai-history-modal';
     let selectedSnapshot = null;
     let historyData = [];
     let historyLimit = 100;
+    let currentGroupColorMap = {};
+    let currentGroupTranslationMap = {};
+
+    function toCanonicalHistoryTagKey(value) {
+      const groupTagsDataUtils = getGroupTagsDataUtils();
+      if (groupTagsDataUtils.toCanonicalTagKey) {
+        return groupTagsDataUtils.toCanonicalTagKey(value);
+      }
+      return String(value || '').trim().toLowerCase();
+    }
 
     function createModal() {
       if (document.getElementById('nai-history-backdrop')) return;
@@ -2171,6 +2197,8 @@ const MODAL_ID = 'nai-history-modal';
       const data = await getHistoryData();
       historyData = (data.history || []).sort((a, b) => b.timestamp - a.timestamp);
       historyLimit = data.limit || 100;
+      currentGroupColorMap = data.groupColorMap || {};
+      currentGroupTranslationMap = data.groupTranslationMap || {};
       const limitInput = document.getElementById('nhm-limit-input');
       if (limitInput) limitInput.value = historyLimit;
 

@@ -76,10 +76,16 @@
   (document.head || document.documentElement).appendChild(sortableScript);
 
   sortableReady.then(() => {
-    const hp = document.createElement('script');
-    hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
-    hp.onload = () => hp.remove();
-    (document.head || document.documentElement).appendChild(hp);
+    const groupTagsDataScript = document.createElement('script');
+    groupTagsDataScript.src = chrome.runtime.getURL('lib/group-tags-data.js');
+    groupTagsDataScript.onload = () => {
+      groupTagsDataScript.remove();
+      const hp = document.createElement('script');
+      hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
+      hp.onload = () => hp.remove();
+      (document.head || document.documentElement).appendChild(hp);
+    };
+    (document.head || document.documentElement).appendChild(groupTagsDataScript);
   });
 
   // 2) inject scripts to page
@@ -937,11 +943,16 @@
     // ── 历史数据代理（injector 在页面上下文无法访问 chrome.storage，通过此处中转） ──
     if (e.data?.type === '__REQUEST_HISTORY_DATA__') {
       const reqId = e.data.reqId;
-      chrome.storage.local.get(['promptHistory', 'historyLimit'], (data) => {
+      chrome.storage.local.get(['promptHistory', 'historyLimit', 'groupColorMap', 'groupTranslationMap'], (data) => {
         window.postMessage({
           type: '__HISTORY_DATA__',
           reqId,
-          data: { history: data.promptHistory || [], limit: data.historyLimit || 100 }
+          data: {
+            history: data.promptHistory || [],
+            limit: data.historyLimit || 100,
+            groupColorMap: data.groupColorMap || {},
+            groupTranslationMap: data.groupTranslationMap || {}
+          }
         }, '*');
       });
     }

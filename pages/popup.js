@@ -12,6 +12,7 @@ let positiveTags = [];
 let negativeTags = [];
 const isEmbeddedPopup = window !== window.top;
 const popupHostSessionId = new URLSearchParams(window.location.search).get('hostSession') || '';
+let currentHistoryScopeId = '';
 // State now stores an object per character with both positive and negative prompts
 let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", negTags: [], gender: "other" }]
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
@@ -212,6 +213,48 @@ function hasMeaningfulCharacterHistoryContent(character) {
 
 function getMeaningfulCharacterHistoryData(characters) {
   return (characters || []).filter(character => hasMeaningfulCharacterHistoryContent(character));
+}
+
+function findLatestHistorySnapshotForScope(history) {
+  const ordinaryHistory = (history || []).filter(item => item && !item.isFavorite && !item.isFolder);
+  if (!ordinaryHistory.length) return null;
+
+  if (currentHistoryScopeId) {
+    const scopedSnapshot = ordinaryHistory.find(item => item.historyScopeId === currentHistoryScopeId);
+    if (scopedSnapshot) return scopedSnapshot;
+  }
+
+  return ordinaryHistory[0];
+}
+
+function buildHistoryStateSignature({ positive = '', negative = '', characters = [] }) {
+  const charSignature = getMeaningfulCharacterHistoryData(characters).map(character => ([
+    normalizePrompt(character.posPrompt || tagsToString(character.posTags || [])),
+    normalizePrompt(character.negPrompt || tagsToString(character.negTags || []))
+  ]));
+
+  return JSON.stringify({
+    p: normalizePrompt(positive || ''),
+    n: normalizePrompt(negative || ''),
+    c: charSignature
+  });
+}
+
+function findComparableHistorySnapshot(history, currentState) {
+  const ordinaryHistory = (history || []).filter(item => item && !item.isFavorite && !item.isFolder);
+  if (!ordinaryHistory.length) return null;
+
+  if (currentHistoryScopeId) {
+    const scopedSnapshot = ordinaryHistory.find(item => item.historyScopeId === currentHistoryScopeId);
+    if (scopedSnapshot) return scopedSnapshot;
+  }
+
+  const currentSignature = buildHistoryStateSignature(currentState);
+  return ordinaryHistory.find(item => buildHistoryStateSignature({
+    positive: item.positive || tagsToString(item.positiveTags || []),
+    negative: item.negative || tagsToString(item.negativeTags || []),
+    characters: item.characters || []
+  }) === currentSignature) || ordinaryHistory[0];
 }
 
 function cloneGroupTagsData(data) {
@@ -1207,22 +1250,27 @@ function shouldIgnoreRuntimeMessage(msg) {
 
 async function initData() {
   const data = await chrome.storage.local.get(['promptHistory']);
-  if (!isEmbeddedPopup && data.promptHistory && data.promptHistory.length > 0) {
+  const activeTab = await getActiveTab();
+  currentHistoryScopeId = isEmbeddedPopup && popupHostSessionId
+    ? `host:${popupHostSessionId}`
+    : (activeTab?.id ? `tab:${activeTab.id}` : '');
+
+  if (data.promptHistory && data.promptHistory.length > 0) {
     // 应该找最近的一条非收藏、非文件夹的普通真实历史记录，作为最后状态
-    const s = data.promptHistory.find(item => !item.isFavorite && !item.isFolder) || data.promptHistory[0];
+    const s = findLatestHistorySnapshotForScope(data.promptHistory) || data.promptHistory[0];
     
     // 初始化防抖指纹，避免由于空初始导致的 F5 刷新重复记录历史
     _lastRecordedFingerprint = computeStateFingerprint(s.positiveTags, s.negativeTags, s.characters);
 
     // 将最近一次历史中的 Tag（即包含被禁用属性的数组）在启动时优先缝合进入常驻内存
-    if (!hasReceivedInitialData) {
+    if (!isEmbeddedPopup && !hasReceivedInitialData) {
       positiveTags = s.positiveTags ? JSON.parse(JSON.stringify(s.positiveTags)) : [];
       negativeTags = s.negativeTags ? JSON.parse(JSON.stringify(s.negativeTags)) : [];
       rawPositive = tagsToString(positiveTags);
       rawNegative = tagsToString(negativeTags);
     }
     
-    if (!hasReceivedInitialChars && s.characters && s.characters.length > 0) {
+    if (!isEmbeddedPopup && !hasReceivedInitialChars && s.characters && s.characters.length > 0) {
       characterPromptsData = s.characters.map(c => ({
         posPrompt: tagsToString(c.posTags || []),
         posTags: c.posTags ? JSON.parse(JSON.stringify(c.posTags)) : [],
@@ -2894,17 +2942,32 @@ async function _commitSnapshot() {
   _popupDebounceTimer = null;
   _webpageDebounceTimer = null;
 
+  const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
+  let history = data.promptHistory || [];
+
   const promptPayload = buildPromptSyncPayload();
   const posStr = promptPayload.positive;
   const negStr = promptPayload.negative;
   const meaningfulCharacters = getMeaningfulCharacterHistoryData(characterPromptsData);
   const hasMeaningfulState = positiveTags.length > 0 || negativeTags.length > 0 || meaningfulCharacters.length > 0;
+  const comparableSnapshot = findComparableHistorySnapshot(history, {
+    positive: posStr,
+    negative: negStr,
+    characters: characterPromptsData
+  });
 
   // 去重：使用提取好的统合指纹函数，与上次实际写入的记录完全相同时跳过
   const fingerprint = computeStateFingerprint(positiveTags, negativeTags, characterPromptsData);
   if (!hasMeaningfulState) {
     _lastRecordedFingerprint = fingerprint;
     return;
+  }
+  if (comparableSnapshot) {
+    const comparableFingerprint = computeStateFingerprint(comparableSnapshot.positiveTags, comparableSnapshot.negativeTags, comparableSnapshot.characters);
+    if (fingerprint === comparableFingerprint) {
+      _lastRecordedFingerprint = comparableFingerprint;
+      return;
+    }
   }
   if (fingerprint === _lastRecordedFingerprint) return;
   _lastRecordedFingerprint = fingerprint;
@@ -2919,6 +2982,7 @@ async function _commitSnapshot() {
     // [v2] 保存原始 tag 对象数组，用于完整还原禁用状态、换行、复合组等
     positiveTags: serializeTagList(positiveTags),
     negativeTags: serializeTagList(negativeTags),
+    ...(currentHistoryScopeId ? { historyScopeId: currentHistoryScopeId } : {}),
     characters: meaningfulCharacters.map(c => ({
       posPrompt: c.posPrompt || '',
       negPrompt: c.negPrompt || '',
@@ -2928,9 +2992,6 @@ async function _commitSnapshot() {
       activeTab: c.activeTab || 'positive'
     }))
   };
-
-  const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
-  let history = data.promptHistory || [];
   const limit = data.historyLimit || 100;
 
   // 插入新快照到数组头部
