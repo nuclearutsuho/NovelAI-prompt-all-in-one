@@ -56,6 +56,7 @@
   // 1) get settings from storage  ← preservePrompt 포함 (包含 preservePrompt)
   let {
     wildcards = {},
+    wildcardFolders = [],
     v3mode = false,
     preservePrompt = true,
     alternativeDanbooruAutocomplete = true,
@@ -65,7 +66,7 @@
     hideAutoClicker = false,
     autoClickerI18n = null,
     hotkeys = null
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
+  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
   let sequentialCounters = loadScopedSequentialCounters();
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
@@ -108,6 +109,7 @@
     window.postMessage({
       type: '__WILDCARD_INIT__',
       map: wildcards,
+      folders: wildcardFolders,
       v3: v3mode,
       preservePrompt,
       alternativeDanbooruAutocomplete,
@@ -879,6 +881,7 @@
   chrome.storage.onChanged.addListener(changes => {
     // wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 중 하나라도 바뀌면 반영 (wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 中任何一个改变都反映)
     if (changes.wildcards ||
+      changes.wildcardFolders ||
       changes.v3mode ||
       changes.preservePrompt ||
       changes.alternativeDanbooruAutocomplete ||
@@ -892,6 +895,9 @@
       wildcards = changes.wildcards
         ? changes.wildcards.newValue
         : wildcards;
+      wildcardFolders = changes.wildcardFolders
+        ? changes.wildcardFolders.newValue
+        : wildcardFolders;
       v3mode = changes.v3mode
         ? changes.v3mode.newValue
         : v3mode;
@@ -928,6 +934,7 @@
       window.postMessage({
         type: '__WILDCARD_UPDATE__',
         map: wildcards,
+        folders: wildcardFolders,
         v3: v3mode,
         preservePrompt,
         alternativeDanbooruAutocomplete,

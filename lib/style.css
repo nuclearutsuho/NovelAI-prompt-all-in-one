@@ -778,14 +778,42 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.autocomplete-item.autocomplete-section {
+    cursor: default;
+    padding: 7px 10px 5px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(210, 220, 255, 0.7);
+    background: rgba(138, 180, 248, 0.08);
+}
+
 .autocomplete-item:hover,
 .autocomplete-item.selected {
     background: #4a4a6a;
 }
 
+.autocomplete-item.autocomplete-section:hover,
+.autocomplete-item.autocomplete-section.selected {
+    background: rgba(138, 180, 248, 0.08);
+}
+
 .autocomplete-tag {
     color: #e0e0e0;
     font-weight: 500;
+}
+
+.autocomplete-item.autocomplete-folder .autocomplete-tag {
+    color: #8ab4f8 !important;
+}
+
+.autocomplete-item.autocomplete-parent-folder .autocomplete-tag {
+    color: #c4b5fd !important;
+}
+
+.autocomplete-item.autocomplete-file .autocomplete-tag {
+    color: #b8f7c6 !important;
 }
 
 .autocomplete-trans {

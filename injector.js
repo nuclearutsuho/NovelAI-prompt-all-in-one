@@ -14,12 +14,58 @@
   }
 
   let dict = {};
+  let wildcardFolders = [];
+  let wildcardFolderList = [];
   let sequentialCounters = {};
   let v3 = false;
   let preservePrompt = true;
   let alternativeDanbooruAutocomplete = true;
   let triggerTab = false;
   let triggerSpace = true;
+
+  function getWildcardParentPath(path) {
+    const normalized = String(path || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!normalized) return '';
+    const idx = normalized.lastIndexOf('/');
+    return idx === -1 ? '' : normalized.slice(0, idx);
+  }
+
+  function getWildcardBaseName(path) {
+    const normalized = String(path || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!normalized) return '';
+    const idx = normalized.lastIndexOf('/');
+    return idx === -1 ? normalized : normalized.slice(idx + 1);
+  }
+
+  function rebuildWildcardFolderList(rawFolders = [], wildcardMap = {}) {
+    const folderSet = new Set();
+
+    (Array.isArray(rawFolders) ? rawFolders : []).forEach(folder => {
+      const normalized = String(folder || '').trim().replace(/^\/+|\/+$/g, '');
+      if (!normalized) return;
+      const parts = normalized.split('/').filter(Boolean);
+      let current = '';
+      parts.forEach(part => {
+        current = current ? `${current}/${part}` : part;
+        folderSet.add(current);
+      });
+    });
+
+    Object.keys(wildcardMap || {}).forEach(key => {
+      const normalizedKey = String(key || '').trim().replace(/^\/+|\/+$/g, '');
+      if (!normalizedKey || !normalizedKey.includes('/')) return;
+      const parts = normalizedKey.split('/').filter(Boolean);
+      parts.pop();
+      let current = '';
+      parts.forEach(part => {
+        current = current ? `${current}/${part}` : part;
+        folderSet.add(current);
+      });
+    });
+
+    wildcardFolders = Array.from(folderSet);
+    wildcardFolderList = wildcardFolders.sort((a, b) => a.localeCompare(b));
+  }
 
   function waitForElement(selector) {
     return new Promise(resolve => {
@@ -682,7 +728,7 @@
 
   window.addEventListener('message', e => {
     if (e.source !== window) return;
-    const { type, map, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
+    const { type, map, folders, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
 
   function setWebpageResolution(width, height) {
     const resInputs = Array.from(document.querySelectorAll('input[type="number"][step="64"][min="64"]'));
@@ -721,6 +767,7 @@
     // 옵션 초기화 및 업데이트 처리 (选项初始化及更新处理)
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
+      rebuildWildcardFolderList(typeof folders !== 'undefined' ? folders : wildcardFolders, dict);
       v3 = !!newV3;
       preservePrompt = !!newPreserve;
       triggerTab = !!newTab;
@@ -932,6 +979,20 @@
     }
     .wildcard-suggest li{padding:3px 8px; cursor:pointer; white-space:nowrap;}
     .wildcard-suggest li.active{background:#444;}
+    .wildcard-suggest li.wildcard-suggest-section{
+      cursor:default;
+      padding:5px 8px 3px;
+      font-size:10px;
+      text-transform:uppercase;
+      letter-spacing:0.08em;
+      color:#a5b4fc;
+      opacity:0.85;
+      border-top:1px solid rgba(255,255,255,0.08);
+      background:rgba(255,255,255,0.03);
+    }
+    .wildcard-suggest li.wildcard-suggest-section:first-child{border-top:none;}
+    .wildcard-suggest li.wildcard-folder{color:#c4b5fd;}
+    .wildcard-suggest li.wildcard-file{color:#e5e7eb;}
     `;
     const styleEl = document.createElement('style');
     styleEl.textContent = STYLE;
@@ -1032,6 +1093,145 @@
         return n + '';
       }
 
+      function getSelectableItems() {
+        return Array.from(list.querySelectorAll('li[data-selectable="true"]'));
+      }
+
+      function scoreWildcardPathMatch(path, query, leafQuery = query) {
+        const normalizedPath = String(path || '').toLowerCase();
+        const baseName = getWildcardBaseName(normalizedPath);
+        if (!query) return 1;
+
+        let score = 0;
+        if (baseName === leafQuery) score += 1200;
+        else if (baseName.startsWith(leafQuery)) score += 900;
+        else if (baseName.includes(leafQuery)) score += 650;
+
+        if (normalizedPath === query) score += 500;
+        else if (normalizedPath.startsWith(query)) score += 350;
+        else if (normalizedPath.includes(query)) score += 220;
+
+        score -= normalizedPath.length * 0.5;
+        return score;
+      }
+
+      function rankWildcardPaths(paths, query, { leafQuery = query, limit = 50 } = {}) {
+        return (paths || [])
+          .map(path => ({
+            path,
+            score: scoreWildcardPathMatch(path, query, leafQuery)
+          }))
+          .filter(item => !query || item.score > 0)
+          .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+          .slice(0, limit)
+          .map(item => item.path);
+      }
+
+      function buildWildcardSection(title, entries) {
+        const normalizedEntries = (entries || []).filter(Boolean);
+        if (!normalizedEntries.length) return [];
+        return [{ type: 'header', text: title }].concat(normalizedEntries);
+      }
+
+      function buildFolderItem(folderPath, prefix, num, displayText) {
+        const normalizedFolder = String(folderPath || '').replace(/^\/+|\/+$/g, '');
+        if (!normalizedFolder) return null;
+        return {
+          type: 'folder',
+          text: displayText || `${normalizedFolder}/`,
+          path: normalizedFolder,
+          insertText: `${prefix}${num}__${normalizedFolder}/`
+        };
+      }
+
+      function buildFileItem(filePath, prefix, num, displayText) {
+        const normalizedFile = String(filePath || '').replace(/^\/+|\/+$/g, '');
+        if (!normalizedFile) return null;
+        return {
+          type: 'file',
+          text: displayText || normalizedFile,
+          path: normalizedFile,
+          insertText: `${prefix}${num}__${normalizedFile}__`
+        };
+      }
+
+      function buildWildcardTokenSuggestions(prefix, num, rawQuery) {
+        const normalizedQuery = String(rawQuery || '').trim().toLowerCase();
+        const fileKeys = Object.keys(dict || {});
+        const folderPaths = wildcardFolderList || [];
+        const MAX_FOLDER_RESULTS = 20;
+        const MAX_FILE_RESULTS = 30;
+
+        if (!normalizedQuery) {
+          const topFolders = folderPaths
+            .filter(path => !path.includes('/'))
+            .sort((a, b) => a.localeCompare(b))
+            .slice(0, MAX_FOLDER_RESULTS)
+            .map(path => buildFolderItem(path, prefix, num, `${getWildcardBaseName(path)}/`));
+          const rootFiles = fileKeys
+            .filter(path => !path.includes('/'))
+            .sort((a, b) => a.localeCompare(b))
+            .slice(0, MAX_FILE_RESULTS)
+            .map(path => buildFileItem(path, prefix, num, getWildcardBaseName(path)));
+
+          return buildWildcardSection('Folders', topFolders)
+            .concat(buildWildcardSection('Files', rootFiles));
+        }
+
+        if (!normalizedQuery.includes('/')) {
+          const matchedFolders = rankWildcardPaths(folderPaths, normalizedQuery, {
+            leafQuery: normalizedQuery,
+            limit: MAX_FOLDER_RESULTS
+          }).map(path => buildFolderItem(path, prefix, num, `${path}/`));
+          const matchedFiles = rankWildcardPaths(fileKeys, normalizedQuery, {
+            leafQuery: normalizedQuery,
+            limit: MAX_FILE_RESULTS
+          }).map(path => buildFileItem(path, prefix, num, path));
+
+          return buildWildcardSection('Folders', matchedFolders)
+            .concat(buildWildcardSection('Files', matchedFiles));
+        }
+
+        const lastSlashIdx = normalizedQuery.lastIndexOf('/');
+        const currentFolder = normalizedQuery.slice(0, lastSlashIdx).replace(/^\/+|\/+$/g, '');
+        const leafQuery = normalizedQuery.slice(lastSlashIdx + 1);
+        const folderPrefix = currentFolder ? `${currentFolder}/` : '';
+
+        const directFolders = folderPaths.filter(path => getWildcardParentPath(path).toLowerCase() === currentFolder);
+        const directFiles = fileKeys.filter(path => getWildcardParentPath(path).toLowerCase() === currentFolder);
+
+        let folderResults = rankWildcardPaths(directFolders, leafQuery, {
+          leafQuery,
+          limit: MAX_FOLDER_RESULTS
+        }).map(path => buildFolderItem(path, prefix, num, `${getWildcardBaseName(path)}/`));
+
+        let fileResults = rankWildcardPaths(directFiles, leafQuery, {
+          leafQuery,
+          limit: MAX_FILE_RESULTS
+        }).map(path => buildFileItem(path, prefix, num, getWildcardBaseName(path)));
+
+        if (!folderResults.length && !fileResults.length) {
+          const subtreeFolders = folderPaths
+            .filter(path => path.toLowerCase().startsWith(folderPrefix))
+            .filter(path => path.toLowerCase() !== currentFolder);
+          const subtreeFiles = fileKeys
+            .filter(path => path.toLowerCase().startsWith(folderPrefix));
+
+          folderResults = rankWildcardPaths(subtreeFolders, normalizedQuery, {
+            leafQuery,
+            limit: MAX_FOLDER_RESULTS
+          }).map(path => buildFolderItem(path, prefix, num, `${path.slice(folderPrefix.length)}/`));
+
+          fileResults = rankWildcardPaths(subtreeFiles, normalizedQuery, {
+            leafQuery,
+            limit: MAX_FILE_RESULTS
+          }).map(path => buildFileItem(path, prefix, num, path.slice(folderPrefix.length)));
+        }
+
+        return buildWildcardSection('Folders', folderResults)
+          .concat(buildWildcardSection('Files', fileResults));
+      }
+
       function update() {
         if (isSyncingFromPopup) {
           hide();
@@ -1063,19 +1263,10 @@
         if (m) {
           const prefix = m[1] || '';
           const num = m[2] || '';
-          const namePart = m[3].toLowerCase();
-          const allKeys = Object.keys(dict)
-
-          const folderKeys = allKeys.filter(k => k.toLowerCase().startsWith(namePart + '/'));
-          if (folderKeys.length && !namePart.includes('/')) {
-            render(folderKeys.map(k => ({ type: 'token', text: `${prefix}${num}__${k}__` })));
-            return;
-          }
-
-          const keys = allKeys.filter(k => k.toLowerCase().includes(namePart))
-            .sort();
-          if (keys.length) {
-            render(keys.map(k => ({ type: 'token', text: `${prefix}${num}__${k}__` })));
+          const namePart = m[3] || '';
+          const entries = buildWildcardTokenSuggestions(prefix, num, namePart);
+          if (entries.length) {
+            render(entries);
             return;
           }
         }
@@ -1154,12 +1345,17 @@
 
       function render(items) {
         list.innerHTML = '';
-        items.forEach(({ type, text, color, popCount, aliasUsed, original, zhCN }, index) => {
+        items.forEach(({ type, text, color, popCount, aliasUsed, original, zhCN, insertText }, index) => {
           const li = document.createElement('li');
           li.dataset.type = type;
           li.dataset.index = index;
+          li.dataset.selectable = type === 'header' ? 'false' : 'true';
+          if (insertText) li.dataset.insertText = insertText;
 
-          if (type === 'dict') {
+          if (type === 'header') {
+            li.className = 'wildcard-suggest-section';
+            li.textContent = text;
+          } else if (type === 'dict') {
             li.style.color = color || 'red';
             const displayText = zhCN ? `${text} (${zhCN})` : text;
             if (aliasUsed) {
@@ -1168,23 +1364,29 @@
               li.innerHTML = `<span style="color:${color};">${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
             }
           } else {
+            if (type === 'folder') li.classList.add('wildcard-folder');
+            if (type === 'file') li.classList.add('wildcard-file');
             li.textContent = text;
           }
 
-          li.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            choose(e.currentTarget);
-          });
+          if (li.dataset.selectable === 'true') {
+            li.addEventListener('mousedown', (e) => {
+              e.preventDefault();
+              choose(e.currentTarget);
+            });
 
-          li.addEventListener('mouseenter', () => {
-            selIdx = index;
-            highlight();
-          });
+            li.addEventListener('mouseenter', () => {
+              const selectableItems = getSelectableItems();
+              selIdx = selectableItems.indexOf(li);
+              highlight();
+            });
+          }
 
           list.appendChild(li);
         });
 
-        selIdx = 0;
+        const selectableItems = getSelectableItems();
+        selIdx = selectableItems.length ? 0 : -1;
         highlight();
 
         const sel = window.getSelection();
@@ -1198,7 +1400,7 @@
       function nav(e) {
         if (list.style.display === 'none') return;
 
-        const items = list.querySelectorAll('li');
+        const items = getSelectableItems();
         if (!items.length) return;
 
         if (triggerTab && e.key === 'Tab') {
@@ -1215,8 +1417,9 @@
       }
 
       function choose(li) {
+        if (!li || li.dataset.selectable !== 'true') { hide(); return; }
         const type = li.dataset.type;
-        let text = li.textContent;
+        let text = li.dataset.insertText || li.textContent;
         const sel = window.getSelection();
         if (!sel || !sel.rangeCount) { hide(); return; }
 
@@ -1227,7 +1430,7 @@
         const full = before.toString();
 
         let len = 0;
-        if (type === 'token') {
+        if (type === 'token' || type === 'file' || type === 'folder') {
           const m = full.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
           len = m ? m[0].length : 0;
           if (m && m[0].startsWith(' ') || m && m[0].match(/^[^sS\d_]/)) len--;
@@ -1254,7 +1457,7 @@
           }
         }
 
-        const needsComma = !text.startsWith('__');
+        const needsComma = !['token', 'file', 'folder'].includes(type) && !text.startsWith('__');
         document.execCommand(
           'insertText',
           false,
@@ -1262,16 +1465,19 @@
         );
         hide();
 
-        if (type === 'token') {
+        if (type === 'token' || type === 'folder') {
           setTimeout(update, 0);
         }
       }
 
       function highlight() {
-        list.querySelectorAll('li').forEach((li, i) =>
-          li.classList.toggle('active', i === selIdx)
+        list.querySelectorAll('li').forEach(li =>
+          li.classList.remove('active')
         );
-        const activeLi = list.querySelector('li.active');
+        const items = getSelectableItems();
+        if (!items.length || selIdx < 0) return;
+        const activeLi = items[selIdx];
+        if (activeLi) activeLi.classList.add('active');
         if (activeLi) {
           activeLi.scrollIntoView({ block: 'nearest' });
         }
