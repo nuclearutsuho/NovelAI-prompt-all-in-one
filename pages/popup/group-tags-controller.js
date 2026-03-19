@@ -297,12 +297,38 @@ export default function createGroupTagsController(deps = {}) {
     notifyPickerStateChanged();
   }
 
+  function updateEarButtons(mode) {
+    const btnTagMode = document.getElementById('group-tags-picker-ear-tag');
+    const btnSentenceMode = document.getElementById('group-tags-picker-ear-sentence');
+    if (mode === GROUP_ITEM_TYPE_TAG) {
+      btnTagMode?.classList.add('active');
+      btnSentenceMode?.classList.remove('active');
+    } else {
+      btnSentenceMode?.classList.add('active');
+      btnTagMode?.classList.remove('active');
+    }
+  }
+
   function initGroupTagsPickerModal() {
     const modal = document.getElementById('group-tags-picker-modal');
     const closeBtn = document.getElementById('group-tags-picker-close');
 
     if (!modal || modal.dataset.bound === 'true') return;
     modal.dataset.bound = 'true';
+
+    const btnTagMode = document.getElementById('group-tags-picker-ear-tag');
+    const btnSentenceMode = document.getElementById('group-tags-picker-ear-sentence');
+
+    const handleEarClick = (mode) => {
+      if (groupTagsPickerState.itemMode === mode) return;
+      groupTagsPickerState.itemMode = mode;
+      updateEarButtons(mode);
+      notifyPickerStateChanged();
+      rerenderPickerTagContent();
+    };
+
+    btnTagMode?.addEventListener('click', () => handleEarClick(GROUP_ITEM_TYPE_TAG));
+    btnSentenceMode?.addEventListener('click', () => handleEarClick(GROUP_ITEM_TYPE_SENTENCE));
 
     closeBtn?.addEventListener('click', () => closeGroupTagsPicker(null));
     modal.addEventListener('click', (event) => {
@@ -337,30 +363,6 @@ export default function createGroupTagsController(deps = {}) {
     const container = document.createElement('div');
     container.className = 'group-tags-picker-item';
 
-    const buildModeSwitch = (className = 'group-tags-picker-mode-switch') => {
-      const modeSwitch = document.createElement('div');
-      modeSwitch.className = className;
-
-      const buildModeButton = (mode, labelKey, fallback) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `group-tags-picker-mode-btn ${groupTagsPickerState.itemMode === mode ? 'active' : ''}`;
-        btn.textContent = getLocalizedText(labelKey, fallback);
-        btn.addEventListener('click', (event) => {
-          event.stopPropagation();
-          if (groupTagsPickerState.itemMode === mode) return;
-          groupTagsPickerState.itemMode = mode;
-          notifyPickerStateChanged();
-          rerenderPickerTagContent();
-        });
-        return btn;
-      };
-
-      modeSwitch.appendChild(buildModeButton(GROUP_ITEM_TYPE_TAG, 'group_tags_picker_mode_tag', 'Tag'));
-      modeSwitch.appendChild(buildModeButton(GROUP_ITEM_TYPE_SENTENCE, 'group_tags_picker_mode_sentence', 'Sentence'));
-      return modeSwitch;
-    };
-
     const buildCloseButton = () => {
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
@@ -380,7 +382,6 @@ export default function createGroupTagsController(deps = {}) {
 
       const toolbar = document.createElement('div');
       toolbar.className = 'group-tags-picker-sentence-toolbar';
-      toolbar.appendChild(buildModeSwitch('group-tags-picker-mode-switch sentence-mode'));
       toolbar.appendChild(buildCloseButton());
       shell.appendChild(toolbar);
 
@@ -417,7 +418,6 @@ export default function createGroupTagsController(deps = {}) {
 
     const tagRow = document.createElement('div');
     tagRow.className = 'group-tags-picker-tag-inner';
-    tagRow.appendChild(buildModeSwitch('group-tags-picker-mode-switch inline'));
 
     const createEditableText = (initialText, className, fieldName) => {
       const textEl = document.createElement('span');
@@ -571,7 +571,8 @@ export default function createGroupTagsController(deps = {}) {
     groupTagsPickerState.tagData = normalizeGroupTagsPickerData(tagData);
     groupTagsPickerState.groupTagsData = groupTagsData;
     groupTagsPickerState.activeCategoryId = categories[0]?.id || null;
-    groupTagsPickerState.itemMode = GROUP_ITEM_TYPE_TAG;
+    groupTagsPickerState.itemMode = groupTagsPickerState.tagData.type === GROUP_ITEM_TYPE_SENTENCE ? GROUP_ITEM_TYPE_SENTENCE : GROUP_ITEM_TYPE_TAG;
+    updateEarButtons(groupTagsPickerState.itemMode);
 
     updateGroupTagsPickerStaticText();
     if (tagEl) rerenderPickerTagContent();

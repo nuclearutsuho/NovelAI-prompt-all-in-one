@@ -453,7 +453,58 @@
       transition: transform 0.2s ease, opacity 0.2s ease;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      position: relative;
+    }
+
+    /* 方案一：经典外设夹纸小耳朵 */
+    .group-tags-picker-ears {
+      position: absolute;
+      top: -28px;
+      left: 12px;
+      display: flex;
+      gap: 2px;
+      z-index: 10;
+    }
+
+    .group-tags-picker-ear-btn {
+      background: #181825;
+      border: 1px solid #4a4a6a;
+      border-bottom: none;
+      color: #94a3b8;
+      border-radius: 8px 8px 0 0;
+      padding: 6px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      height: 28px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .group-tags-picker-ear-btn:hover {
+      background: #2a2a3e;
+      color: #cbd5e1;
+    }
+
+    .group-tags-picker-ear-btn.active {
+      background: #1e1e2e; 
+      color: #818cf8;
+      position: relative;
+    }
+
+    /* 让被激活的小耳朵完美融入弹窗内容区 */
+    .group-tags-picker-ear-btn.active::after {
+      content: '';
+      position: absolute;
+      bottom: -2px; /* 盖住弹窗的顶部边框 */
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: #1e1e2e;
+      z-index: 11;
     }
 
     #group-tags-picker-modal.visible .group-tags-picker-content {
@@ -479,47 +530,6 @@
     .group-tags-picker-item {
       display: flex;
       flex-direction: column;
-    }
-
-    .group-tags-picker-mode-switch {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 0;
-      flex-shrink: 0;
-    }
-
-    .group-tags-picker-mode-switch.inline {
-      margin: 0 8px 0 0;
-      padding: 0 0 0 8px;
-    }
-
-    .group-tags-picker-mode-switch.sentence-mode {
-      padding: 8px 0 0 10px;
-    }
-
-    .group-tags-picker-mode-btn {
-      background: #141420;
-      border: 1px solid #3a3a55;
-      color: #94a3b8;
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 10px;
-      line-height: 1.4;
-      cursor: pointer;
-      transition: all 0.18s ease;
-    }
-
-    .group-tags-picker-mode-btn:hover {
-      color: #fff;
-      border-color: #6366f1;
-      background: rgba(99, 102, 241, 0.12);
-    }
-
-    .group-tags-picker-mode-btn.active {
-      color: #fff;
-      background: #3f3f8d;
-      border-color: #6366f1;
     }
 
     .group-tags-picker-tag-inner {
@@ -676,61 +686,64 @@
       padding: 0 0 12px 0;
     }
 
-    /* 第一排：分类 Category */
+    /* 第一排：分类 Category (极简无边框下横线风格) */
     .group-tags-picker-primary-tabs {
       display: flex;
-      gap: 2px;
-      padding: 8px 12px;
+      gap: 16px;
+      padding: 0 16px;
       background: #181825;
-      border-bottom: 1px solid #3a3a55;
+      border-bottom: 1px solid #2a2a3e;
       overflow-x: auto;
+      scrollbar-width: none; /* 隐藏火狐的滚动条 */
     }
     
-    .group-tags-picker-primary-tabs::-webkit-scrollbar,
+    .group-tags-picker-primary-tabs::-webkit-scrollbar {
+      display: none; /* 隐藏 Chrome 相关的滚动条以保持整洁 */
+    }
     .group-tags-picker-secondary-tabs::-webkit-scrollbar {
+      width: 4px;
       height: 4px;
     }
-    .group-tags-picker-primary-tabs::-webkit-scrollbar-thumb,
     .group-tags-picker-secondary-tabs::-webkit-scrollbar-thumb {
-      background: #4a4a6a;
+      background: #3a3a55;
       border-radius: 2px;
     }
 
     .group-tags-picker-tab-btn {
-      background: #181825;
-      border: 1px solid #3a3a55;
-      color: #999;
-      padding: 4px 10px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #71718a;
+      padding: 10px 4px;
       cursor: pointer;
-      font-size: 11px;
-      font-weight: 500;
-      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 0;
       white-space: nowrap;
       transition: all 0.2s ease;
       flex-shrink: 0;
+      letter-spacing: 0.3px;
     }
 
     .group-tags-picker-tab-btn:hover {
-      background: #2a2a3e;
-      color: #ddd;
+      color: #e0e7ff;
     }
 
     .group-tags-picker-tab-btn:active {
-      transform: scale(0.95);
+      transform: scale(0.96);
     }
 
     .group-tags-picker-tab-btn.active {
-      background: #818cf8;
-      border-color: #6366f1;
-      color: #fff;
+      color: #818cf8;
+      border-bottom-color: #818cf8;
     }
 
-    /* 第二排：对应的分组 Groups */
+    /* 第二排：对应的分组 Groups (霓虹胶囊风格) */
     .group-tags-picker-secondary-tabs {
       display: flex;
       flex-wrap: wrap; 
-      gap: 6px;
-      padding: 10px 12px;
+      gap: 8px;
+      padding: 14px 16px;
       max-height: 240px;
       overflow-y: auto;
       align-content: flex-start;
@@ -738,33 +751,35 @@
     }
 
     .group-tags-picker-group-btn {
-      background: #252538;
-      border: 1px solid #4a4a6a;
+      background: rgba(167, 139, 250, 0.05);
+      border: 1px solid rgba(167, 139, 250, 0.2);
       color: #cbd5e1;
-      border-radius: 4px;
-      padding: 6px 12px;
+      border-radius: 999px; /* 胶囊圆角 */
+      padding: 4px 12px;
       cursor: pointer;
       font-size: 11px;
       font-weight: 500;
-      transition: all 0.2s ease;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     .group-tags-picker-group-btn:hover {
-      background: #4a4a6a;
+      background: rgba(129, 140, 248, 0.15);
       border-color: #818cf8;
       color: #fff;
+      box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
     }
 
     .group-tags-picker-group-btn:active {
-      transform: scale(0.95) translateY(1px);
-      box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); /* 模拟内凹阻力感 */
+      transform: scale(0.94);
+      background: rgba(129, 140, 248, 0.25);
     }
 
     .group-tags-picker-empty {
-      color: #94a3b8;
-      font-size: 11px;
-      padding: 16px;
+      color: #64748b;
+      font-size: 12px;
+      padding: 24px 16px;
       text-align: center;
+      font-style: italic;
     }
 
     /* ---------------------------------
@@ -1726,6 +1741,10 @@
 
   <div id="group-tags-picker-modal">
     <div class="group-tags-picker-content">
+      <div class="group-tags-picker-ears">
+        <button id="group-tags-picker-ear-tag" class="group-tags-picker-ear-btn active" data-i18n="group_tags_picker_mode_tag">Tag</button>
+        <button id="group-tags-picker-ear-sentence" class="group-tags-picker-ear-btn" data-i18n="group_tags_picker_mode_sentence">Sentence</button>
+      </div>
       <div class="group-tags-picker-header">
         <span id="group-tags-picker-title">Add to Group Tags</span>
         <button id="group-tags-picker-close" class="group-tags-picker-close" aria-label="Close">×</button>
