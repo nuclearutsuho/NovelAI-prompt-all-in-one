@@ -9,6 +9,8 @@ const groupTagsFavoritesUtils = window.GroupTagsFavoritesUtils || {};
 const SPECIAL_FAVORITES_CATEGORY_ID = groupTagsFavoritesUtils.SPECIAL_CATEGORY_ID || '__group_tags_favorites__';
 const SPECIAL_FAVORITES_CATEGORY_NAME = groupTagsFavoritesUtils.SPECIAL_CATEGORY_NAME || '收藏片段';
 const SPECIAL_FAVORITES_ROOT_GROUP_ID = groupTagsFavoritesUtils.ROOT_GROUP_ID || '__favorites_unfiled__';
+const GROUP_ITEM_TYPE_TAG = 'tag';
+const GROUP_ITEM_TYPE_SENTENCE = 'sentence';
 let autocompleteDict = []; // 全局字典缓存
 let activeTagsContext = []; // 当前聚焦输入框的 tags
 let inactiveTagsContext = []; // 另一个输入框的 tags
@@ -18,6 +20,58 @@ let draggedTagInfo = null; // 普通标签拖拽状态：{ tag, sourceCategoryIn
 let favoritePreviewPopover = null;
 let favoritesHistorySnapshot = null;
 let favoritePreviewHideTimer = null;
+let sentenceCardEditState = null;
+
+function normalizeGroupItemType(value) {
+  if (groupTagsDataUtils.normalizeGroupItemType) {
+    return groupTagsDataUtils.normalizeGroupItemType(value);
+  }
+  return value === GROUP_ITEM_TYPE_SENTENCE ? GROUP_ITEM_TYPE_SENTENCE : GROUP_ITEM_TYPE_TAG;
+}
+
+function isSentenceGroupItem(value) {
+  if (groupTagsDataUtils.isSentenceGroupItem) {
+    return groupTagsDataUtils.isSentenceGroupItem(value);
+  }
+  return normalizeGroupItemType(value?.type) === GROUP_ITEM_TYPE_SENTENCE;
+}
+
+function isTagGroupItem(value) {
+  if (groupTagsDataUtils.isTagGroupItem) {
+    return groupTagsDataUtils.isTagGroupItem(value);
+  }
+  return !isSentenceGroupItem(value);
+}
+
+function buildSentenceItemKey(value) {
+  if (groupTagsDataUtils.buildSentenceItemKey) {
+    return groupTagsDataUtils.buildSentenceItemKey(value);
+  }
+  const en = typeof value?.en === 'string' ? value.en.trim() : '';
+  const zh = typeof value?.zh === 'string' ? value.zh.trim() : '';
+  if (!en || !zh) return '';
+  return `${en}\u0000${zh}`;
+}
+
+function getGroupItemPromptText(value) {
+  if (groupTagsDataUtils.getGroupItemPromptText) {
+    return groupTagsDataUtils.getGroupItemPromptText(value);
+  }
+  if (isSentenceGroupItem(value)) {
+    return typeof value?.en === 'string' ? value.en.trim() : '';
+  }
+  return typeof value?.en === 'string' ? value.en.trim() : '';
+}
+
+function getGroupItemTranslationText(value) {
+  if (groupTagsDataUtils.getGroupItemTranslationText) {
+    return groupTagsDataUtils.getGroupItemTranslationText(value);
+  }
+  if (isSentenceGroupItem(value)) {
+    return typeof value?.zh === 'string' ? value.zh.trim() : '';
+  }
+  return typeof value?.zh === 'string' ? value.zh.trim() : '';
+}
 
 // ========== 密度控制逻辑 ==========
 const GROUP_TAGS_EXPORT_FORMAT = 'group-tags-export';
@@ -108,7 +162,8 @@ function buildColorMap() {
     (cat.groups || []).forEach(group => {
       const color = group.color || '#4a4a6a';
       (group.tags || []).forEach(t => {
-        map[t.en] = color;
+        const key = normalizeTagKey(getGroupItemPromptText(t));
+        if (key) map[key] = color;
       });
     });
   });
@@ -133,7 +188,9 @@ function buildTranslationMap() {
   customGroupsData.categories.forEach(cat => {
     (cat.groups || []).forEach(group => {
       (group.tags || []).forEach(t => {
-        if (t.en && t.zh) map[t.en] = t.zh;
+        const key = normalizeTagKey(getGroupItemPromptText(t));
+        const translationText = getGroupItemTranslationText(t);
+        if (key && translationText) map[key] = translationText;
       });
     });
   });
@@ -327,7 +384,7 @@ function scheduleHideFavoritePreviewPopover() {
   favoritePreviewHideTimer = setTimeout(() => {
     favoritePreviewHideTimer = null;
     hideFavoritePreviewPopover();
-  }, 120);
+  }, 80);
 }
 
 function clampPreviewPosition(value, min, max) {
@@ -528,7 +585,7 @@ function initTagsGridSortable() {
       const tag = currentGroup.tags?.[tagIndex];
       if (tag) {
         draggedTagInfo = {
-          tag: { en: tag.en, zh: tag.zh },
+          tag: cloneData(tag),
           sourceCategoryIndex: activeCategoryIndex,
           sourceGroupIndex: activeGroupIndex,
           sourceTagIndex: tagIndex
@@ -597,6 +654,7 @@ dom.modalOverlay.addEventListener('click', (e) => {
 // ========== 编辑模式切换 ==========
 async function enterEditMode() {
   isEditMode = true;
+  sentenceCardEditState = null;
   // 收藏片段分类的数据直接来自 promptHistory，取消编辑时只回滚普通 Group Tags 数据。
   dataSnapshot = JSON.parse(JSON.stringify(getPersistableGroupTagsData(customGroupsData)));
   if (groupTagsFavoritesUtils.loadPromptHistory) {
@@ -650,6 +708,7 @@ async function finalizeEditMode(save) {
 
   dataSnapshot = null;
   favoritesHistorySnapshot = null;
+  sentenceCardEditState = null;
   isEditMode = false;
   dom.app.classList.remove('edit-mode');
   renderPrimaryTabs();
@@ -808,34 +867,61 @@ function normalizeGroupTagsData(rawData) {
       };
 
       const tags = Array.isArray(rawGroup.tags) ? rawGroup.tags : [];
-      const seenTagKeys = new Set();
+      const seenItemKeys = new Set();
       tags.forEach(rawTag => {
-        let en = '';
-        let zh = '';
-
         if (typeof rawTag === 'string') {
-          en = sanitizeText(rawTag);
-        } else if (rawTag && typeof rawTag === 'object') {
-          en = sanitizeText(rawTag.en);
-          zh = sanitizeText(rawTag.zh);
-        } else {
+          const tagKey = normalizeTagKey(rawTag);
+          if (!tagKey || seenItemKeys.has(`tag:${tagKey}`)) {
+            summary.skippedInvalid += tagKey ? 0 : 1;
+            summary.skippedTags += tagKey ? 1 : 0;
+            return;
+          }
+          seenItemKeys.add(`tag:${tagKey}`);
+          normalizedGroup.tags.push({ type: GROUP_ITEM_TYPE_TAG, en: tagKey, zh: '' });
+          return;
+        }
+
+        if (!rawTag || typeof rawTag !== 'object') {
           summary.skippedInvalid += 1;
           return;
         }
 
+        if (isSentenceGroupItem(rawTag) || rawTag.sourceText || rawTag.resultText) {
+          const en = sanitizeText(rawTag.en) || sanitizeText(rawTag.sourceText);
+          const zh = sanitizeText(rawTag.zh) || sanitizeText(rawTag.resultText);
+          const sentenceKey = buildSentenceItemKey({ en, zh });
+          if (!sentenceKey) {
+            summary.skippedInvalid += 1;
+            return;
+          }
+          if (seenItemKeys.has(`sentence:${sentenceKey}`)) {
+            summary.skippedTags += 1;
+            return;
+          }
+          seenItemKeys.add(`sentence:${sentenceKey}`);
+          normalizedGroup.tags.push({
+            type: GROUP_ITEM_TYPE_SENTENCE,
+            en,
+            zh
+          });
+          return;
+        }
+
+        const en = sanitizeText(rawTag.en);
+        const zh = sanitizeText(rawTag.zh);
         const tagKey = normalizeTagKey(en);
         if (!tagKey) {
           summary.skippedInvalid += 1;
           return;
         }
 
-        if (seenTagKeys.has(tagKey)) {
+        if (seenItemKeys.has(`tag:${tagKey}`)) {
           summary.skippedTags += 1;
           return;
         }
 
-        seenTagKeys.add(tagKey);
-        normalizedGroup.tags.push({ en, zh });
+        seenItemKeys.add(`tag:${tagKey}`);
+        normalizedGroup.tags.push({ type: GROUP_ITEM_TYPE_TAG, en: tagKey, zh });
       });
 
       normalizedCategory.groups.push(normalizedGroup);
@@ -877,14 +963,33 @@ function mergeGroupTagsData(baseData, sourceData) {
       }
 
       summary.skippedGroups += 1;
-      const existingTagKeys = new Set(targetGroup.tags.map(tag => normalizeTagKey(tag.en)));
+      const existingItemKeys = new Set(targetGroup.tags.map((tag) => {
+        if (isSentenceGroupItem(tag)) {
+          const sentenceKey = buildSentenceItemKey(tag);
+          return sentenceKey ? `sentence:${sentenceKey}` : '';
+        }
+        const tagKey = normalizeTagKey(tag.en);
+        return tagKey ? `tag:${tagKey}` : '';
+      }).filter(Boolean));
       sourceGroup.tags.forEach(sourceTag => {
-        const tagKey = normalizeTagKey(sourceTag.en);
-        if (!tagKey || existingTagKeys.has(tagKey)) {
+        const itemKey = isSentenceGroupItem(sourceTag)
+          ? (() => {
+              const sentenceKey = buildSentenceItemKey(sourceTag);
+              return sentenceKey ? `sentence:${sentenceKey}` : '';
+            })()
+          : (() => {
+              const tagKey = normalizeTagKey(sourceTag.en);
+              return tagKey ? `tag:${tagKey}` : '';
+            })();
+        if (!itemKey) {
+          summary.skippedInvalid += 1;
+          return;
+        }
+        if (existingItemKeys.has(itemKey)) {
           summary.skippedTags += 1;
           return;
         }
-        existingTagKeys.add(tagKey);
+        existingItemKeys.add(itemKey);
         targetGroup.tags.push(cloneData(sourceTag));
         summary.addedTags += 1;
       });
@@ -993,7 +1098,7 @@ function findGlobalTagLocation(tagText, options = {}) {
           continue;
         }
 
-        if (normalizeTagKey(tags[tagIndex].en) === normalizedTarget) {
+        if (isTagGroupItem(tags[tagIndex]) && normalizeTagKey(tags[tagIndex].en) === normalizedTarget) {
           return {
             categoryIndex,
             groupIndex,
@@ -1656,10 +1761,34 @@ function buildFavoritePreviewHtml(item) {
   `;
 }
 
+function buildSentencePreviewHtml(item) {
+  const zh = escapeHtmlText(item?.zh || '');
+  const en = escapeHtmlText(item?.en || '');
+  return `
+    <div class="favorites-preview-title">
+      <div>
+        <div>句子预览</div>
+        <div class="favorites-preview-meta">Sentence</div>
+      </div>
+      <span class="favorite-type-badge sentence-preview-badge">Sentence</span>
+    </div>
+    <div class="favorites-preview-body">
+      <div class="favorites-preview-section">
+        <div class="favorites-preview-label">中文</div>
+        <div class="favorites-preview-text">${zh || '暂无内容'}</div>
+      </div>
+      <div class="favorites-preview-section">
+        <div class="favorites-preview-label">English</div>
+        <div class="favorites-preview-text">${en || 'No content'}</div>
+      </div>
+    </div>
+  `;
+}
+
 function positionFavoritePreviewPopover(anchorRect) {
   if (!favoritePreviewPopover) return;
   if (!anchorRect) return;
-  const offset = 14;
+  const offset = 2;
   favoritePreviewPopover.style.maxWidth = '';
   favoritePreviewPopover.style.maxHeight = '';
   const viewportWidth = window.innerWidth;
@@ -1728,6 +1857,29 @@ function bindFavoritePreview(card, item) {
     }
     const popover = ensureFavoritePreviewPopover();
     popover.innerHTML = buildFavoritePreviewHtml(item);
+    popover.classList.add('visible');
+    updatePosition();
+  });
+
+  card.addEventListener('mousemove', () => {
+    updatePosition();
+  });
+
+  card.addEventListener('mouseleave', () => {
+    scheduleHideFavoritePreviewPopover();
+  });
+}
+
+function bindSentencePreview(card, item) {
+  const updatePosition = () => positionFavoritePreviewPopover(card.getBoundingClientRect());
+
+  card.addEventListener('mouseenter', () => {
+    if (favoritePreviewHideTimer) {
+      clearTimeout(favoritePreviewHideTimer);
+      favoritePreviewHideTimer = null;
+    }
+    const popover = ensureFavoritePreviewPopover();
+    popover.innerHTML = buildSentencePreviewHtml(item);
     popover.classList.add('visible');
     updatePosition();
   });
@@ -1890,7 +2042,7 @@ function bindTagDropOnGroupTab(button, targetCategoryIndex, targetGroupIndex) {
 
     // 添加到目标分组末尾
     if (!targetGroup.tags) targetGroup.tags = [];
-    targetGroup.tags.push({ en: tag.en, zh: tag.zh });
+    targetGroup.tags.push(cloneData(tag));
     targetGroup._modified = true;
     targetCategory._modified = true;
 
@@ -1955,7 +2107,7 @@ function bindTagDropOnPrimaryTab(button, targetCategoryIndex) {
 
     // 添加到目标分组末尾
     if (!targetGroup.tags) targetGroup.tags = [];
-    targetGroup.tags.push({ en: tag.en, zh: tag.zh });
+    targetGroup.tags.push(cloneData(tag));
     targetGroup._modified = true;
     targetCategory._modified = true;
 
@@ -2077,7 +2229,8 @@ function renderPrimaryTabs() {
       cat.groups.forEach(g => {
         if (g.tags) {
           g.tags.forEach(t => {
-            if (activeTagsContext.includes(t.en)) usageCount++;
+            const promptKey = normalizeTagKey(getGroupItemPromptText(t));
+            if (promptKey && activeTagsContext.includes(promptKey)) usageCount++;
           });
         }
       });
@@ -2189,7 +2342,8 @@ function renderSecondaryTabs() {
       usageCount = (grp.items || []).length;
     } else if (grp.tags) {
       grp.tags.forEach(t => {
-        if (activeTagsContext.includes(t.en)) usageCount++;
+        const promptKey = normalizeTagKey(getGroupItemPromptText(t));
+        if (promptKey && activeTagsContext.includes(promptKey)) usageCount++;
       });
     }
 
@@ -2375,44 +2529,187 @@ function renderTagsGrid() {
     if (btn) btn.style.backgroundColor = color;
   }
 
+  const isEditingSentenceCard = (tagIndex) => (
+    !!sentenceCardEditState
+    && sentenceCardEditState.categoryIndex === activeCategoryIndex
+    && sentenceCardEditState.groupIndex === activeGroupIndex
+    && sentenceCardEditState.tagIndex === tagIndex
+  );
+
+  const openSentenceCardEditor = (tagIndex, item) => {
+    sentenceCardEditState = {
+      categoryIndex: activeCategoryIndex,
+      groupIndex: activeGroupIndex,
+      tagIndex,
+      draftZh: sanitizeText(item.zh),
+      draftEn: sanitizeText(item.en)
+    };
+    renderTagsGrid();
+  };
+
+  const closeSentenceCardEditor = () => {
+    sentenceCardEditState = null;
+    renderTagsGrid();
+  };
+
+  const commitSentenceCardEditor = (item) => {
+    if (!sentenceCardEditState) return;
+    const nextZh = sanitizeText(sentenceCardEditState.draftZh);
+    const nextEn = sanitizeText(sentenceCardEditState.draftEn);
+    if (!nextZh || !nextEn) {
+      showInfoModal('句子不能为空', '句子的中文和英文内容都不能为空。');
+      return;
+    }
+    item.zh = nextZh;
+    item.en = nextEn;
+    currentGroup._modified = true;
+    currentCategory._modified = true;
+    sentenceCardEditState = null;
+    renderTagsGrid();
+  };
+
   currentGroup.tags.forEach((t, tagIndex) => {
-    const isUsedHere = activeTagsContext.includes(t.en);
-    const isUsedOther = inactiveTagsContext.includes(t.en);
-    const displayEn = toDisplayTagText(t.en);
+    const isSentence = isSentenceGroupItem(t);
+    const isSentenceEditing = isSentence && isEditingSentenceCard(tagIndex);
+    const promptText = getGroupItemPromptText(t);
+    const promptKey = normalizeTagKey(promptText);
+    const translationText = getGroupItemTranslationText(t);
+    const isUsedHere = !!promptKey && activeTagsContext.includes(promptKey);
+    const isUsedOther = !!promptKey && inactiveTagsContext.includes(promptKey);
+    const displayEn = isSentence ? '' : toDisplayTagText(t.en);
+    const sentenceEn = isSentence ? sanitizeText(t.en) : '';
+    const sentenceZh = isSentence ? sanitizeText(t.zh) : '';
 
     const card = document.createElement('div');
-    card.className = `tag-card ${isUsedHere ? 'used' : ''} ${isUsedOther && !isUsedHere ? 'used-other' : ''}`;
-    card.title = `${t.zh}\n${displayEn}`;
+    card.className = `tag-card ${isSentence ? 'sentence-card' : ''} ${isSentenceEditing ? 'sentence-card-editing' : ''} ${isUsedHere ? 'used' : ''} ${isUsedOther && !isUsedHere ? 'used-other' : ''}`.trim();
+    if (!isSentence) {
+      card.title = `${t.zh}\n${displayEn}`;
+    }
     
     // 点击事件：编辑模式下禁用追加/移除
     if (!isEditMode) {
       card.onclick = () => {
         if (isUsedHere) {
-          window.parent.postMessage({ type: '__REMOVE_TAG_FROM_PANEL__', tag: displayEn }, '*');
+          window.parent.postMessage({ type: '__REMOVE_TAG_FROM_PANEL__', tag: isSentence ? promptText : displayEn }, '*');
         } else if (isUsedOther) {
           card.style.transform = 'translateX(5px)';
           setTimeout(() => card.style.transform = 'translateX(-5px)', 50);
           setTimeout(() => card.style.transform = 'translateX(5px)', 100);
           setTimeout(() => card.style.transform = 'translateX(0)', 150);
         } else {
-          window.parent.postMessage({ type: '__APPEND_TAG_FROM_PANEL__', tag: displayEn, zh: t.zh }, '*');
+          window.parent.postMessage({
+            type: '__APPEND_TAG_FROM_PANEL__',
+            tag: isSentence ? promptText : displayEn,
+            zh: isSentence ? translationText : t.zh
+          }, '*');
         }
       };
     }
+    if (isSentence && !isSentenceEditing) {
+      bindSentencePreview(card, t);
+    }
+
+    if (isEditMode && isSentence && !isSentenceEditing) {
+      card.ondblclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSentenceCardEditor(tagIndex, t);
+      };
+    }
+
+    if (isSentenceEditing) {
+      card.title = '';
+      const zhEditor = document.createElement('textarea');
+      zhEditor.className = 'inline-rename-input sentence-inline-input sentence-inline-zh';
+      zhEditor.placeholder = '中文';
+      zhEditor.value = sentenceCardEditState?.draftZh || '';
+      zhEditor.addEventListener('input', () => {
+        if (!sentenceCardEditState) return;
+        sentenceCardEditState.draftZh = zhEditor.value;
+      });
+      zhEditor.addEventListener('keydown', (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+          ev.preventDefault();
+          commitSentenceCardEditor(t);
+        }
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          closeSentenceCardEditor();
+        }
+      });
+
+      const enEditor = document.createElement('textarea');
+      enEditor.className = 'inline-rename-input sentence-inline-input sentence-inline-en';
+      enEditor.placeholder = 'English';
+      enEditor.value = sentenceCardEditState?.draftEn || '';
+      enEditor.addEventListener('input', () => {
+        if (!sentenceCardEditState) return;
+        sentenceCardEditState.draftEn = enEditor.value;
+      });
+      enEditor.addEventListener('keydown', (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+          ev.preventDefault();
+          commitSentenceCardEditor(t);
+        }
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          closeSentenceCardEditor();
+        }
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'sentence-edit-actions';
+
+      const btnSaveSentence = document.createElement('button');
+      btnSaveSentence.type = 'button';
+      btnSaveSentence.className = 'sentence-edit-btn primary';
+      btnSaveSentence.textContent = '保存';
+      btnSaveSentence.addEventListener('click', (e) => {
+        e.stopPropagation();
+        commitSentenceCardEditor(t);
+      });
+
+      const btnCancelSentence = document.createElement('button');
+      btnCancelSentence.type = 'button';
+      btnCancelSentence.className = 'sentence-edit-btn';
+      btnCancelSentence.textContent = '取消';
+      btnCancelSentence.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeSentenceCardEditor();
+      });
+
+      actions.appendChild(btnSaveSentence);
+      actions.appendChild(btnCancelSentence);
+
+      card.appendChild(zhEditor);
+      card.appendChild(enEditor);
+      card.appendChild(actions);
+      dom.tagsGrid.appendChild(card);
+      setTimeout(() => {
+        if (document.activeElement !== zhEditor && document.body.contains(zhEditor)) {
+          zhEditor.focus();
+          zhEditor.setSelectionRange(zhEditor.value.length, zhEditor.value.length);
+        }
+      }, 0);
+      return;
+    }
 
     const zhPart = document.createElement('div');
-    zhPart.className = 'tag-zh-part';
+    zhPart.className = `tag-zh-part ${isSentence ? 'sentence-result-part' : ''}`.trim();
     zhPart.style.backgroundColor = currentGroup.color || '#4a4a6a';
-    zhPart.textContent = t.zh;
+    zhPart.textContent = isSentence ? sentenceZh : t.zh;
 
     // 编辑模式：双击编辑翻译 + 悬浮提示
     if (isEditMode) {
-      zhPart.title = '双击编辑翻译';
+      zhPart.title = isSentence ? '双击编辑句子' : '双击编辑翻译';
       zhPart.style.cursor = 'text';
       zhPart.ondblclick = (e) => {
         e.stopPropagation();
-        
-        // 锁定原始宽度，防止撑大卡片
+        if (isSentence) {
+          openSentenceCardEditor(tagIndex, t);
+          return;
+        }
+
         const origWidth = zhPart.getBoundingClientRect().width;
         zhPart.style.width = origWidth + 'px';
         zhPart.style.boxSizing = 'border-box';
@@ -2443,17 +2740,20 @@ function renderTagsGrid() {
     }
 
     const enPart = document.createElement('div');
-    enPart.className = 'tag-en-part';
-    enPart.textContent = displayEn;
+    enPart.className = `tag-en-part ${isSentence ? 'sentence-source-part' : ''}`.trim();
+    enPart.textContent = isSentence ? sentenceEn : displayEn;
     
     // 编辑模式：双方皆可双击编辑
     if (isEditMode) {
-      enPart.title = '双击编辑英文';
+      enPart.title = isSentence ? '双击编辑句子' : '双击编辑英文';
       enPart.style.cursor = 'text';
       enPart.ondblclick = (e) => {
         e.stopPropagation();
-        
-        // 同样锁定原始宽度
+        if (isSentence) {
+          openSentenceCardEditor(tagIndex, t);
+          return;
+        }
+
         const origWidth = enPart.getBoundingClientRect().width;
         enPart.style.width = origWidth + 'px';
         enPart.style.boxSizing = 'border-box';
@@ -2500,10 +2800,11 @@ function renderTagsGrid() {
     // 编辑模式：拖拽 + × 删除角标
     if (isEditMode) {
       // 允许拖拽到其他分组或分类的 Tab 上来跨组移动
-      card.draggable = true;
+      card.draggable = !isSentenceEditing;
       card.addEventListener('dragstart', () => {
+        if (isSentenceEditing) return;
         draggedTagInfo = {
-          tag: { en: t.en, zh: t.zh },
+          tag: cloneData(t),
           sourceCategoryIndex: activeCategoryIndex,
           sourceGroupIndex: activeGroupIndex,
           sourceTagIndex: tagIndex

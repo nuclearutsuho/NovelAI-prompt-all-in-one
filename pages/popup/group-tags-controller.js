@@ -16,6 +16,8 @@ export default function createGroupTagsController(deps = {}) {
 
   const groupTagsDataUtils = window.GroupTagsDataUtils || {};
   const EMPTY_GROUP_TAGS_DATA = { categories: [] };
+  const GROUP_ITEM_TYPE_TAG = 'tag';
+  const GROUP_ITEM_TYPE_SENTENCE = 'sentence';
 
   let currentGroupColorMap = {};
   let currentGroupTranslationMap = {};
@@ -29,7 +31,8 @@ export default function createGroupTagsController(deps = {}) {
     resolve: null,
     activeCategoryId: null,
     tagData: null,
-    groupTagsData: null
+    groupTagsData: null,
+    itemMode: GROUP_ITEM_TYPE_TAG
   };
 
   function cloneDeep(value) {
@@ -73,14 +76,42 @@ export default function createGroupTagsController(deps = {}) {
     if (groupTagsDataUtils.buildColorMap) {
       return groupTagsDataUtils.buildColorMap(data);
     }
-    return {};
+    const map = {};
+    (data?.categories || []).forEach((category) => {
+      (category.groups || []).forEach((group) => {
+        const color = group.color || '#4a4a6a';
+        (group.tags || []).forEach((item) => {
+          const promptText = groupTagsDataUtils.getGroupItemPromptText
+            ? groupTagsDataUtils.getGroupItemPromptText(item)
+            : (item?.en || '');
+          const key = normalizeGroupTagKey(promptText);
+          if (key) map[key] = color;
+        });
+      });
+    });
+    return map;
   }
 
   function buildGroupTagsTranslationMap(data) {
     if (groupTagsDataUtils.buildTranslationMap) {
       return groupTagsDataUtils.buildTranslationMap(data);
     }
-    return {};
+    const map = {};
+    (data?.categories || []).forEach((category) => {
+      (category.groups || []).forEach((group) => {
+        (group.tags || []).forEach((item) => {
+          const promptText = groupTagsDataUtils.getGroupItemPromptText
+            ? groupTagsDataUtils.getGroupItemPromptText(item)
+            : (item?.en || '');
+          const translationText = groupTagsDataUtils.getGroupItemTranslationText
+            ? groupTagsDataUtils.getGroupItemTranslationText(item)
+            : (item?.zh || '');
+          const key = normalizeGroupTagKey(promptText);
+          if (key && translationText) map[key] = translationText;
+        });
+      });
+    });
+    return map;
   }
 
   function normalizeGroupTagKey(value) {
@@ -183,7 +214,7 @@ export default function createGroupTagsController(deps = {}) {
       const groups = Array.isArray(category.groups) ? category.groups : [];
       for (const group of groups) {
         const tags = Array.isArray(group.tags) ? group.tags : [];
-        const existingTag = tags.find((tag) => normalizeGroupTagKey(tag.en) === targetKey);
+        const existingTag = tags.find((tag) => normalizePickerMode(tag?.type) !== GROUP_ITEM_TYPE_SENTENCE && normalizeGroupTagKey(tag.en) === targetKey);
         if (existingTag) {
           return {
             categoryId: category.id,
@@ -203,6 +234,32 @@ export default function createGroupTagsController(deps = {}) {
     return `${location.categoryName} > ${location.groupName}`;
   }
 
+  function normalizePickerMode(value) {
+    return value === GROUP_ITEM_TYPE_SENTENCE ? GROUP_ITEM_TYPE_SENTENCE : GROUP_ITEM_TYPE_TAG;
+  }
+
+  function normalizeGroupTagsPickerData(tagData = {}) {
+    const rawEn = String(tagData?.en || '').trim();
+    const rawZh = String(tagData?.zh || '').trim();
+    const sentenceEnText = String(
+      tagData?.sentenceEnText
+      || tagData?.sentenceCandidate?.en
+      || rawEn
+    ).trim();
+    const sentenceZhText = String(
+      tagData?.sentenceZhText
+      || tagData?.sentenceCandidate?.zh
+      || rawZh
+    ).trim();
+    return {
+      type: normalizePickerMode(tagData?.type),
+      en: rawEn,
+      zh: rawZh,
+      sentenceEnText,
+      sentenceZhText
+    };
+  }
+
   function updateGroupTagsPickerStaticText() {
     const titleEl = document.getElementById('group-tags-picker-title');
     const closeBtn = document.getElementById('group-tags-picker-close');
@@ -215,7 +272,8 @@ export default function createGroupTagsController(deps = {}) {
       visible: !!groupTagsPickerState.resolve,
       tagData: groupTagsPickerState.tagData,
       groupTagsData: groupTagsPickerState.groupTagsData,
-      activeCategoryId: groupTagsPickerState.activeCategoryId
+      activeCategoryId: groupTagsPickerState.activeCategoryId,
+      itemMode: groupTagsPickerState.itemMode
     });
   }
 
@@ -228,6 +286,7 @@ export default function createGroupTagsController(deps = {}) {
     groupTagsPickerState.tagData = null;
     groupTagsPickerState.groupTagsData = null;
     groupTagsPickerState.activeCategoryId = null;
+    groupTagsPickerState.itemMode = GROUP_ITEM_TYPE_TAG;
 
     if (groupTagsPickerState.resolve) {
       const resolve = groupTagsPickerState.resolve;
@@ -262,12 +321,103 @@ export default function createGroupTagsController(deps = {}) {
     updateGroupTagsPickerStaticText();
   }
 
-  function renderPickerTagContent(tagData) {
-    const en = toDisplayGroupTagText(String(tagData?.en || '').trim());
-    const zh = String(tagData?.zh || '').trim();
+  function rerenderPickerTagContent() {
+    const tagEl = document.getElementById('group-tags-picker-tag');
+    const tagData = groupTagsPickerState.tagData;
+    if (!tagEl || !tagData) return;
+    tagEl.innerHTML = '';
+    tagEl.appendChild(renderPickerTagContent(tagData));
+  }
 
+  function renderPickerTagContent(tagData) {
+    const displayEn = toDisplayGroupTagText(String(tagData?.en || '').trim());
+    const zh = String(tagData?.zh || '').trim();
+    const sentenceEnText = String(tagData?.sentenceEnText || '').trim();
+    const sentenceZhText = String(tagData?.sentenceZhText || '').trim();
     const container = document.createElement('div');
-    container.className = 'group-tags-picker-tag-inner';
+    container.className = 'group-tags-picker-item';
+
+    const buildModeSwitch = (className = 'group-tags-picker-mode-switch') => {
+      const modeSwitch = document.createElement('div');
+      modeSwitch.className = className;
+
+      const buildModeButton = (mode, labelKey, fallback) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `group-tags-picker-mode-btn ${groupTagsPickerState.itemMode === mode ? 'active' : ''}`;
+        btn.textContent = getLocalizedText(labelKey, fallback);
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (groupTagsPickerState.itemMode === mode) return;
+          groupTagsPickerState.itemMode = mode;
+          notifyPickerStateChanged();
+          rerenderPickerTagContent();
+        });
+        return btn;
+      };
+
+      modeSwitch.appendChild(buildModeButton(GROUP_ITEM_TYPE_TAG, 'group_tags_picker_mode_tag', 'Tag'));
+      modeSwitch.appendChild(buildModeButton(GROUP_ITEM_TYPE_SENTENCE, 'group_tags_picker_mode_sentence', 'Sentence'));
+      return modeSwitch;
+    };
+
+    const buildCloseButton = () => {
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'group-tags-picker-tag-close';
+      closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
+      closeBtn.innerHTML = '&times;';
+      closeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        closeGroupTagsPicker(null);
+      });
+      return closeBtn;
+    };
+
+    if (groupTagsPickerState.itemMode === GROUP_ITEM_TYPE_SENTENCE) {
+      const shell = document.createElement('div');
+      shell.className = 'group-tags-picker-sentence-shell';
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'group-tags-picker-sentence-toolbar';
+      toolbar.appendChild(buildModeSwitch('group-tags-picker-mode-switch sentence-mode'));
+      toolbar.appendChild(buildCloseButton());
+      shell.appendChild(toolbar);
+
+      const body = document.createElement('div');
+      body.className = 'group-tags-picker-sentence-body';
+
+      const buildTextAreaField = (labelKey, fallback, className, fieldName, value) => {
+        const field = document.createElement('label');
+        field.className = 'group-tags-picker-sentence-field';
+
+        const label = document.createElement('span');
+        label.className = 'group-tags-picker-sentence-label';
+        label.textContent = getLocalizedText(labelKey, fallback);
+        field.appendChild(label);
+
+        const textarea = document.createElement('textarea');
+        textarea.className = className;
+        textarea.spellcheck = false;
+        textarea.value = value;
+        textarea.addEventListener('input', () => {
+          groupTagsPickerState.tagData[fieldName] = textarea.value;
+          notifyPickerStateChanged();
+        });
+        field.appendChild(textarea);
+        return field;
+      };
+
+      body.appendChild(buildTextAreaField('group_tags_picker_source_label', 'English', 'group-tags-picker-sentence-source', 'sentenceEnText', sentenceEnText));
+      body.appendChild(buildTextAreaField('group_tags_picker_result_label', 'Chinese', 'group-tags-picker-sentence-result', 'sentenceZhText', sentenceZhText));
+      shell.appendChild(body);
+      container.appendChild(shell);
+      return container;
+    }
+
+    const tagRow = document.createElement('div');
+    tagRow.className = 'group-tags-picker-tag-inner';
+    tagRow.appendChild(buildModeSwitch('group-tags-picker-mode-switch inline'));
 
     const createEditableText = (initialText, className, fieldName) => {
       const textEl = document.createElement('span');
@@ -319,34 +469,23 @@ export default function createGroupTagsController(deps = {}) {
       return textEl;
     };
 
-    const enSpan = createEditableText(en || '...', 'group-tags-picker-tag-en', 'en');
-    container.appendChild(enSpan);
+    const content = document.createElement('div');
+    content.className = 'group-tags-picker-tag-main';
+    content.appendChild(createEditableText(displayEn || '...', 'group-tags-picker-tag-en', 'en'));
 
     const divider = document.createElement('span');
     divider.className = 'group-tags-picker-tag-divider';
-    container.appendChild(divider);
+    content.appendChild(divider);
 
-    const zhSpan = createEditableText(
+    content.appendChild(createEditableText(
       zh || getLocalizedText('group_tags_picker_trans_placeholder'),
       'group-tags-picker-tag-zh',
       'zh'
-    );
-    container.appendChild(zhSpan);
+    ));
+    tagRow.appendChild(content);
+    tagRow.appendChild(buildCloseButton());
 
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'group-tags-picker-tag-close';
-    closeBtn.setAttribute('aria-label', getLocalizedText('group_tags_picker_close'));
-    closeBtn.textContent = '×';
-    closeBtn.innerHTML = '×';
-    closeBtn.textContent = '×';
-    closeBtn.innerHTML = '&times;';
-    closeBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      closeGroupTagsPicker(null);
-    });
-    container.appendChild(closeBtn);
-
+    container.appendChild(tagRow);
     return container;
   }
 
@@ -403,8 +542,11 @@ export default function createGroupTagsController(deps = {}) {
           closeGroupTagsPicker({
             categoryId: activeCategory.id,
             groupId: group.id,
+            itemMode: groupTagsPickerState.itemMode,
             editedEn: groupTagsPickerState.tagData?.en,
-            editedZh: groupTagsPickerState.tagData?.zh
+            editedZh: groupTagsPickerState.tagData?.zh,
+            editedSentenceEnText: groupTagsPickerState.tagData?.sentenceEnText,
+            editedSentenceZhText: groupTagsPickerState.tagData?.sentenceZhText
           });
         });
         secondaryTabsEl.appendChild(button);
@@ -426,15 +568,13 @@ export default function createGroupTagsController(deps = {}) {
     const tagEl = document.getElementById('group-tags-picker-tag');
     const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
 
-    groupTagsPickerState.tagData = tagData;
+    groupTagsPickerState.tagData = normalizeGroupTagsPickerData(tagData);
     groupTagsPickerState.groupTagsData = groupTagsData;
     groupTagsPickerState.activeCategoryId = categories[0]?.id || null;
+    groupTagsPickerState.itemMode = GROUP_ITEM_TYPE_TAG;
 
     updateGroupTagsPickerStaticText();
-    if (tagEl) {
-      tagEl.innerHTML = '';
-      tagEl.appendChild(renderPickerTagContent(tagData));
-    }
+    if (tagEl) rerenderPickerTagContent();
     renderGroupTagsPickerList(tagData, groupTagsData);
 
     modal?.classList.add('visible');
@@ -464,24 +604,52 @@ export default function createGroupTagsController(deps = {}) {
   }
 
   async function addTagToGroupTags(tagData) {
-    const en = String(tagData?.en || '').trim();
-    const zh = String(tagData?.zh || '').trim();
-    if (!en) return;
-
-    const canonicalEn = toCanonicalGroupTagKey(en);
-    if (!canonicalEn) return;
+    const normalizedInput = normalizeGroupTagsPickerData(tagData);
+    const en = String(normalizedInput.en || '').trim();
+    const zh = String(normalizedInput.zh || '').trim();
+    const canonicalEn = en ? toCanonicalGroupTagKey(en) : '';
+    const sentenceEnText = String(normalizedInput.sentenceEnText || '').trim();
+    const sentenceZhText = String(normalizedInput.sentenceZhText || '').trim();
+    if (!canonicalEn && !(sentenceEnText && sentenceZhText)) return;
 
     const effectiveData = await loadEffectiveGroupTagsData();
-    const existingLocation = findExistingGroupTagLocation(effectiveData, canonicalEn);
-    if (existingLocation) {
-      showToast('warning', `${getLocalizedText('group_tags_picker_duplicate')}: ${formatGroupTagLocation(existingLocation)}`);
-      return;
-    }
-
-    const selection = await openGroupTagsPicker({ en: toDisplayGroupTagText(canonicalEn), zh }, effectiveData);
+    const selection = await openGroupTagsPicker({
+      type: GROUP_ITEM_TYPE_TAG,
+      en: canonicalEn ? toDisplayGroupTagText(canonicalEn) : '',
+      zh,
+      sentenceEnText,
+      sentenceZhText
+    }, effectiveData);
     if (!selection) return;
 
     const latestData = await loadEffectiveGroupTagsData();
+    const targetCategory = latestData.categories.find((category) => category.id === selection.categoryId);
+    const targetGroup = targetCategory?.groups?.find((group) => group.id === selection.groupId);
+    if (!targetGroup) {
+      showToast('error', getLocalizedText('group_tags_picker_missing'));
+      return;
+    }
+
+    if (!Array.isArray(targetGroup.tags)) targetGroup.tags = [];
+
+    if (normalizePickerMode(selection.itemMode) === GROUP_ITEM_TYPE_SENTENCE) {
+      const finalSentenceEnText = String(selection.editedSentenceEnText || sentenceEnText).trim();
+      const finalSentenceZhText = String(selection.editedSentenceZhText || sentenceZhText).trim();
+      if (!finalSentenceEnText || !finalSentenceZhText) return;
+
+      targetGroup.tags.push({
+        type: GROUP_ITEM_TYPE_SENTENCE,
+        en: finalSentenceEnText,
+        zh: finalSentenceZhText
+      });
+      await persistGroupTagsData(latestData);
+
+      const locationName = `${targetCategory.name} > ${targetGroup.name}`;
+      const displaySentence = finalSentenceEnText.length > 28 ? `${finalSentenceEnText.slice(0, 28)}...` : finalSentenceEnText;
+      showToast('success', `${getLocalizedText('group_tags_picker_added_prefix')}: ${displaySentence} -> ${locationName}`);
+      return;
+    }
+
     const finalEn = toCanonicalGroupTagKey(String(selection.editedEn || en).trim());
     const finalZh = String(selection.editedZh || zh).trim();
     if (!finalEn) return;
@@ -492,17 +660,11 @@ export default function createGroupTagsController(deps = {}) {
       return;
     }
 
-    const targetCategory = latestData.categories.find((category) => category.id === selection.categoryId);
-    const targetGroup = targetCategory?.groups?.find((group) => group.id === selection.groupId);
-    if (!targetGroup) {
-      showToast('error', getLocalizedText('group_tags_picker_missing'));
-      return;
-    }
-
     const dictResult = await upsertDictionaryEntry(finalEn, { zhCN: finalZh });
     const finalEntry = dictResult.entry || (await loadEffectiveDictionaryData()).entryMap.get(finalEn) || null;
 
     targetGroup.tags.push({
+      type: GROUP_ITEM_TYPE_TAG,
       en: finalEn,
       zh: finalEntry ? (finalEntry.zhCN || '') : finalZh
     });
@@ -579,11 +741,7 @@ export default function createGroupTagsController(deps = {}) {
 
     const { tagData, groupTagsData } = groupTagsPickerState;
     if (tagData) {
-      const tagEl = document.getElementById('group-tags-picker-tag');
-      if (tagEl) {
-        tagEl.innerHTML = '';
-        tagEl.appendChild(renderPickerTagContent(tagData));
-      }
+      rerenderPickerTagContent();
     }
     if (tagData && groupTagsData) {
       renderGroupTagsPickerList(tagData, groupTagsData);
