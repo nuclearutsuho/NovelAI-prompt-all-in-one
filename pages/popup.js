@@ -1,4 +1,4 @@
-﻿import TagEditor from '../lib/TagEditor.js';
+import TagEditor from '../lib/TagEditor.js';
 import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
@@ -558,9 +558,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const editorContainer = clone.querySelector('.char-editor-container');
   const input = clone.querySelector('.char-quick-input');
   const btnAdd = clone.querySelector('.primary-add-btn');
-  const btnWildcard = clone.querySelector('.char-btn-wildcard');
-  const btnSeqWildcard = clone.querySelector('.char-btn-seq-wildcard');
-  const btnRandom = clone.querySelector('.char-btn-random');
+  const charDrawSplit = clone.querySelector('.char-draw-split');
   const btnAiTranslate = clone.querySelector('.char-btn-ai-translate');
   const deleteBtn = clone.querySelector('.char-delete');
 
@@ -570,18 +568,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   if(btnAdd && dict[getKey('btn_add')]) btnAdd.textContent = dict[getKey('btn_add')];
   if(input && dict.input_placeholder) input.placeholder = dict.input_placeholder;
-  if(btnWildcard && dict[getKey('btn_quick_wildcard')]) {
-      btnWildcard.title = dict.btn_quick_wildcard; // Tooltip aalways uses long text
-      btnWildcard.textContent = dict[getKey('btn_quick_wildcard')];
-  }
-  if(btnSeqWildcard && dict[getKey('btn_quick_seq_wildcard')]) {
-      btnSeqWildcard.title = dict.btn_quick_seq_wildcard;
-      btnSeqWildcard.textContent = dict[getKey('btn_quick_seq_wildcard')];
-  }
-  if(btnRandom && dict[getKey('btn_quick_random')]) {
-      btnRandom.title = dict.btn_quick_random;
-      btnRandom.textContent = dict[getKey('btn_quick_random')];
-  }
+  
   if (btnAiTranslate) {
       const aiTranslateKey = getKey('btn_ai_translate');
       btnAiTranslate.title = dict.btn_ai_translate || getLocalizedText('btn_ai_translate', 'AI Translate');
@@ -796,25 +783,9 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     }
   });
 
-  btnWildcard.addEventListener('mousedown', (e) => e.preventDefault());
-  btnWildcard.addEventListener('click', () => {
-    input.value += '__';
-    input.focus();
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-
-  btnSeqWildcard.addEventListener('mousedown', (e) => e.preventDefault());
-  btnSeqWildcard.addEventListener('click', () => {
-    input.value += 's__';
-    input.focus();
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-
-  btnRandom.addEventListener('click', () => {
-    // Use local closure reference 'charEditor'
-    charEditor.addTag('||');
-    input.focus();
-  });
+  if (charDrawSplit) {
+    window.setupDrawSplitButton(charDrawSplit, input, () => charEditor);
+  }
 
   btnAiTranslate?.addEventListener('click', () => {
     aiTranslateController?.translateFromInput({
@@ -1267,45 +1238,136 @@ function initUI() {
     });
   }
 
+  // Global split button close logic
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.split-btn-group')) {
+      document.querySelectorAll('.split-dropdown').forEach(d => d.style.display = 'none');
+    }
+  });
+
+  // Shared generic function for Split Button
+  window.setupDrawSplitButton = function(groupEl, inputEl, getEditorFn) {
+    if (!groupEl) return;
+    const mainBtn = groupEl.querySelector('.split-main');
+    const arrowBtn = groupEl.querySelector('.split-arrow');
+    const dropdown = groupEl.querySelector('.split-dropdown');
+    const items = dropdown.querySelectorAll('.split-dropdown-item');
+
+    chrome.storage.local.get(['drawSplitMode'], (data) => {
+      const mode = data.drawSplitMode || 'wildcard';
+      updateSplitUI(mode);
+    });
+
+    function updateSplitUI(action) {
+      const targetItem = Array.from(items).find(item => item.dataset.action === action) || items[0];
+      if (!targetItem) return;
+      mainBtn.dataset.action = targetItem.dataset.action;
+      
+      const localDict = typeof getPopupDict === 'function' ? getPopupDict() : {};
+      const fallbackDict = typeof getI18nDict === 'function' ? getI18nDict('en', 'popup') : {};
+      const baseKey = targetItem.getAttribute('data-i18n');
+      
+      if (baseKey) {
+        mainBtn.setAttribute('data-i18n', baseKey);
+        mainBtn.setAttribute('data-i18n-title', baseKey);
+        
+        let finalKey = baseKey;
+        const shortKey = `${baseKey}_short`;
+        if (typeof isShortMode !== 'undefined' && isShortMode && (localDict[shortKey] || fallbackDict[shortKey])) {
+           finalKey = shortKey;
+        }
+        
+        mainBtn.textContent = localDict[finalKey] || fallbackDict[finalKey] || targetItem.textContent;
+        mainBtn.title = localDict[baseKey] || fallbackDict[baseKey] || targetItem.textContent;
+      } else {
+        mainBtn.textContent = targetItem.textContent;
+      }
+    }
+
+    function executeDraw(action) {
+      if (action === 'wildcard') {
+        inputEl.value += '__';
+      } else if (action === 'seq-wildcard') {
+        inputEl.value += 's__';
+      } else if (action === 'random') {
+        const _editor = getEditorFn ? getEditorFn() : null;
+        if (_editor) {
+          _editor.addTag('||');
+          const container = groupEl.closest('.char-prompt-block') ? groupEl.closest('.char-prompt-block').querySelector('.char-editor-container') : document.getElementById('editor-container');
+          if (container) container.scrollTop = container.scrollHeight;
+          inputEl.focus();
+          return;
+        } else {
+          inputEl.value += '||';
+        }
+      }
+      inputEl.focus();
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    mainBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    mainBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      executeDraw(mainBtn.dataset.action);
+    });
+
+    arrowBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    arrowBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isVisible = dropdown.style.display === 'flex';
+      document.querySelectorAll('.split-dropdown').forEach(d => d.style.display = 'none');
+      dropdown.style.display = isVisible ? 'none' : 'flex';
+    });
+
+    items.forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = item.dataset.action;
+        chrome.storage.local.set({ drawSplitMode: action });
+        
+        document.querySelectorAll('.split-btn-group').forEach(group => {
+            const mBtn = group.querySelector('.split-main');
+            const tItem = group.querySelector(`.split-dropdown-item[data-action="${action}"]`);
+            if (mBtn && tItem) {
+                mBtn.dataset.action = action;
+                
+                const localDict = typeof getPopupDict === 'function' ? getPopupDict() : {};
+                const fallbackDict = typeof getI18nDict === 'function' ? getI18nDict('en', 'popup') : {};
+                const baseKey = tItem.getAttribute('data-i18n');
+                
+                if (baseKey) {
+                  mBtn.setAttribute('data-i18n', baseKey);
+                  mBtn.setAttribute('data-i18n-title', baseKey);
+                  
+                  let finalKey = baseKey;
+                  const shortKey = `${baseKey}_short`;
+                  if (typeof isShortMode !== 'undefined' && isShortMode && (localDict[shortKey] || fallbackDict[shortKey])) {
+                     finalKey = shortKey;
+                  }
+                  
+                  mBtn.textContent = localDict[finalKey] || fallbackDict[finalKey] || tItem.textContent;
+                  mBtn.title = localDict[baseKey] || fallbackDict[baseKey] || tItem.textContent;
+                } else {
+                  mBtn.textContent = tItem.textContent;
+                }
+            }
+        });
+        
+        dropdown.style.display = 'none';
+        executeDraw(action);
+      });
+    });
+  };
+
   // Input Area
   const input = document.getElementById('quick-input');
   const btnAdd = document.getElementById('btn-add');
-  const btnQuickWildcard = document.getElementById('btn-quick-wildcard');
-  const btnQuickSeqWildcard = document.getElementById('btn-quick-seq-wildcard');
-  const btnQuickRandom = document.getElementById('btn-quick-random');
+  const mainDrawSplit = document.getElementById('main-draw-split');
   const btnAiTranslate = document.getElementById('btn-ai-translate');
 
-  if (btnQuickWildcard) {
-    btnQuickWildcard.addEventListener('mousedown', (e) => e.preventDefault());
-    btnQuickWildcard.addEventListener('click', () => {
-      input.value += '__';
-      input.focus();
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
-  if (btnQuickSeqWildcard) {
-    btnQuickSeqWildcard.addEventListener('mousedown', (e) => e.preventDefault());
-    btnQuickSeqWildcard.addEventListener('click', () => {
-      input.value += 's__';
-      input.focus();
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
-  if (btnQuickRandom) {
-    btnQuickRandom.addEventListener('click', () => {
-      if (editor) {
-        editor.addTag('||');
-        const container = document.getElementById('editor-container');
-        if (container) container.scrollTop = container.scrollHeight;
-        input.focus();
-      } else {
-        input.value += '||';
-        input.focus();
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    });
+  if (mainDrawSplit) {
+    window.setupDrawSplitButton(mainDrawSplit, input, () => editor);
   }
 
   btnAiTranslate?.addEventListener('click', () => {
@@ -1379,7 +1441,8 @@ function initUI() {
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const baseKey = el.getAttribute('data-i18n');
       const shortKey = `${baseKey}_short`;
-      const key = (isShortMode && (dict[shortKey] || fallbackDict[shortKey])) ? shortKey : baseKey;
+      const isDropdownItem = el.classList.contains('split-dropdown-item');
+      const key = (!isDropdownItem && isShortMode && (dict[shortKey] || fallbackDict[shortKey])) ? shortKey : baseKey;
       const text = dict[key] || fallbackDict[key];
       
       if (text) {

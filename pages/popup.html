@@ -241,6 +241,59 @@
       background: #4a4a6a;
     }
 
+    /* Split Button Styles */
+    .split-btn-group {
+      display: flex;
+      position: relative;
+    }
+
+    .split-btn-group .split-main {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: none;
+    }
+
+    .split-btn-group .split-arrow {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      padding: 0 4px;
+      min-width: 20px;
+      font-size: 10px;
+    }
+
+    .split-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #2a2a3e;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 200;
+      min-width: 90px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .split-dropdown-item {
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: bold;
+      color: #ccc;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s, color 0.2s;
+      white-space: nowrap;
+    }
+
+    .split-dropdown-item:hover {
+      background: #4a4a6a;
+      color: #fff;
+    }
+    /* End Split Button Styles */
+
     .ai-translate-btn {
       background: #0f766e;
       border-color: #0f766e;
@@ -1110,9 +1163,15 @@
 
     <div id="input-area">
       <input id="quick-input" type="text" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
-      <button id="btn-quick-wildcard" class="quick-btn" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
-      <button id="btn-quick-seq-wildcard" class="quick-btn" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</button>
-      <button id="btn-quick-random" class="quick-btn" title="Random Choice" data-i18n-title="btn_quick_random" data-i18n="btn_quick_random">动态抽取</button>
+      <div class="split-btn-group" id="main-draw-split">
+        <button class="quick-btn split-main" data-action="wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
+        <button class="quick-btn split-arrow">▼</button>
+        <div class="split-dropdown" style="display:none;">
+          <div class="split-dropdown-item" data-action="wildcard" data-i18n="btn_quick_wildcard">随机抽取</div>
+          <div class="split-dropdown-item" data-action="seq-wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</div>
+          <div class="split-dropdown-item" data-action="random" data-i18n="btn_quick_random">动态抽取</div>
+        </div>
+      </div>
       <button id="btn-ai-translate" class="quick-btn ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
       <button id="btn-add" class="primary-add-btn" data-i18n="btn_add">Add</button>
       <button id="btn-group-tags" class="group-tags-btn" data-i18n="btn_group_tags" title="Open Group Tags Panel" data-i18n-title="btn_group_tags_title">Group Tags</button>
@@ -1147,9 +1206,15 @@
           <button class="char-pn-btn char-tab-neg" title="Undesired Content" data-i18n-title="tab_negative">-</button>
         </div>
         <input type="text" class="char-quick-input" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
-        <button class="quick-btn char-btn-wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
-        <button class="quick-btn char-btn-seq-wildcard" title="Sequential Wildcard" data-i18n-title="btn_quick_seq_wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</button>
-        <button class="quick-btn char-btn-random" title="Random Choice" data-i18n-title="btn_quick_random" data-i18n="btn_quick_random">动态抽取</button>
+        <div class="split-btn-group char-draw-split">
+          <button class="quick-btn split-main char-btn-split-main" data-action="wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
+          <button class="quick-btn split-arrow char-btn-split-arrow">▼</button>
+          <div class="split-dropdown char-split-dropdown" style="display:none;">
+            <div class="split-dropdown-item" data-action="wildcard" data-i18n="btn_quick_wildcard">随机抽取</div>
+            <div class="split-dropdown-item" data-action="seq-wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</div>
+            <div class="split-dropdown-item" data-action="random" data-i18n="btn_quick_random">动态抽取</div>
+          </div>
+        </div>
         <button class="quick-btn char-btn-ai-translate ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
         <button class="primary-add-btn" data-i18n="btn_add">Add</button>
         <button class="char-delete" title="Remove Character" data-i18n-title="btn_remove_char">×</button>
