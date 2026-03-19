@@ -16,6 +16,7 @@
   let dict = {};
   let wildcardFolders = [];
   let wildcardFolderList = [];
+  let wildcardUsageStats = {};
   let sequentialCounters = {};
   let v3 = false;
   let preservePrompt = true;
@@ -65,6 +66,93 @@
 
     wildcardFolders = Array.from(folderSet);
     wildcardFolderList = wildcardFolders.sort((a, b) => a.localeCompare(b));
+  }
+
+  function normalizeWildcardUsagePath(path) {
+    return String(path || '').trim().replace(/^\/+|\/+$/g, '');
+  }
+
+  function normalizeWildcardUsageStats(rawStats = {}) {
+    const normalizedStats = {};
+    Object.entries(rawStats || {}).forEach(([key, value]) => {
+      if (!value || typeof value !== 'object') return;
+
+      const count = Number(value.count);
+      const lastUsedAt = Number(value.lastUsedAt);
+      normalizedStats[key] = {
+        count: Number.isFinite(count) && count > 0 ? count : 0,
+        lastUsedAt: Number.isFinite(lastUsedAt) && lastUsedAt > 0 ? lastUsedAt : 0
+      };
+    });
+    return normalizedStats;
+  }
+
+  function getWildcardUsageKey(kind, path) {
+    const normalizedPath = normalizeWildcardUsagePath(path);
+    return normalizedPath ? `${kind}:${normalizedPath}` : '';
+  }
+
+  function getWildcardUsageEntry(kind, path) {
+    const key = getWildcardUsageKey(kind, path);
+    if (!key) return null;
+    return wildcardUsageStats[key] || null;
+  }
+
+  function getWildcardUsageBoost(kind, path, query = '') {
+    const entry = getWildcardUsageEntry(kind, path);
+    if (!entry) return 0;
+
+    const count = Math.max(0, Number(entry.count) || 0);
+    const lastUsedAt = Math.max(0, Number(entry.lastUsedAt) || 0);
+    const ageDays = lastUsedAt
+      ? Math.max(0, (Date.now() - lastUsedAt) / 86400000)
+      : Number.POSITIVE_INFINITY;
+    const queryWeight = query ? 1 : 1.85;
+    const countBoost = Math.log2(count + 1) * 70 * queryWeight;
+    const recencyBoost = Math.max(0, 1 - ageDays / 14) * 65 * queryWeight;
+
+    return countBoost + recencyBoost;
+  }
+
+  function rankItemsByUsage(paths, kind, limit = 50) {
+    return (paths || [])
+      .slice()
+      .sort((a, b) => {
+        const scoreDiff = getWildcardUsageBoost(kind, b, '') - getWildcardUsageBoost(kind, a, '');
+        if (scoreDiff !== 0) return scoreDiff;
+        return a.localeCompare(b);
+      })
+      .slice(0, limit);
+  }
+
+  function recordWildcardUsageRecords(records = []) {
+    const nextStats = { ...wildcardUsageStats };
+    const normalizedRecords = [];
+    const now = Date.now();
+
+    (Array.isArray(records) ? records : []).forEach((record) => {
+      const kind = record?.kind === 'folder' ? 'folder' : 'file';
+      const path = normalizeWildcardUsagePath(record?.path);
+      if (!path) return;
+
+      const key = getWildcardUsageKey(kind, path);
+      const previous = nextStats[key] || { count: 0, lastUsedAt: 0 };
+      const delta = Number(record?.delta);
+      nextStats[key] = {
+        count: Math.max(0, (Number(previous.count) || 0) + (Number.isFinite(delta) ? delta : 1)),
+        lastUsedAt: now
+      };
+      normalizedRecords.push({ kind, path, delta: Number.isFinite(delta) ? delta : 1 });
+    });
+
+    wildcardUsageStats = nextStats;
+
+    if (normalizedRecords.length) {
+      window.postMessage({
+        type: '__RECORD_WILDCARD_USAGE__',
+        records: normalizedRecords
+      }, '*');
+    }
   }
 
   function waitForElement(selector) {
@@ -728,7 +816,7 @@
 
   window.addEventListener('message', e => {
     if (e.source !== window) return;
-    const { type, map, folders, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
+    const { type, map, folders, usageStats, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
 
   function setWebpageResolution(width, height) {
     const resInputs = Array.from(document.querySelectorAll('input[type="number"][step="64"][min="64"]'));
@@ -768,6 +856,9 @@
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
       rebuildWildcardFolderList(typeof folders !== 'undefined' ? folders : wildcardFolders, dict);
+      wildcardUsageStats = normalizeWildcardUsageStats(
+        typeof usageStats !== 'undefined' ? usageStats : wildcardUsageStats
+      );
       v3 = !!newV3;
       preservePrompt = !!newPreserve;
       triggerTab = !!newTab;
@@ -975,12 +1066,17 @@
     .wildcard-suggest{
       position:absolute; z-index:2147483647; background:#222; color:#fff;
       border:1px solid #555; border-radius:4px; font-size:12px;
+      min-width:260px; max-width:min(720px, calc(100vw - 24px));
       max-height:240px; overflow-y:auto; box-shadow:0 2px 8px #000a;
     }
-    .wildcard-suggest li{padding:3px 8px; cursor:pointer; white-space:nowrap;}
+    .wildcard-suggest li{
+      padding:6px 8px; cursor:pointer; display:flex; justify-content:space-between;
+      align-items:flex-start; gap:10px; white-space:normal; overflow-wrap:anywhere;
+    }
     .wildcard-suggest li.active{background:#444;}
     .wildcard-suggest li.wildcard-suggest-section{
       cursor:default;
+      display:block;
       padding:5px 8px 3px;
       font-size:10px;
       text-transform:uppercase;
@@ -991,8 +1087,17 @@
       background:rgba(255,255,255,0.03);
     }
     .wildcard-suggest li.wildcard-suggest-section:first-child{border-top:none;}
+    .wildcard-suggest li.wildcard-back{color:#c4b5fd;}
     .wildcard-suggest li.wildcard-folder{color:#c4b5fd;}
     .wildcard-suggest li.wildcard-file{color:#e5e7eb;}
+    .wildcard-suggest li .wildcard-item-label{
+      flex:1 1 auto; min-width:0; white-space:normal; overflow-wrap:anywhere;
+    }
+    .wildcard-suggest li .wildcard-item-meta{
+      flex:0 0 auto; display:inline-flex; align-items:center; gap:8px;
+      margin-left:auto; opacity:0.65; font-size:0.82em; text-align:right;
+    }
+    .wildcard-suggest li .wildcard-file-count{opacity:0.9; cursor:pointer;}
     `;
     const styleEl = document.createElement('style');
     styleEl.textContent = STYLE;
@@ -1045,8 +1150,12 @@
       list.className = 'wildcard-suggest';
       list.style.display = 'none';
       document.body.appendChild(list);
+      let wildcardPreviewState = null;
       // Autocomplete update
-      editor.addEventListener('input', update);
+      editor.addEventListener('input', () => {
+        wildcardPreviewState = null;
+        update();
+      });
       // Real-time sync: Page -> Popup
       // Use MutationObserver for robust detection of ALL changes (selection delete, undo/redo, etc.)
       const observer = new MutationObserver(() => notifyPromptUpdate());
@@ -1097,6 +1206,12 @@
         return Array.from(list.querySelectorAll('li[data-selectable="true"]'));
       }
 
+      function isWildcardAutocompleteActive() {
+        return getSelectableItems().some(item =>
+          ['folder', 'file', 'value', 'back'].includes(item.dataset.type)
+        );
+      }
+
       function scoreWildcardPathMatch(path, query, leafQuery = query) {
         const normalizedPath = String(path || '').toLowerCase();
         const baseName = getWildcardBaseName(normalizedPath);
@@ -1115,11 +1230,11 @@
         return score;
       }
 
-      function rankWildcardPaths(paths, query, { leafQuery = query, limit = 50 } = {}) {
+      function rankWildcardPaths(paths, query, { leafQuery = query, limit = 50, kind = 'file' } = {}) {
         return (paths || [])
           .map(path => ({
             path,
-            score: scoreWildcardPathMatch(path, query, leafQuery)
+            score: scoreWildcardPathMatch(path, query, leafQuery) + getWildcardUsageBoost(kind, path, query)
           }))
           .filter(item => !query || item.score > 0)
           .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
@@ -1147,12 +1262,88 @@
       function buildFileItem(filePath, prefix, num, displayText) {
         const normalizedFile = String(filePath || '').replace(/^\/+|\/+$/g, '');
         if (!normalizedFile) return null;
+        const wildcardEntryCount = String(dict?.[normalizedFile] || '')
+          .split(/\r?\n/)
+          .filter(line => String(line).trim())
+          .length;
         return {
           type: 'file',
           text: displayText || normalizedFile,
           path: normalizedFile,
-          insertText: `${prefix}${num}__${normalizedFile}__`
+          insertText: `${prefix}${num}__${normalizedFile}__`,
+          wildcardEntryCount
         };
+      }
+
+      function buildPreviewBackItem(filePath) {
+        return {
+          type: 'back',
+          text: '\u2190 Back',
+          path: filePath || ''
+        };
+      }
+
+      function buildWildcardValuePreviewItems(filePath, limit = 100) {
+        const normalizedFile = String(filePath || '').replace(/^\/+|\/+$/g, '');
+        if (!normalizedFile) return [];
+
+        const lines = String(dict?.[normalizedFile] || '')
+          .split(/\r?\n/)
+          .map(line => String(line).trim())
+          .filter(Boolean)
+          .slice(0, limit)
+          .map(line => ({
+            type: 'value',
+            text: line
+          }));
+
+        return [buildPreviewBackItem(normalizedFile)]
+          .concat(buildWildcardSection(`Preview: ${normalizedFile}`, lines));
+      }
+
+      function openWildcardPreview(filePath) {
+        const normalizedFile = String(filePath || '').replace(/^\/+|\/+$/g, '');
+        if (!normalizedFile) return;
+        wildcardPreviewState = { filePath: normalizedFile };
+        render(buildWildcardValuePreviewItems(normalizedFile));
+      }
+
+      function closeWildcardPreview() {
+        if (!wildcardPreviewState) return false;
+        wildcardPreviewState = null;
+        update();
+        return true;
+      }
+
+      function navigateWildcardParent() {
+        const txt = textBeforeCaret();
+        const m = txt.match(/(?:^|[^A-Za-z0-9])([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]*)$/);
+        if (!m) return false;
+
+        const prefix = m[1] || '';
+        const num = m[2] || '';
+        const normalizedPath = String(m[3] || '').replace(/^\/+|\/+$/g, '');
+        if (!normalizedPath) return false;
+
+        const parentPath = getWildcardParentPath(normalizedPath);
+        const replacement = `${prefix}${num}__${parentPath ? `${parentPath}/` : ''}`;
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return false;
+
+        const rng = sel.getRangeAt(0);
+        let replaceLen = m[0].length;
+        if ((m[0].startsWith(' ') || m[0].match(/^[^sS\d_]/))) {
+          replaceLen--;
+        }
+        sel.collapse(rng.endContainer, rng.endOffset);
+        for (let i = 0; i < replaceLen; i++) {
+          sel.modify('extend', 'backward', 'character');
+        }
+
+        wildcardPreviewState = null;
+        document.execCommand('insertText', false, replacement);
+        setTimeout(update, 0);
+        return true;
       }
 
       function buildWildcardTokenSuggestions(prefix, num, rawQuery) {
@@ -1163,15 +1354,17 @@
         const MAX_FILE_RESULTS = 30;
 
         if (!normalizedQuery) {
-          const topFolders = folderPaths
-            .filter(path => !path.includes('/'))
-            .sort((a, b) => a.localeCompare(b))
-            .slice(0, MAX_FOLDER_RESULTS)
+          const topFolders = rankItemsByUsage(
+            folderPaths.filter(path => !path.includes('/')),
+            'folder',
+            MAX_FOLDER_RESULTS
+          )
             .map(path => buildFolderItem(path, prefix, num, `${getWildcardBaseName(path)}/`));
-          const rootFiles = fileKeys
-            .filter(path => !path.includes('/'))
-            .sort((a, b) => a.localeCompare(b))
-            .slice(0, MAX_FILE_RESULTS)
+          const rootFiles = rankItemsByUsage(
+            fileKeys.filter(path => !path.includes('/')),
+            'file',
+            MAX_FILE_RESULTS
+          )
             .map(path => buildFileItem(path, prefix, num, getWildcardBaseName(path)));
 
           return buildWildcardSection('Folders', topFolders)
@@ -1181,10 +1374,12 @@
         if (!normalizedQuery.includes('/')) {
           const matchedFolders = rankWildcardPaths(folderPaths, normalizedQuery, {
             leafQuery: normalizedQuery,
+            kind: 'folder',
             limit: MAX_FOLDER_RESULTS
           }).map(path => buildFolderItem(path, prefix, num, `${path}/`));
           const matchedFiles = rankWildcardPaths(fileKeys, normalizedQuery, {
             leafQuery: normalizedQuery,
+            kind: 'file',
             limit: MAX_FILE_RESULTS
           }).map(path => buildFileItem(path, prefix, num, path));
 
@@ -1202,11 +1397,13 @@
 
         let folderResults = rankWildcardPaths(directFolders, leafQuery, {
           leafQuery,
+          kind: 'folder',
           limit: MAX_FOLDER_RESULTS
         }).map(path => buildFolderItem(path, prefix, num, `${getWildcardBaseName(path)}/`));
 
         let fileResults = rankWildcardPaths(directFiles, leafQuery, {
           leafQuery,
+          kind: 'file',
           limit: MAX_FILE_RESULTS
         }).map(path => buildFileItem(path, prefix, num, getWildcardBaseName(path)));
 
@@ -1219,11 +1416,13 @@
 
           folderResults = rankWildcardPaths(subtreeFolders, normalizedQuery, {
             leafQuery,
+            kind: 'folder',
             limit: MAX_FOLDER_RESULTS
           }).map(path => buildFolderItem(path, prefix, num, `${path.slice(folderPrefix.length)}/`));
 
           fileResults = rankWildcardPaths(subtreeFiles, normalizedQuery, {
             leafQuery,
+            kind: 'file',
             limit: MAX_FILE_RESULTS
           }).map(path => buildFileItem(path, prefix, num, path.slice(folderPrefix.length)));
         }
@@ -1345,28 +1544,53 @@
 
       function render(items) {
         list.innerHTML = '';
-        items.forEach(({ type, text, color, popCount, aliasUsed, original, zhCN, insertText }, index) => {
+        items.forEach(({ type, text, color, popCount, aliasUsed, original, zhCN, insertText, path, wildcardEntryCount }, index) => {
           const li = document.createElement('li');
           li.dataset.type = type;
           li.dataset.index = index;
           li.dataset.selectable = type === 'header' ? 'false' : 'true';
           if (insertText) li.dataset.insertText = insertText;
+          if (path) li.dataset.path = path;
 
           if (type === 'header') {
             li.className = 'wildcard-suggest-section';
             li.textContent = text;
           } else if (type === 'dict') {
-            li.style.color = color || 'red';
             const displayText = zhCN ? `${text} (${zhCN})` : text;
-            if (aliasUsed) {
-              li.innerHTML = `<span style="color:${color};">${original} → ${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
-            } else {
-              li.innerHTML = `<span style="color:${color};">${displayText}</span> <span style="opacity:0.6;font-size:0.8em;">(${popCount})</span>`;
-            }
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'wildcard-item-label';
+            labelSpan.style.color = color || 'red';
+            labelSpan.textContent = aliasUsed ? `${original} -> ${displayText}` : displayText;
+            li.appendChild(labelSpan);
+
+            const metaSpan = document.createElement('span');
+            metaSpan.className = 'wildcard-item-meta';
+            metaSpan.textContent = `(${popCount})`;
+            li.appendChild(metaSpan);
           } else {
+            if (type === 'back') li.classList.add('wildcard-back');
             if (type === 'folder') li.classList.add('wildcard-folder');
             if (type === 'file') li.classList.add('wildcard-file');
-            li.textContent = text;
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'wildcard-item-label';
+            labelSpan.textContent = text;
+            li.appendChild(labelSpan);
+
+            if (type === 'file' && typeof wildcardEntryCount === 'number') {
+              const metaSpan = document.createElement('span');
+              metaSpan.className = 'wildcard-item-meta';
+              const countSpan = document.createElement('span');
+              countSpan.className = 'wildcard-file-count';
+              countSpan.textContent = `${formatCount(wildcardEntryCount)} items`;
+              countSpan.title = 'Preview wildcard entries';
+              countSpan.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openWildcardPreview(path);
+              });
+              metaSpan.appendChild(countSpan);
+              li.appendChild(metaSpan);
+            }
           }
 
           if (li.dataset.selectable === 'true') {
@@ -1407,8 +1631,32 @@
           e.preventDefault(); choose(items[selIdx]);
         } else if (triggerSpace && e.key === ' ') {
           e.preventDefault(); choose(items[selIdx]);
+        } else if (e.key === 'ArrowRight') {
+          if (isWildcardAutocompleteActive()) {
+            e.preventDefault();
+            const activeItem = items[selIdx];
+            if (!activeItem) return;
+            if (activeItem.dataset.type === 'folder') {
+              choose(activeItem);
+            } else if (activeItem.dataset.type === 'file') {
+              openWildcardPreview(activeItem.dataset.path || '');
+            }
+          }
+        } else if (e.key === 'ArrowLeft') {
+          if (isWildcardAutocompleteActive()) {
+            e.preventDefault();
+            if (wildcardPreviewState) {
+              closeWildcardPreview();
+            } else {
+              navigateWildcardParent();
+            }
+          }
         } else if (e.key === 'Escape') {
-          hide();
+          if (wildcardPreviewState) {
+            closeWildcardPreview();
+          } else {
+            hide();
+          }
         } else if (e.key === 'ArrowDown') {
           e.preventDefault(); selIdx = (selIdx + 1) % items.length; highlight();
         } else if (e.key === 'ArrowUp') {
@@ -1419,7 +1667,12 @@
       function choose(li) {
         if (!li || li.dataset.selectable !== 'true') { hide(); return; }
         const type = li.dataset.type;
+        if (type === 'back') {
+          closeWildcardPreview();
+          return;
+        }
         let text = li.dataset.insertText || li.textContent;
+        const path = li.dataset.path || '';
         const sel = window.getSelection();
         if (!sel || !sel.rangeCount) { hide(); return; }
 
@@ -1458,6 +1711,19 @@
         }
 
         const needsComma = !['token', 'file', 'folder'].includes(type) && !text.startsWith('__');
+        if (type === 'folder' && path) {
+          recordWildcardUsageRecords([{ kind: 'folder', path, delta: 1 }]);
+        } else if (type === 'file' && path) {
+          const records = [{ kind: 'file', path, delta: 1 }];
+          let parentPath = getWildcardParentPath(path);
+          let folderBoost = 0.6;
+          while (parentPath) {
+            records.push({ kind: 'folder', path: parentPath, delta: folderBoost });
+            parentPath = getWildcardParentPath(parentPath);
+            folderBoost = Math.max(0.2, folderBoost - 0.15);
+          }
+          recordWildcardUsageRecords(records);
+        }
         document.execCommand(
           'insertText',
           false,

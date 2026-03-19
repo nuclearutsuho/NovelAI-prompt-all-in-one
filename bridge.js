@@ -52,11 +52,58 @@
 
   const hostSessionId = getHostSessionId();
 
+  function normalizeWildcardUsagePath(path) {
+    return String(path || '').trim().replace(/^\/+|\/+$/g, '');
+  }
+
+  function normalizeWildcardUsageStats(rawStats = {}) {
+    const normalizedStats = {};
+    Object.entries(rawStats || {}).forEach(([key, value]) => {
+      if (!value || typeof value !== 'object') return;
+
+      const count = Number(value.count);
+      const lastUsedAt = Number(value.lastUsedAt);
+      normalizedStats[key] = {
+        count: Number.isFinite(count) && count > 0 ? count : 0,
+        lastUsedAt: Number.isFinite(lastUsedAt) && lastUsedAt > 0 ? lastUsedAt : 0
+      };
+    });
+    return normalizedStats;
+  }
+
+  function getWildcardUsageKey(kind, path) {
+    const normalizedPath = normalizeWildcardUsagePath(path);
+    return normalizedPath ? `${kind}:${normalizedPath}` : '';
+  }
+
+  function applyWildcardUsageRecords(currentStats = {}, records = []) {
+    const nextStats = {
+      ...normalizeWildcardUsageStats(currentStats)
+    };
+    const now = Date.now();
+
+    (Array.isArray(records) ? records : []).forEach((record) => {
+      const kind = record?.kind === 'folder' ? 'folder' : 'file';
+      const key = getWildcardUsageKey(kind, record?.path);
+      if (!key) return;
+
+      const previous = nextStats[key] || { count: 0, lastUsedAt: 0 };
+      const delta = Number(record?.delta);
+      nextStats[key] = {
+        count: Math.max(0, (Number(previous.count) || 0) + (Number.isFinite(delta) ? delta : 1)),
+        lastUsedAt: now
+      };
+    });
+
+    return nextStats;
+  }
+
   await promptStorageShimReady;
   // 1) get settings from storage  ← preservePrompt 포함 (包含 preservePrompt)
   let {
     wildcards = {},
     wildcardFolders = [],
+    wildcardUsageStats = {},
     v3mode = false,
     preservePrompt = true,
     alternativeDanbooruAutocomplete = true,
@@ -66,7 +113,8 @@
     hideAutoClicker = false,
     autoClickerI18n = null,
     hotkeys = null
-  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
+  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'wildcardUsageStats', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
+  wildcardUsageStats = normalizeWildcardUsageStats(wildcardUsageStats);
   let sequentialCounters = loadScopedSequentialCounters();
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
@@ -110,6 +158,7 @@
       type: '__WILDCARD_INIT__',
       map: wildcards,
       folders: wildcardFolders,
+      usageStats: wildcardUsageStats,
       v3: v3mode,
       preservePrompt,
       alternativeDanbooruAutocomplete,
@@ -882,6 +931,7 @@
     // wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 중 하나라도 바뀌면 반영 (wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 中任何一个改变都反映)
     if (changes.wildcards ||
       changes.wildcardFolders ||
+      changes.wildcardUsageStats ||
       changes.v3mode ||
       changes.preservePrompt ||
       changes.alternativeDanbooruAutocomplete ||
@@ -898,6 +948,9 @@
       wildcardFolders = changes.wildcardFolders
         ? changes.wildcardFolders.newValue
         : wildcardFolders;
+      wildcardUsageStats = changes.wildcardUsageStats
+        ? normalizeWildcardUsageStats(changes.wildcardUsageStats.newValue)
+        : wildcardUsageStats;
       v3mode = changes.v3mode
         ? changes.v3mode.newValue
         : v3mode;
@@ -935,6 +988,7 @@
         type: '__WILDCARD_UPDATE__',
         map: wildcards,
         folders: wildcardFolders,
+        usageStats: wildcardUsageStats,
         v3: v3mode,
         preservePrompt,
         alternativeDanbooruAutocomplete,
@@ -956,6 +1010,10 @@
       sequentialCounters[name] = value;
       saveScopedSequentialCounters(sequentialCounters);
       notifySequentialCounterUpdate(sequentialCounters);
+    }
+    if (e.data?.type === '__RECORD_WILDCARD_USAGE__') {
+      wildcardUsageStats = applyWildcardUsageRecords(wildcardUsageStats, e.data.records);
+      chrome.storage.local.set({ wildcardUsageStats });
     }
     if (e.data?.type === '__CLEAN_NUMERIC_PREFIXES__') {
       chrome.runtime.sendMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' });

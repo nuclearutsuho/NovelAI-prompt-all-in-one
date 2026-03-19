@@ -812,6 +812,10 @@
     color: #c4b5fd !important;
 }
 
+.autocomplete-item.autocomplete-back .autocomplete-tag {
+    color: #c4b5fd !important;
+}
+
 .autocomplete-item.autocomplete-file .autocomplete-tag {
     color: #b8f7c6 !important;
 }
@@ -825,6 +829,10 @@
 .autocomplete-count {
     color: #666;
     font-size: 0.75em;
+}
+
+.autocomplete-count-button {
+    cursor: pointer;
 }
 
 /* Scrollbar */

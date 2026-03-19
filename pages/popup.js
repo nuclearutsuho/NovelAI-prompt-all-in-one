@@ -513,7 +513,7 @@ async function initData() {
   // Listen for storage changes to keep counters in sync and hot-reload dictionary
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
-      if ((changes.dictOverlay || changes.wildcards || changes.wildcardFolders) && autocomplete) {
+      if ((changes.dictOverlay || changes.wildcards || changes.wildcardFolders || changes.wildcardUsageStats) && autocomplete) {
         // Hot-reload dictionary and wildcards
         autocomplete.loaded = false;
         autocomplete.load().then(() => {
