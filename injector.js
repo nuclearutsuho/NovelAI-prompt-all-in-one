@@ -1556,6 +1556,7 @@
             li.className = 'wildcard-suggest-section';
             li.textContent = text;
           } else if (type === 'dict') {
+            li.dataset.insertText = text;
             const displayText = zhCN ? `${text} (${zhCN})` : text;
             const labelSpan = document.createElement('span');
             labelSpan.className = 'wildcard-item-label';
@@ -1695,11 +1696,18 @@
           const m = full.match(/[A-Za-z0-9_\-\u4e00-\u9fff]{1,}$/);
           len = m ? m[0].length : 0;
 
-          text = text.replace(/\s\([0-9.]+[MK]?\)$/, '');
-          if (text.includes('→')) {
-            text = text.split('→')[1].trim();
+          const rawDictText = li.dataset.insertText || text;
+          text = rawDictText;
+
+          // Fallback for older DOM nodes or unexpected markup: strip UI-only metadata.
+          if (!li.dataset.insertText) {
+            text = text.replace(/\s\([0-9.]+[MK]?\)$/, '');
+            if (/(?:->|→)/.test(text)) {
+              const parts = text.split(/\s*(?:->|→)\s*/);
+              text = parts[parts.length - 1].trim();
+            }
+            text = text.replace(/\s*\([^\)]*[\u4e00-\u9fff][^\)]*\)$/, '');
           }
-          text = text.replace(/\s*\([^\)]*[\u4e00-\u9fff][^\)]*\)$/, '');
           text = text.replace(/_/g, ' ');
         }
 
