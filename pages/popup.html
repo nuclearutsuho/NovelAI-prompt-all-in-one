@@ -199,15 +199,25 @@
       align-items: center;
     }
 
+    .quick-input-wrapper {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
     #quick-input, .char-quick-input {
       flex: 1;
+      width: 100%;
       height: 24px;
       /* Slightly adjusted for standard input feel */
       background: #181825;
       border: 1px solid #4a4a6a;
       color: #fff;
       border-radius: 4px;
-      padding: 0 10px;
+      padding: 0 28px 0 10px; /* Space for absolute Add btn */
+      box-sizing: border-box;
       /* Vertical padding 0 for native centering in input */
       font-size: 13px;
       line-height: normal;
@@ -326,22 +336,34 @@
     }
 
     #btn-add, .primary-add-btn {
-      background: #818cf8;
-      color: #fff;
-      border: none;
+      position: absolute;
+      right: 2px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(129, 140, 248, 0.15);
+      color: #818cf8;
+      border: 1px solid rgba(129, 140, 248, 0.4);
       border-radius: 4px;
-      padding: 0 12px;
-      height: 24px;
+      padding: 0;
+      width: 24px;
+      height: 20px;
       cursor: pointer;
-      font-weight: bold;
-      font-size: 13px;
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
     }
 
     #btn-add:hover, .primary-add-btn:hover {
-      background: #6366f1;
+      background: #818cf8;
+      color: #fff;
+      border-color: #818cf8;
+      box-shadow: 0 0 6px rgba(129, 140, 248, 0.5);
+    }
+
+    #btn-add:active, .primary-add-btn:active {
+      transform: translateY(-50%) scale(0.92);
     }
 
     #btn-group-tags, .group-tags-btn {
@@ -1162,7 +1184,13 @@
     </header>
 
     <div id="input-area">
-      <input id="quick-input" type="text" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
+      <div class="quick-input-wrapper">
+        <input id="quick-input" type="text" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
+        <button id="btn-add" class="primary-add-btn" title="Add" data-i18n-title="btn_add">
+           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"></polyline><path d="M20 4v7a4 4 0 0 1-4 4H4"></path></svg>
+        </button>
+      </div>
+      <button id="btn-ai-translate" class="quick-btn ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
       <div class="split-btn-group" id="main-draw-split">
         <button class="quick-btn split-main" data-action="wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
         <button class="quick-btn split-arrow">▼</button>
@@ -1172,8 +1200,6 @@
           <div class="split-dropdown-item" data-action="random" data-i18n="btn_quick_random">动态抽取</div>
         </div>
       </div>
-      <button id="btn-ai-translate" class="quick-btn ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
-      <button id="btn-add" class="primary-add-btn" data-i18n="btn_add">Add</button>
       <button id="btn-group-tags" class="group-tags-btn" data-i18n="btn_group_tags" title="Open Group Tags Panel" data-i18n-title="btn_group_tags_title">Group Tags</button>
     </div>
 
@@ -1205,7 +1231,13 @@
           <button class="char-pn-btn active char-tab-pos" title="Positive Prompts" data-i18n-title="tab_positive">+</button>
           <button class="char-pn-btn char-tab-neg" title="Undesired Content" data-i18n-title="tab_negative">-</button>
         </div>
-        <input type="text" class="char-quick-input" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
+        <div class="quick-input-wrapper">
+          <input type="text" class="char-quick-input" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
+          <button class="primary-add-btn" title="Add" data-i18n-title="btn_add">
+             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"></polyline><path d="M20 4v7a4 4 0 0 1-4 4H4"></path></svg>
+          </button>
+        </div>
+        <button class="quick-btn char-btn-ai-translate ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
         <div class="split-btn-group char-draw-split">
           <button class="quick-btn split-main char-btn-split-main" data-action="wildcard" title="Wildcard" data-i18n-title="btn_quick_wildcard" data-i18n="btn_quick_wildcard">随机抽取</button>
           <button class="quick-btn split-arrow char-btn-split-arrow">▼</button>
@@ -1215,8 +1247,6 @@
             <div class="split-dropdown-item" data-action="random" data-i18n="btn_quick_random">动态抽取</div>
           </div>
         </div>
-        <button class="quick-btn char-btn-ai-translate ai-translate-btn" title="AI Translate" data-i18n-title="btn_ai_translate" data-i18n="btn_ai_translate">AI</button>
-        <button class="primary-add-btn" data-i18n="btn_add">Add</button>
         <button class="char-delete" title="Remove Character" data-i18n-title="btn_remove_char">×</button>
       </div>
       <div class="char-editor-container">

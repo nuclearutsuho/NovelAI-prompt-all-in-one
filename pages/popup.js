@@ -566,7 +566,6 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const dict = getPopupDict();
   const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
 
-  if(btnAdd && dict[getKey('btn_add')]) btnAdd.textContent = dict[getKey('btn_add')];
   if(input && dict.input_placeholder) input.placeholder = dict.input_placeholder;
   
   if (btnAiTranslate) {
