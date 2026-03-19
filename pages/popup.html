@@ -224,19 +224,20 @@
       outline: none;
       transition: border-color 0.2s;
       display: flex;
-      align-items: center;
     }
 
     #quick-input:focus, .char-quick-input:focus {
-      border-color: #818cf8;
+      border-color: #a78bfa;
+      background: #141520;
+      box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.25);
     }
 
     .quick-btn {
-      background: #3a3a55;
-      color: #ccc;
-      border: 1px solid #4a4a6a;
-      border-radius: 4px;
-      padding: 0 6px;
+      background: rgba(167, 139, 250, 0.05); /* NAI Lilac Tint */
+      color: #e0e7ff;
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      border-radius: 6px;
+      padding: 0 8px; /* Slightly wider padding for modern look */
       height: 24px;
       cursor: pointer;
       font-weight: bold;
@@ -244,11 +245,17 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.2s;
+      transition: all 0.2s ease;
     }
 
     .quick-btn:hover {
-      background: #4a4a6a;
+      background: rgba(167, 139, 250, 0.15);
+      border-color: #a78bfa;
+      color: #fff;
+    }
+    
+    .quick-btn:active, .split-arrow:active {
+      transform: scale(0.96);
     }
 
     /* Split Button Styles */
@@ -276,10 +283,10 @@
       top: 100%;
       right: 0;
       margin-top: 4px;
-      background: #2a2a3e;
-      border: 1px solid #4a4a6a;
-      border-radius: 4px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      background: #1e1e2e;
+      border: 1px solid #3f4259;
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.8);
       z-index: 200;
       min-width: 90px;
       overflow: hidden;
@@ -288,33 +295,34 @@
     }
 
     .split-dropdown-item {
-      padding: 6px 10px;
+      padding: 6px 12px;
       font-size: 11px;
       font-weight: bold;
-      color: #ccc;
+      color: #e0e7ff;
       cursor: pointer;
       user-select: none;
-      transition: background 0.2s, color 0.2s;
+      transition: all 0.2s ease;
       white-space: nowrap;
     }
 
     .split-dropdown-item:hover {
-      background: #4a4a6a;
+      background: rgba(167, 139, 250, 0.15);
       color: #fff;
     }
     /* End Split Button Styles */
 
     .ai-translate-btn {
-      background: #0f766e;
-      border-color: #0f766e;
-      color: #ecfeff;
+      background: rgba(167, 139, 250, 0.05);
+      border-color: rgba(167, 139, 250, 0.3);
+      color: #e0e7ff;
       min-width: 34px;
       gap: 4px;
     }
 
     .ai-translate-btn:hover {
-      background: #0d9488;
-      border-color: #0d9488;
+      background: rgba(167, 139, 250, 0.15);
+      border-color: #a78bfa;
+      color: #fff;
     }
 
     .ai-translate-btn.is-loading {
@@ -340,9 +348,9 @@
       right: 2px;
       top: 50%;
       transform: translateY(-50%);
-      background: rgba(129, 140, 248, 0.15);
-      color: #818cf8;
-      border: 1px solid rgba(129, 140, 248, 0.4);
+      background: rgba(167, 139, 250, 0.15);
+      color: #a78bfa;
+      border: 1px solid rgba(167, 139, 250, 0.4);
       border-radius: 4px;
       padding: 0;
       width: 24px;
@@ -356,10 +364,10 @@
     }
 
     #btn-add:hover, .primary-add-btn:hover {
-      background: #818cf8;
+      background: #a78bfa;
       color: #fff;
-      border-color: #818cf8;
-      box-shadow: 0 0 6px rgba(129, 140, 248, 0.5);
+      border-color: #a78bfa;
+      box-shadow: 0 0 6px rgba(167, 139, 250, 0.5);
     }
 
     #btn-add:active, .primary-add-btn:active {
@@ -367,23 +375,29 @@
     }
 
     #btn-group-tags, .group-tags-btn {
-      background: #10b981;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      padding: 0 10px;
+      background: rgba(167, 139, 250, 0.05);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      color: #e0e7ff;
+      border-radius: 6px;
+      padding: 0 8px;
       height: 24px;
       cursor: pointer;
       font-weight: bold;
-      font-size: 13px;
+      font-size: 11px;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.2s;
+      transition: all 0.2s ease;
     }
 
     #btn-group-tags:hover, .group-tags-btn:hover {
-      background: #059669;
+      background: rgba(167, 139, 250, 0.15);
+      border-color: #a78bfa;
+      color: #fff;
+    }
+    
+    #btn-group-tags:active, .group-tags-btn:active {
+      transform: scale(0.96);
     }
 
     /* Settings Modal */
@@ -742,15 +756,103 @@
       margin-bottom: 15px;
     }
 
-    .setting-group label {
-      display: block;
-      margin-bottom: 5px;
-      cursor: pointer;
+    /* Segmented Control for Language */
+    .segmented-control {
+      display: flex;
+      background: #181825;
+      border-radius: 6px;
+      padding: 4px;
+      border: 1px solid #3a3a55;
     }
 
+    .segmented-control button {
+      background: transparent;
+      color: #94a3b8;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: bold;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .segmented-control button:hover {
+      color: #e2e8f0;
+    }
+
+    .segmented-control button.active {
+      background: #818cf8;
+      color: #ffffff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .setting-group label {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 5px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    /* Toggle Switch Component */
+    input[type="checkbox"].toggle-switch {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 36px;
+      height: 20px;
+      background: #3a3a55;
+      border-radius: 20px;
+      position: relative;
+      cursor: pointer;
+      outline: none;
+      border: 1px solid #4a4a6a;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-shrink: 0;
+      margin: 0;
+    }
+
+    input[type="checkbox"].toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 1px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      background: #cbd5e1;
+      border-radius: 50%;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    }
+
+    input[type="checkbox"].toggle-switch:checked {
+      background: #818cf8;
+      border-color: #6366f1;
+    }
+
+    input[type="checkbox"].toggle-switch:checked::after {
+      left: calc(100% - 18px);
+      background: #fff;
+    }
+
+    /* AI Translate Block Differentiation */
     .ai-translate-settings {
-      border-top: 1px dashed #4a4a6a;
-      padding-top: 12px;
+      background: #181825;
+      border: 1px solid #3a3a55;
+      border-left: 4px solid #14b8a6;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    
+    .ai-translate-settings strong {
+      display: block;
+      font-size: 14px;
+      color: #14b8a6;
+      margin-bottom: 6px;
     }
 
     .ai-template-note {
@@ -848,15 +950,51 @@
     }
 
     .ai-setting-field textarea {
-      min-height: 88px;
+      min-height: 140px;
       resize: vertical;
-      line-height: 1.5;
+      line-height: 1.3;
+      font-size: 13px;
+    }
+
+    /* 优化 Textarea 的滚动条与拖拽角标，防止互相遮挡 */
+    .ai-setting-field textarea::-webkit-scrollbar {
+      width: 12px;
+    }
+    .ai-setting-field textarea::-webkit-scrollbar-track {
+      background: transparent;
+      /* 让滚动条在最底部留出一点空间，避免完全盖住 resizer */
+      margin-bottom: 4px; 
+    }
+    .ai-setting-field textarea::-webkit-scrollbar-thumb {
+      background: #3a3a55;
+      border-radius: 6px;
+      border: 3px solid #181825; /* 给滚动条制造内边距效果 */
+    }
+    .ai-setting-field textarea::-webkit-scrollbar-thumb:hover {
+      background: #6366f1;
+    }
+    /* 自定义右下角拖动标识 (Resizer) */
+    .ai-setting-field textarea::-webkit-resizer {
+      background-color: #181825;
+      /* 画出两条标志性的斜线让拖动角一目了然 */
+      background-image: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 4px,
+        #818cf8 4px,
+        #818cf8 5px
+      );
     }
 
     .setting-desc {
       font-size: 0.8em;
       color: #999;
-      margin-left: 20px;
+      margin-left: 48px;
+      line-height: 1.4;
+    }
+
+    .ai-translate-settings .setting-desc {
+      margin-left: 0;
     }
 
     h3 {
@@ -1257,36 +1395,49 @@
 
   <div id="settings-modal">
     <div class="modal-content">
-      <h3 data-i18n="settings_title">Settings <button id="close-settings"
+      <h3 data-i18n="settings_title" style="margin-bottom: 20px;">Settings <button id="close-settings"
           style="float:right; background:transparent; border:none; color:#ccc; cursor:pointer;">×</button></h3>
+
+      <!-- Language Setting -->
+      <div class="setting-group" style="align-items: center; justify-content: space-between; display: flex; border-bottom: 1px solid #3a3a55; padding-bottom: 20px; margin-bottom: 20px;">
+        <div>
+          <strong style="display:block; color:#e2e8f0; font-size:14px; margin-bottom: 4px;">Language / 语言</strong>
+          <div class="setting-desc" style="margin-left:0; color:#94a3b8;">Select your preferred language</div>
+        </div>
+        <div id="langToggle" class="segmented-control">
+          <button id="btn-zh">中文</button>
+          <button id="btn-en">EN</button>
+          <button id="btn-jp">JP</button>
+        </div>
+      </div>
 
       <!-- Existing Settings -->
       <div class="setting-group">
-        <label><input type="checkbox" id="preservePrompt" checked> <span data-i18n="setting_preserve">Preserve Original
+        <label><input type="checkbox" class="toggle-switch" id="preservePrompt" checked> <span data-i18n="setting_preserve">Preserve Original
             img prompts on Enhance</span></label>
         <div class="setting-desc" data-i18n="setting_preserve_desc">Uncheck this to randomize enhance prompts.</div>
       </div>
       <div class="setting-group">
-        <label><input type="checkbox" id="alternativeDanbooruAutocomplete"> <span
+        <label><input type="checkbox" class="toggle-switch" id="alternativeDanbooruAutocomplete"> <span
             data-i18n="setting_alt_autocomplete">Full Alternative Danbooru Autocomplete</span></label>
         <div class="setting-desc" data-i18n="setting_alt_autocomplete_desc">a1111 WebUI style Danbooru Autocomplete.
         </div>
       </div>
       <div class="setting-group">
-        <label><input type="checkbox" id="renderNewlines"> <span data-i18n="setting_render_newlines">Render Real
+        <label><input type="checkbox" class="toggle-switch" id="renderNewlines"> <span data-i18n="setting_render_newlines">Render Real
             Newlines</span></label>
         <div class="setting-desc" data-i18n="setting_render_newlines_desc">Force actual line breaks in the UI at newline
           tags.
         </div>
       </div>
       <div class="setting-group">
-        <label><input type="checkbox" id="hideAutoClicker"> <span data-i18n="setting_hide_autoclicker">Hide Count Bar</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="hideAutoClicker"> <span data-i18n="setting_hide_autoclicker">Hide Count Bar</span></label>
         <div class="setting-desc" data-i18n="setting_hide_autoclicker_desc">Hide the auto-clicker toolbar at the bottom of the page.</div>
       </div>
       <div class="setting-group">
-        <strong data-i18n="setting_trigger_keys">Trigger Keys:</strong>
-        <label><input type="checkbox" id="triggerSpace" checked> <span data-i18n="setting_space">Space</span></label>
-        <label><input type="checkbox" id="triggerTab"> <span data-i18n="setting_tab">Tab</span></label>
+        <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>
+        <label><input type="checkbox" class="toggle-switch" id="triggerSpace" checked> <span data-i18n="setting_space">Space</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="triggerTab"> <span data-i18n="setting_tab">Tab</span></label>
       </div>
 
       <div id="ai-translate-settings" class="setting-group ai-translate-settings">
@@ -1336,41 +1487,6 @@
         </div>
         <div class="setting-desc" id="storage-usage-text">Calculating...</div>
       </div>
-
-      <div style="text-align:right;">
-        <div id="langToggle">
-          <button id="btn-zh">中文</button>
-          <button id="btn-en">EN</button>
-          <button id="btn-jp">JP</button>
-        </div>
-      </div>
-
-      <style>
-        #langToggle {
-          margin-top: 15px;
-        }
-
-        #langToggle button {
-          background: #3a3a55;
-          color: #ccc;
-          border: 1px solid #4a4a6a;
-          padding: 4px 10px;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 0.8em;
-          margin-left: 4px;
-        }
-
-        #langToggle button:hover {
-          background: #4a4a6a;
-        }
-
-        #langToggle button.active {
-          background: #818cf8;
-          color: #fff;
-          border-color: #6366f1;
-        }
-      </style>
     </div>
   </div>
 

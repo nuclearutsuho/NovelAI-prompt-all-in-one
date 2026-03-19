@@ -778,7 +778,11 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      setTimeout(() => { if (input.value.trim()) addTag(); }, 100);
+      if (e.shiftKey && btnAiTranslate) {
+        btnAiTranslate.click();
+      } else {
+        setTimeout(() => { if (input.value.trim()) addTag(); }, 100);
+      }
     }
   });
 
@@ -1419,10 +1423,14 @@ function initUI() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Small timeout to allow autocomplete to process first if it's active
-      setTimeout(() => {
-        if (input.value.trim()) addTag();
-      }, 100);
+      if (e.shiftKey && btnAiTranslate) {
+        btnAiTranslate.click();
+      } else {
+        // Small timeout to allow autocomplete to process first if it's active
+        setTimeout(() => {
+          if (input.value.trim()) addTag();
+        }, 100);
+      }
     }
   });
 
