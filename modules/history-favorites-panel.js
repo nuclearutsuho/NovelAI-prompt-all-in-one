@@ -854,7 +854,7 @@ const MODAL_ID = 'nai-history-modal';
 
       // 2. 从 Map 中查找 (尝试多种格式匹配)
       let match = null;
-      const mapObj = window.__autocompleteMap__;
+      const mapObj = currentDictionaryTagMap || window.__autocompleteMap__;
       if (mapObj) {
         match = mapObj.get(baseTag);
         // 尝试下划线替换为空格
@@ -1125,6 +1125,25 @@ const MODAL_ID = 'nai-history-modal';
     let historyLimit = 100;
     let currentGroupColorMap = {};
     let currentGroupTranslationMap = {};
+    let currentDictionaryTagMap = null;
+    let currentDictionaryLoadPromise = null;
+
+    const HISTORY_DICT_COLOR_MAP = {
+      '0': 'lightblue',
+      '1': 'indianred',
+      '3': 'violet',
+      '4': 'lightgreen',
+      '5': 'orange',
+      '6': 'red',
+      '7': 'lightblue',
+      '8': 'gold',
+      '9': 'gold',
+      '10': 'violet',
+      '11': 'lightgreen',
+      '12': 'tomato',
+      '14': 'whitesmoke',
+      '15': 'seagreen'
+    };
 
     function toCanonicalHistoryTagKey(value) {
       const groupTagsDataUtils = getGroupTagsDataUtils();
@@ -1132,6 +1151,76 @@ const MODAL_ID = 'nai-history-modal';
         return groupTagsDataUtils.toCanonicalTagKey(value);
       }
       return String(value || '').trim().toLowerCase();
+    }
+
+    function buildHistoryDictionaryMap(entries) {
+      const groupTagsDataUtils = getGroupTagsDataUtils();
+      const map = new Map();
+
+      (entries || []).forEach(entry => {
+        const rawTag = String(entry?.tag || '').trim();
+        if (!rawTag) return;
+
+        const canonicalText = groupTagsDataUtils.toCanonicalTagKey
+          ? groupTagsDataUtils.toCanonicalTagKey(rawTag)
+          : rawTag.toLowerCase();
+        if (!canonicalText) return;
+
+        const displayText = groupTagsDataUtils.canonicalToDisplayTag
+          ? groupTagsDataUtils.canonicalToDisplayTag(canonicalText)
+          : canonicalText.replace(/_/g, ' ');
+        const normalized = {
+          text: canonicalText,
+          color: HISTORY_DICT_COLOR_MAP[String(entry.color ?? 0)] || 'lightblue',
+          pop: Number(entry.count) || 0,
+          zhCN: entry.zhCN || '',
+          aliases: entry.aliases || ''
+        };
+
+        const candidateKeys = [
+          canonicalText,
+          displayText.toLowerCase(),
+          canonicalText.replace(/_/g, ' '),
+          canonicalText.replace(/ /g, '_')
+        ];
+
+        candidateKeys.forEach(key => {
+          const normalizedKey = String(key || '').trim().toLowerCase();
+          if (normalizedKey && !map.has(normalizedKey)) {
+            map.set(normalizedKey, normalized);
+          }
+        });
+      });
+
+      return map;
+    }
+
+    async function ensureHistoryDictionaryMapLoaded(forceReload = false) {
+      if (!forceReload && currentDictionaryTagMap) return currentDictionaryTagMap;
+      if (!forceReload && currentDictionaryLoadPromise) return currentDictionaryLoadPromise;
+
+      currentDictionaryLoadPromise = (async () => {
+        const groupTagsDataUtils = getGroupTagsDataUtils();
+
+        if (groupTagsDataUtils.loadEffectiveDictionaryData) {
+          const dictionaryData = await groupTagsDataUtils.loadEffectiveDictionaryData();
+          currentDictionaryTagMap = buildHistoryDictionaryMap(dictionaryData.entries || []);
+          return currentDictionaryTagMap;
+        }
+
+        currentDictionaryTagMap = window.__autocompleteMap__ || null;
+        return currentDictionaryTagMap;
+      })()
+        .catch(err => {
+          console.error('[Wildcard] Failed to load history dictionary map:', err);
+          currentDictionaryTagMap = window.__autocompleteMap__ || null;
+          return currentDictionaryTagMap;
+        })
+        .finally(() => {
+          currentDictionaryLoadPromise = null;
+        });
+
+      return currentDictionaryLoadPromise;
     }
 
     function createModal() {
@@ -2194,7 +2283,10 @@ const MODAL_ID = 'nai-history-modal';
       if (!document.getElementById('nai-history-backdrop')) createModal();
 
       // 从 storage 读取新数据
-      const data = await getHistoryData();
+      const [data] = await Promise.all([
+        getHistoryData(),
+        ensureHistoryDictionaryMapLoaded(true)
+      ]);
       historyData = (data.history || []).sort((a, b) => b.timestamp - a.timestamp);
       historyLimit = data.limit || 100;
       currentGroupColorMap = data.groupColorMap || {};
