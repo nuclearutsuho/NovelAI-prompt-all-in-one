@@ -385,6 +385,15 @@
     text-shadow: 0 0 5px rgba(99, 102, 241, 0.5);
 }
 
+.tbtn-retranslate {
+    color: #93c5fd;
+}
+
+.tbtn-retranslate:hover {
+    color: #dbeafe;
+    background: rgba(59, 130, 246, 0.2);
+}
+
 .fav-star {
     color: #ffd700;
     font-size: 0.9em;

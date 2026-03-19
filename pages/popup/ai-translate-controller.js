@@ -313,6 +313,28 @@ export default function createAiTranslateController(deps = {}) {
     return true;
   }
 
+  function startRetranslateAiTag(targetContext, existingTag, requestId) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !existingTag || !requestId) return false;
+
+    const tagIndex = tagList.indexOf(existingTag);
+    if (tagIndex === -1) return false;
+
+    const targetTag = tagList[tagIndex];
+    targetTag.aiPendingPreviousValue = String(targetTag.value || '').trim();
+    targetTag.value = AI_PENDING_PLACEHOLDER_VALUE;
+    targetTag.aiPending = true;
+    targetTag.aiPendingStartedAt = Date.now();
+    targetTag.aiPendingRequestId = requestId;
+    delete targetTag.aiPendingFailed;
+    delete targetTag.aiPendingErrorMessage;
+
+    renderTargetIfVisible(target);
+    syncPendingVisualTimer();
+    return true;
+  }
+
   function resolvePendingAiTag(targetContext, pendingTagOrRequestId, translatedText) {
     const target = normalizeTargetContext(targetContext);
     const tagList = getTargetTagList(target);
@@ -328,6 +350,7 @@ export default function createAiTranslateController(deps = {}) {
     delete resolvedTag.aiPendingErrorMessage;
     delete resolvedTag.aiPendingStartedAt;
     delete resolvedTag.aiPendingRequestId;
+    delete resolvedTag.aiPendingPreviousValue;
 
     syncPendingVisualTimer();
     syncTargetAfterResolve(target, 'popup');
@@ -348,6 +371,31 @@ export default function createAiTranslateController(deps = {}) {
     pendingTag.aiPendingFailed = true;
     pendingTag.aiPendingErrorMessage = String(errorMessage || '').trim();
     delete pendingTag.aiPendingStartedAt;
+
+    renderTargetIfVisible(target);
+    syncPendingVisualTimer();
+    return true;
+  }
+
+  function restoreRetranslateAiTag(targetContext, pendingTagOrRequestId) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const pendingTag = tagList[pendingIndex];
+    const previousValue = String(pendingTag.aiPendingPreviousValue || '').trim();
+    if (!previousValue) return false;
+
+    pendingTag.value = previousValue;
+    delete pendingTag.aiPending;
+    delete pendingTag.aiPendingFailed;
+    delete pendingTag.aiPendingErrorMessage;
+    delete pendingTag.aiPendingStartedAt;
+    delete pendingTag.aiPendingRequestId;
+    delete pendingTag.aiPendingPreviousValue;
 
     renderTargetIfVisible(target);
     syncPendingVisualTimer();
@@ -493,13 +541,21 @@ export default function createAiTranslateController(deps = {}) {
     return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
   }
 
-  async function translateFromInput({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null }) {
+  async function translateFromInput({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null, existingTag = null }) {
     if (!tagEditor) return;
 
     const retrySourceText = String(pendingTag?.aiOriginal || '').trim();
-    const sourceText = pendingTag ? retrySourceText : String(inputEl?.value || '').trim();
+    const retranslateSourceText = String(existingTag?.aiOriginal || '').trim();
+    const sourceText = pendingTag
+      ? retrySourceText
+      : (existingTag ? retranslateSourceText : String(inputEl?.value || '').trim());
     if (!sourceText) {
-      showToast('warning', getLocalizedText('toast_ai_missing_input', 'Enter text before translating.'));
+      showToast(
+        'warning',
+        existingTag
+          ? getLocalizedText('toast_ai_missing_original', 'No original text is available for retranslation.')
+          : getLocalizedText('toast_ai_missing_input', 'Enter text before translating.')
+      );
       return;
     }
 
@@ -544,9 +600,17 @@ export default function createAiTranslateController(deps = {}) {
     });
 
     let activePendingTag = pendingTag;
+    const isRetranslatingExistingTag = !!existingTag && !pendingTag;
     if (activePendingTag) {
       // 重试时复用原胶囊，只重置请求状态，不改变用户看到的位置。
       const restarted = restartPendingAiTag(target, activePendingTag, requestId);
+      if (!restarted) {
+        cleanupAiPendingRequest(requestId);
+        return;
+      }
+    } else if (existingTag) {
+      activePendingTag = existingTag;
+      const restarted = startRetranslateAiTag(target, existingTag, requestId);
       if (!restarted) {
         cleanupAiPendingRequest(requestId);
         return;
@@ -578,6 +642,9 @@ export default function createAiTranslateController(deps = {}) {
 
     const granted = await ensureAiApiPermission(profile.apiUrl);
     if (isAiPendingRequestCanceled(requestId)) {
+      if (isRetranslatingExistingTag) {
+        restoreRetranslateAiTag(target, requestId);
+      }
       cleanupAiPendingRequest(requestId);
       syncPendingVisualTimer();
       return;
@@ -585,7 +652,11 @@ export default function createAiTranslateController(deps = {}) {
 
     if (!granted) {
       const message = getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.');
-      markPendingAiTagFailed(target, requestId, message);
+      if (isRetranslatingExistingTag) {
+        restoreRetranslateAiTag(target, requestId);
+      } else {
+        markPendingAiTagFailed(target, requestId, message);
+      }
       cleanupAiPendingRequest(requestId);
       showToast('warning', message);
       return;
@@ -597,6 +668,9 @@ export default function createAiTranslateController(deps = {}) {
       setAiPendingRequestController(requestId, controller);
       const translatedText = await aiTranslateText(sourceText, profile, { controller });
       if (isAiPendingRequestCanceled(requestId)) {
+        if (isRetranslatingExistingTag) {
+          restoreRetranslateAiTag(target, requestId);
+        }
         return;
       }
 
@@ -608,12 +682,19 @@ export default function createAiTranslateController(deps = {}) {
       }
     } catch (error) {
       if (isAiPendingRequestCanceled(requestId)) {
+        if (isRetranslatingExistingTag) {
+          restoreRetranslateAiTag(target, requestId);
+        }
         return;
       }
 
       const errorMessage = formatAiTranslateError(error);
       console.error('[AI Translate] 翻译失败:', error);
-      markPendingAiTagFailed(target, requestId, errorMessage);
+      if (isRetranslatingExistingTag) {
+        restoreRetranslateAiTag(target, requestId);
+      } else {
+        markPendingAiTagFailed(target, requestId, errorMessage);
+      }
       showToast('error', errorMessage);
     } finally {
       cleanupAiPendingRequest(requestId);

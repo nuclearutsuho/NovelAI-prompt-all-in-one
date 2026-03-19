@@ -636,6 +636,17 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       },
       pendingTag: tag
     }),
+    onRetranslateAiTag: (tag) => aiTranslateController?.translateFromInput({
+      buttonEl: btnAiTranslate,
+      tagEditor: charEditor,
+      scrollContainer: editorContainer,
+      targetContext: {
+        type: 'character',
+        charIndex: index,
+        mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+      },
+      existingTag: tag
+    }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
@@ -1138,6 +1149,16 @@ function initUI() {
         mode: currentMode
       },
       pendingTag: tag
+    }),
+    onRetranslateAiTag: (tag) => aiTranslateController?.translateFromInput({
+      buttonEl: btnAiTranslate,
+      tagEditor: editor,
+      scrollContainer: container,
+      targetContext: {
+        type: 'base',
+        mode: currentMode
+      },
+      existingTag: tag
     }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
