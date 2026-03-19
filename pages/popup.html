@@ -1266,6 +1266,110 @@
     #resizer.disabled .char-section-min-btn {
       pointer-events: auto; /* Keep button clickable */
     }
+
+    /* ── Global Hotkey Settings ── */
+    .hotkey-settings {
+      background: #181825;
+      border: 1px solid #3a3a55;
+      border-left: 4px solid #10b981;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .hotkey-settings strong {
+      display: block;
+      font-size: 14px;
+      color: #10b981;
+      margin-bottom: 10px;
+    }
+
+    .hotkey-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .hotkey-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .hotkey-label {
+      flex: 1;
+      font-size: 12px;
+      color: #cbd5e1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .hotkey-capture-btn {
+      background: #252538;
+      color: #e2e8f0;
+      border: 1px solid #4a4a6a;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: 'Segoe UI', monospace;
+      cursor: pointer;
+      min-width: 100px;
+      text-align: center;
+      transition: all 0.2s ease;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+
+    .hotkey-capture-btn:hover {
+      border-color: #10b981;
+      background: #2a2a40;
+    }
+
+    .hotkey-capture-btn.recording {
+      border-color: #10b981;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+      color: #10b981;
+      animation: hotkey-pulse 1.2s ease-in-out infinite;
+    }
+
+    .hotkey-capture-btn.empty {
+      color: #64748b;
+      font-style: italic;
+      font-weight: 400;
+    }
+
+    @keyframes hotkey-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25); }
+      50% { box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15); }
+    }
+
+    .hotkey-clear-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #64748b;
+      border-radius: 4px;
+      width: 22px;
+      height: 22px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      line-height: 1;
+      transition: all 0.2s;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .hotkey-clear-btn:hover {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
   </style>
 </head>
 
@@ -1438,6 +1542,26 @@
         <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>
         <label><input type="checkbox" class="toggle-switch" id="triggerSpace" checked> <span data-i18n="setting_space">Space</span></label>
         <label><input type="checkbox" class="toggle-switch" id="triggerTab"> <span data-i18n="setting_tab">Tab</span></label>
+      </div>
+
+      <!-- 全局快捷键设置 -->
+      <div class="setting-group hotkey-settings">
+        <strong data-i18n="setting_hotkeys_title">⌨️ Global Hotkeys</strong>
+        <div class="hotkey-row">
+          <span class="hotkey-label" data-i18n="hotkey_focus_base">Focus Base Prompt</span>
+          <button class="hotkey-capture-btn" id="hotkey-focus-base" data-hotkey="focusBase">Alt+Q</button>
+          <button class="hotkey-clear-btn" id="hotkey-focus-base-clear" title="Clear">×</button>
+        </div>
+        <div class="hotkey-row">
+          <span class="hotkey-label" data-i18n="hotkey_minimize">Minimize Window</span>
+          <button class="hotkey-capture-btn" id="hotkey-minimize" data-hotkey="toggleMinimize">Alt+M</button>
+          <button class="hotkey-clear-btn" id="hotkey-minimize-clear" title="Clear">×</button>
+        </div>
+        <div class="hotkey-row">
+          <span class="hotkey-label" data-i18n="hotkey_generate">Generate Image</span>
+          <button class="hotkey-capture-btn" id="hotkey-generate" data-hotkey="triggerGenerate">Ctrl+Enter</button>
+          <button class="hotkey-clear-btn" id="hotkey-generate-clear" title="Clear">×</button>
+        </div>
       </div>
 
       <div id="ai-translate-settings" class="setting-group ai-translate-settings">

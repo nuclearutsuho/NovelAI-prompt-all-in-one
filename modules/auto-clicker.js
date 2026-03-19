@@ -879,6 +879,17 @@
         applyModeI18n();
       }
     }
+
+    // 快捷键触发生成图像（来自 bridge.js 的转发）
+    if (type === '__TRIGGER_GENERATE__') {
+      const btn = findGenerateButton();
+      if (btn) {
+        triggerClick(btn);
+        console.log('[AutoClicker] 快捷键触发生成图像');
+      } else {
+        console.warn('[AutoClicker] 快捷键触发失败：未找到可见的 Generate 按钮');
+      }
+    }
   });
 
   const initTimer = setInterval(() => {

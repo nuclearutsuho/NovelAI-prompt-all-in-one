@@ -1673,6 +1673,276 @@ function initUI() {
       });
     });
   }
+
+  // ══════════════════════════════════════════════════════════
+  // 全局快捷键设置系统
+  // ══════════════════════════════════════════════════════════
+
+  // 默认快捷键配置
+  const DEFAULT_HOTKEYS = {
+    toggleMinimize: { key: 'm', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false },
+    triggerGenerate: { key: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false },
+    focusBase: { key: 'q', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }
+  };
+
+  // 当前快捷键配置（运行时缓存）
+  let currentHotkeys = JSON.parse(JSON.stringify(DEFAULT_HOTKEYS));
+
+  /**
+   * 判断按键事件是否匹配快捷键配置
+   * @param {KeyboardEvent} event - 键盘事件
+   * @param {object} hotkeyConfig - 快捷键配置对象 { key, ctrlKey, altKey, shiftKey, metaKey }
+   * @returns {boolean}
+   */
+  function matchHotkey(event, hotkeyConfig) {
+    if (!hotkeyConfig || !hotkeyConfig.key) return false;
+    // 对单字符按键（字母键）做大小写不敏感比较
+    // 因为 event.key 返回的是小写（如 'm'），除非同时按了 Shift
+    const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    const configKey = hotkeyConfig.key.length === 1 ? hotkeyConfig.key.toLowerCase() : hotkeyConfig.key;
+    return eventKey === configKey
+      && !!event.ctrlKey === !!hotkeyConfig.ctrlKey
+      && !!event.altKey === !!hotkeyConfig.altKey
+      && !!event.shiftKey === !!hotkeyConfig.shiftKey
+      && !!event.metaKey === !!hotkeyConfig.metaKey;
+  }
+
+  /**
+   * 将快捷键配置格式化为可读字符串（如 "Ctrl+Alt+M"）
+   * @param {object} hotkeyConfig - 快捷键配置对象
+   * @returns {string}
+   */
+  function formatHotkey(hotkeyConfig) {
+    if (!hotkeyConfig || !hotkeyConfig.key) return '';
+    const parts = [];
+    if (hotkeyConfig.ctrlKey) parts.push('Ctrl');
+    if (hotkeyConfig.altKey) parts.push('Alt');
+    if (hotkeyConfig.shiftKey) parts.push('Shift');
+    if (hotkeyConfig.metaKey) parts.push('Meta');
+
+    // 特殊键名的显示友好化
+    let keyName = hotkeyConfig.key;
+    if (keyName === ' ') keyName = 'Space';
+    else if (keyName === 'ArrowUp') keyName = '↑';
+    else if (keyName === 'ArrowDown') keyName = '↓';
+    else if (keyName === 'ArrowLeft') keyName = '←';
+    else if (keyName === 'ArrowRight') keyName = '→';
+    else if (keyName.length === 1) keyName = keyName.toUpperCase();
+
+    parts.push(keyName);
+    return parts.join('+');
+  }
+
+  /**
+   * 更新快捷键按钮的显示
+   * @param {string} action - 快捷键动作名 ('toggleMinimize' | 'triggerGenerate' | 'focusBase')
+   */
+  function updateHotkeyBtnDisplay(action) {
+    let btnId;
+    if (action === 'toggleMinimize') btnId = 'hotkey-minimize';
+    else if (action === 'triggerGenerate') btnId = 'hotkey-generate';
+    else if (action === 'focusBase') btnId = 'hotkey-focus-base';
+    
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+
+    const config = currentHotkeys[action];
+    const text = formatHotkey(config);
+    if (text) {
+      btn.textContent = text;
+      btn.classList.remove('empty');
+    } else {
+      btn.textContent = getLocalizedText('hotkey_not_set') || 'Not Set';
+      btn.classList.add('empty');
+    }
+  }
+
+  // 初始化快捷键设置 UI
+  function initHotkeySettings() {
+    let recordingBtn = null; // 当前正在录制的按钮
+
+    // 从 chrome.storage 加载快捷键
+    chrome.storage.local.get('hotkeys', (data) => {
+      if (data.hotkeys) {
+        // 合并已保存的配置和默认值（确保新增的快捷键有默认值）
+        currentHotkeys = { ...DEFAULT_HOTKEYS, ...data.hotkeys };
+      }
+      // 更新所有按钮的显示
+      updateHotkeyBtnDisplay('toggleMinimize');
+      updateHotkeyBtnDisplay('triggerGenerate');
+      updateHotkeyBtnDisplay('focusBase');
+    });
+
+    /**
+     * 停止录制状态
+     */
+    function stopRecording() {
+      if (recordingBtn) {
+        recordingBtn.classList.remove('recording');
+        const action = recordingBtn.dataset.hotkey;
+        updateHotkeyBtnDisplay(action);
+        recordingBtn = null;
+      }
+    }
+
+    /**
+     * 保存当前快捷键到 chrome.storage
+     */
+    function saveHotkeys() {
+      chrome.storage.local.set({ hotkeys: currentHotkeys });
+    }
+
+    // 为每个快捷键按钮和清除按钮绑定事件
+    ['toggleMinimize', 'triggerGenerate', 'focusBase'].forEach(action => {
+      let btnId;
+      if (action === 'toggleMinimize') btnId = 'hotkey-minimize';
+      else if (action === 'triggerGenerate') btnId = 'hotkey-generate';
+      else if (action === 'focusBase') btnId = 'hotkey-focus-base';
+      
+      const clearId = btnId + '-clear';
+      const btn = document.getElementById(btnId);
+      const clearBtn = document.getElementById(clearId);
+
+      if (btn) {
+        btn.addEventListener('click', () => {
+          if (recordingBtn === btn) {
+            // 再次点击同一个按钮 → 取消录制
+            stopRecording();
+            return;
+          }
+          // 停止其他按钮的录制
+          stopRecording();
+          // 进入录制状态
+          recordingBtn = btn;
+          btn.classList.add('recording');
+          btn.textContent = getLocalizedText('hotkey_press_key') || '⌨ Press a Key...';
+        });
+      }
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          stopRecording();
+          currentHotkeys[action] = { key: '', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false };
+          updateHotkeyBtnDisplay(action);
+          saveHotkeys();
+        });
+      }
+    });
+
+    // 全局 keydown 监听器 — 处理录制和快捷键触发
+    document.addEventListener('keydown', (e) => {
+      // ── 录制模式：捕获按键组合 ──
+      if (recordingBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 纯修饰键按下时不终止录制（等用户加上字母/功能键）
+        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+
+        // Escape = 取消录制
+        if (e.key === 'Escape') {
+          stopRecording();
+          return;
+        }
+
+        const action = recordingBtn.dataset.hotkey;
+
+        // Delete/Backspace = 清除该快捷键
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          currentHotkeys[action] = { key: '', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false };
+          stopRecording();
+          saveHotkeys();
+          return;
+        }
+
+        // 记录组合键
+        currentHotkeys[action] = {
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          altKey: e.altKey,
+          shiftKey: e.shiftKey,
+          metaKey: e.metaKey
+        };
+        stopRecording();
+        saveHotkeys();
+        return;
+      }
+
+      // ── 非录制模式：检查是否匹配已配置的快捷键 ──
+      // 如果焦点在输入框/文本框中，跳过快捷键检查（避免干扰正常文本输入）
+      const target = e.target;
+      // 排除快捷键设置页面中作为展示用的非录制状态的按键
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      if (matchHotkey(e, currentHotkeys.focusBase)) {
+        e.preventDefault();
+        // 如果是从 iframe 内触发，自身直接执行切换逻辑
+        executeFocusBase();
+        
+        // 同时也通知宿主页面（如果面板没有打开/被最小化，宿主页面需要将其展开）
+        if (isEmbeddedPopup) {
+          window.parent.postMessage({ type: '__HOTKEY_ACTION__', action: 'focusBase' }, '*');
+        }
+        return;
+      }
+
+      if (matchHotkey(e, currentHotkeys.toggleMinimize)) {
+        // 无论在输入框还是其他地方，最小化快捷键都应该工作（因为它不产生文字输入冲突）
+        e.preventDefault();
+        if (isEmbeddedPopup) {
+          // iframe 模式：通知宿主页面
+          window.parent.postMessage({ type: '__HOTKEY_ACTION__', action: 'toggleMinimize' }, '*');
+        }
+        return;
+      }
+
+      if (matchHotkey(e, currentHotkeys.triggerGenerate)) {
+        // 生成图像快捷键：在输入框中时要额外判断（避免和 Enter 添加 tag 冲突）
+        // 如果是纯 Enter（没有 Ctrl/Alt/Shift 修饰），不拦截，让原有添加 tag 逻辑处理
+        if (isInput && !e.ctrlKey && !e.altKey && !e.metaKey) return;
+        e.preventDefault();
+        if (isEmbeddedPopup) {
+          window.parent.postMessage({ type: '__HOTKEY_ACTION__', action: 'triggerGenerate' }, '*');
+        }
+        return;
+      }
+    }, true); // 使用 capture 阶段以高优先级捕获
+
+    // 监听 storage 变化以保持多页面同步
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.hotkeys) {
+        currentHotkeys = { ...DEFAULT_HOTKEYS, ...(changes.hotkeys.newValue || {}) };
+        updateHotkeyBtnDisplay('toggleMinimize');
+        updateHotkeyBtnDisplay('triggerGenerate');
+        updateHotkeyBtnDisplay('focusBase');
+      }
+    });
+
+    // 监听来自 bridge.js 的通知（例如宿主页面监听到 focusBase，转发进来执行界面逻辑）
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === '__HOTKEY_ACTION__' && e.data.action === 'focusBase') {
+        executeFocusBase();
+      }
+    });
+
+  }
+
+  /**
+   * 切换到 Base Tab 并聚焦于的主输入框
+   */
+  function executeFocusBase() {
+    // 切换到正面词 (Base) 标签页
+    if (currentMode !== 'positive') {
+      switchTab('positive', true);
+    }
+    // 焦点放入快速输入框
+    const quickInput = document.getElementById('quick-input');
+    if (quickInput) {
+      quickInput.focus();
+    }
+  }
+
+  initHotkeySettings();
 }
 
 function switchTab(mode, fromUserClick = false) {

@@ -63,8 +63,9 @@
     triggerSpace = true,
     multiResConfig = null,
     hideAutoClicker = false,
-    autoClickerI18n = null
-  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n']);
+    autoClickerI18n = null,
+    hotkeys = null
+  } = await chrome.storage.local.get(['wildcards', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
   let sequentialCounters = loadScopedSequentialCounters();
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
@@ -318,11 +319,112 @@
       });
     });
 
-    // 键盘快捷键 Ctrl+Shift+W 切换面板
+    // ── 快捷键系统 ──
+    // 默认快捷键配置
+    const DEFAULT_HOTKEYS = {
+      toggleMinimize: { key: 'm', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false },
+      triggerGenerate: { key: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false },
+      focusBase: { key: 'q', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }
+    };
+    // 当前快捷键配置（合并用户保存的配置和默认值）
+    let currentHotkeys = { ...DEFAULT_HOTKEYS, ...(hotkeys || {}) };
+
+    /**
+     * 判断按键事件是否匹配快捷键配置
+     */
+    function matchHotkey(event, hotkeyConfig) {
+      if (!hotkeyConfig || !hotkeyConfig.key) return false;
+      // 对单字符按键（字母键）做大小写不敏感比较
+      const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      const configKey = hotkeyConfig.key.length === 1 ? hotkeyConfig.key.toLowerCase() : hotkeyConfig.key;
+      return eventKey === configKey
+        && !!event.ctrlKey === !!hotkeyConfig.ctrlKey
+        && !!event.altKey === !!hotkeyConfig.altKey
+        && !!event.shiftKey === !!hotkeyConfig.shiftKey
+        && !!event.metaKey === !!hotkeyConfig.metaKey;
+    }
+
+    // 全局快捷键监听（宿主页面层级）
     document.addEventListener('keydown', e => {
+      // 在输入框中时跳过某些快捷键（避免干扰正常输入）
+      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+
+      if (matchHotkey(e, currentHotkeys.toggleMinimize)) {
+        e.preventDefault();
+        toggleMinimize();
+        return;
+      }
+
+      if (matchHotkey(e, currentHotkeys.focusBase)) {
+        e.preventDefault();
+        
+        // 1. 如果面板隐藏，展示面板
+        const container = document.getElementById('wildcard-manager-container');
+        if (container && !container.classList.contains('visible')) {
+          togglePanel(); // toggle → 从隐藏变为可见
+        }
+        
+        // 2. 如果面板已最小化，取消最小化
+        if (container && container.classList.contains('minimized')) {
+          toggleMinimize(); // toggle → 从最小化变为展开
+        }
+
+        // 3. 等待面板展开/恢复的 CSS 渲染完成后再操作焦点
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            // 实时查询 iframe 元素（避免变量作用域问题）
+            const iframeEl = document.getElementById('wildcard-manager-iframe');
+            if (!iframeEl) return;
+
+            // 4. 浏览器安全策略限制：仅靠 iframe.focus() 无法将焦点转入跨源 iframe
+            //    必须通过模拟用户点击事件来产生"用户手势"，才能让浏览器允许焦点转移
+            iframeEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            iframeEl.focus();
+
+            // 5. 通知 iframe 进行 Tab 切换和 Focus 操作
+            if (iframeEl.contentWindow) {
+              iframeEl.contentWindow.postMessage({ type: '__HOTKEY_ACTION__', action: 'focusBase' }, '*');
+            }
+          }, 120);
+        });
+        return;
+      }
+
+      if (matchHotkey(e, currentHotkeys.triggerGenerate)) {
+        // 如果是纯 Enter（没有 Ctrl/Alt 修饰）在输入框中，不拦截
+        if (isInput && !e.ctrlKey && !e.altKey && !e.metaKey) return;
+        e.preventDefault();
+        // 通过 postMessage 转发给注入层（auto-clicker.js）执行生成按钮点击
+        window.postMessage({ type: '__TRIGGER_GENERATE__' }, '*');
+        return;
+      }
+
+      // 保留原有的 Ctrl+Shift+W 切换面板快捷键（硬编码后备）
       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
         e.preventDefault();
         togglePanel();
+      }
+    });
+
+    // 监听快捷键配置更新（来自 storage 变化 → 闭包内 currentHotkeys 同步）
+    window.addEventListener('__hotkeys_updated__', (e) => {
+      const DEFAULT_HOTKEYS_INNER = {
+        toggleMinimize: { key: 'm', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false },
+        triggerGenerate: { key: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false },
+        focusBase: { key: 'q', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }
+      };
+      currentHotkeys = { ...DEFAULT_HOTKEYS_INNER, ...(e.detail || {}) };
+    });
+
+    // 监听来自 iframe 的快捷键动作请求
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === '__HOTKEY_ACTION__') {
+        if (e.data.action === 'toggleMinimize') {
+          toggleMinimize();
+        } else if (e.data.action === 'triggerGenerate') {
+          // 转发给注入层（auto-clicker.js）执行生成按钮点击
+          window.postMessage({ type: '__TRIGGER_GENERATE__' }, '*');
+        }
       }
     });
 
@@ -784,7 +886,8 @@
       changes.triggerSpace ||
       changes.multiResConfig ||
       changes.hideAutoClicker ||
-      changes.autoClickerI18n) {
+      changes.autoClickerI18n ||
+      changes.hotkeys) {
 
       wildcards = changes.wildcards
         ? changes.wildcards.newValue
@@ -813,6 +916,14 @@
       autoClickerI18n = changes.autoClickerI18n
         ? changes.autoClickerI18n.newValue
         : autoClickerI18n;
+
+      // 同步快捷键配置
+      if (changes.hotkeys) {
+        hotkeys = changes.hotkeys.newValue;
+        // 如果 injectManagerPanel 中的 currentHotkeys 引用可达，直接更新
+        // 此处通过自定义事件通知闭包内部更新
+        window.dispatchEvent(new CustomEvent('__hotkeys_updated__', { detail: hotkeys }));
+      }
 
       window.postMessage({
         type: '__WILDCARD_UPDATE__',
