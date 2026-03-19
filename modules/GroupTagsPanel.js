@@ -20,7 +20,6 @@ let draggedTagInfo = null; // 普通标签拖拽状态：{ tag, sourceCategoryIn
 let favoritePreviewPopover = null;
 let favoritesHistorySnapshot = null;
 let favoritePreviewHideTimer = null;
-let sentenceCardEditState = null;
 
 function normalizeGroupItemType(value) {
   if (groupTagsDataUtils.normalizeGroupItemType) {
@@ -1761,9 +1760,32 @@ function buildFavoritePreviewHtml(item) {
   `;
 }
 
-function buildSentencePreviewHtml(item) {
+function buildSentencePreviewHtml(item, isEdit) {
   const zh = escapeHtmlText(item?.zh || '');
   const en = escapeHtmlText(item?.en || '');
+  if (isEdit) {
+    const editableStyles = `outline: none; cursor: text; border-bottom: 1px dashed rgba(255,255,255,0.2); transition: border-color 0.2s, background-color 0.2s; padding: 2px 4px; margin: -2px -4px; border-radius: 4px;`;
+    const focusStyles = `onfocus="this.style.borderBottom='1px solid #818cf8'; this.style.backgroundColor='rgba(129, 140, 248, 0.1)';" onblur="this.style.borderBottom='1px dashed rgba(255,255,255,0.2)'; this.style.backgroundColor='transparent';"`;
+    return `
+      <div class="favorites-preview-title">
+        <div>
+          <div>句子预览 <span style="color:#818cf8; font-size:11px; margin-left:4px; font-weight:normal;">(点击文本直接修改)</span></div>
+          <div class="favorites-preview-meta">Sentence</div>
+        </div>
+        <span class="favorite-type-badge sentence-preview-badge" style="background:#4f46e5;">Editing</span>
+      </div>
+      <div class="favorites-preview-body">
+        <div class="favorites-preview-section">
+          <div class="favorites-preview-label">中文</div>
+          <div class="favorites-preview-text sentence-preview-edit-zh" contenteditable="true" style="${editableStyles}" ${focusStyles} spellcheck="false">${zh}</div>
+        </div>
+        <div class="favorites-preview-section">
+          <div class="favorites-preview-label">English</div>
+          <div class="favorites-preview-text sentence-preview-edit-en" contenteditable="true" style="${editableStyles}" ${focusStyles} spellcheck="false">${en}</div>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="favorites-preview-title">
       <div>
@@ -1870,7 +1892,7 @@ function bindFavoritePreview(card, item) {
   });
 }
 
-function bindSentencePreview(card, item) {
+function bindSentencePreview(card, item, currentCategory, currentGroup, zhPart, enPart) {
   const updatePosition = () => positionFavoritePreviewPopover(card.getBoundingClientRect());
 
   card.addEventListener('mouseenter', () => {
@@ -1879,7 +1901,33 @@ function bindSentencePreview(card, item) {
       favoritePreviewHideTimer = null;
     }
     const popover = ensureFavoritePreviewPopover();
-    popover.innerHTML = buildSentencePreviewHtml(item);
+    popover.innerHTML = buildSentencePreviewHtml(item, isEditMode);
+    
+    if (isEditMode) {
+      const zhInput = popover.querySelector('.sentence-preview-edit-zh');
+      const enInput = popover.querySelector('.sentence-preview-edit-en');
+      if (zhInput) {
+        zhInput.addEventListener('input', (e) => {
+          const val = e.target.innerText;
+          item.zh = val;
+          if (zhPart) zhPart.textContent = val;
+          if (currentCategory) currentCategory._modified = true;
+          if (currentGroup) currentGroup._modified = true;
+        });
+        zhInput.addEventListener('keydown', (e) => e.stopPropagation());
+      }
+      if (enInput) {
+        enInput.addEventListener('input', (e) => {
+          const val = e.target.innerText;
+          item.en = val;
+          if (enPart) enPart.textContent = val;
+          if (currentCategory) currentCategory._modified = true;
+          if (currentGroup) currentGroup._modified = true;
+        });
+        enInput.addEventListener('keydown', (e) => e.stopPropagation());
+      }
+    }
+
     popover.classList.add('visible');
     updatePosition();
   });
@@ -2529,48 +2577,8 @@ function renderTagsGrid() {
     if (btn) btn.style.backgroundColor = color;
   }
 
-  const isEditingSentenceCard = (tagIndex) => (
-    !!sentenceCardEditState
-    && sentenceCardEditState.categoryIndex === activeCategoryIndex
-    && sentenceCardEditState.groupIndex === activeGroupIndex
-    && sentenceCardEditState.tagIndex === tagIndex
-  );
-
-  const openSentenceCardEditor = (tagIndex, item) => {
-    sentenceCardEditState = {
-      categoryIndex: activeCategoryIndex,
-      groupIndex: activeGroupIndex,
-      tagIndex,
-      draftZh: sanitizeText(item.zh),
-      draftEn: sanitizeText(item.en)
-    };
-    renderTagsGrid();
-  };
-
-  const closeSentenceCardEditor = () => {
-    sentenceCardEditState = null;
-    renderTagsGrid();
-  };
-
-  const commitSentenceCardEditor = (item) => {
-    if (!sentenceCardEditState) return;
-    const nextZh = sanitizeText(sentenceCardEditState.draftZh);
-    const nextEn = sanitizeText(sentenceCardEditState.draftEn);
-    if (!nextZh || !nextEn) {
-      showInfoModal('句子不能为空', '句子的中文和英文内容都不能为空。');
-      return;
-    }
-    item.zh = nextZh;
-    item.en = nextEn;
-    currentGroup._modified = true;
-    currentCategory._modified = true;
-    sentenceCardEditState = null;
-    renderTagsGrid();
-  };
-
   currentGroup.tags.forEach((t, tagIndex) => {
     const isSentence = isSentenceGroupItem(t);
-    const isSentenceEditing = isSentence && isEditingSentenceCard(tagIndex);
     const promptText = getGroupItemPromptText(t);
     const promptKey = normalizeTagKey(promptText);
     const translationText = getGroupItemTranslationText(t);
@@ -2581,7 +2589,7 @@ function renderTagsGrid() {
     const sentenceZh = isSentence ? sanitizeText(t.zh) : '';
 
     const card = document.createElement('div');
-    card.className = `tag-card ${isSentence ? 'sentence-card' : ''} ${isSentenceEditing ? 'sentence-card-editing' : ''} ${isUsedHere ? 'used' : ''} ${isUsedOther && !isUsedHere ? 'used-other' : ''}`.trim();
+    card.className = `tag-card ${isSentence ? 'sentence-card' : ''} ${isUsedHere ? 'used' : ''} ${isUsedOther && !isUsedHere ? 'used-other' : ''}`.trim();
     if (!isSentence) {
       card.title = `${t.zh}\n${displayEn}`;
     }
@@ -2605,94 +2613,6 @@ function renderTagsGrid() {
         }
       };
     }
-    if (isSentence && !isSentenceEditing) {
-      bindSentencePreview(card, t);
-    }
-
-    if (isEditMode && isSentence && !isSentenceEditing) {
-      card.ondblclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openSentenceCardEditor(tagIndex, t);
-      };
-    }
-
-    if (isSentenceEditing) {
-      card.title = '';
-      const zhEditor = document.createElement('textarea');
-      zhEditor.className = 'inline-rename-input sentence-inline-input sentence-inline-zh';
-      zhEditor.placeholder = '中文';
-      zhEditor.value = sentenceCardEditState?.draftZh || '';
-      zhEditor.addEventListener('input', () => {
-        if (!sentenceCardEditState) return;
-        sentenceCardEditState.draftZh = zhEditor.value;
-      });
-      zhEditor.addEventListener('keydown', (ev) => {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-          ev.preventDefault();
-          commitSentenceCardEditor(t);
-        }
-        if (ev.key === 'Escape') {
-          ev.preventDefault();
-          closeSentenceCardEditor();
-        }
-      });
-
-      const enEditor = document.createElement('textarea');
-      enEditor.className = 'inline-rename-input sentence-inline-input sentence-inline-en';
-      enEditor.placeholder = 'English';
-      enEditor.value = sentenceCardEditState?.draftEn || '';
-      enEditor.addEventListener('input', () => {
-        if (!sentenceCardEditState) return;
-        sentenceCardEditState.draftEn = enEditor.value;
-      });
-      enEditor.addEventListener('keydown', (ev) => {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-          ev.preventDefault();
-          commitSentenceCardEditor(t);
-        }
-        if (ev.key === 'Escape') {
-          ev.preventDefault();
-          closeSentenceCardEditor();
-        }
-      });
-
-      const actions = document.createElement('div');
-      actions.className = 'sentence-edit-actions';
-
-      const btnSaveSentence = document.createElement('button');
-      btnSaveSentence.type = 'button';
-      btnSaveSentence.className = 'sentence-edit-btn primary';
-      btnSaveSentence.textContent = '保存';
-      btnSaveSentence.addEventListener('click', (e) => {
-        e.stopPropagation();
-        commitSentenceCardEditor(t);
-      });
-
-      const btnCancelSentence = document.createElement('button');
-      btnCancelSentence.type = 'button';
-      btnCancelSentence.className = 'sentence-edit-btn';
-      btnCancelSentence.textContent = '取消';
-      btnCancelSentence.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeSentenceCardEditor();
-      });
-
-      actions.appendChild(btnSaveSentence);
-      actions.appendChild(btnCancelSentence);
-
-      card.appendChild(zhEditor);
-      card.appendChild(enEditor);
-      card.appendChild(actions);
-      dom.tagsGrid.appendChild(card);
-      setTimeout(() => {
-        if (document.activeElement !== zhEditor && document.body.contains(zhEditor)) {
-          zhEditor.focus();
-          zhEditor.setSelectionRange(zhEditor.value.length, zhEditor.value.length);
-        }
-      }, 0);
-      return;
-    }
 
     const zhPart = document.createElement('div');
     zhPart.className = `tag-zh-part ${isSentence ? 'sentence-result-part' : ''}`.trim();
@@ -2700,15 +2620,11 @@ function renderTagsGrid() {
     zhPart.textContent = isSentence ? sentenceZh : t.zh;
 
     // 编辑模式：双击编辑翻译 + 悬浮提示
-    if (isEditMode) {
-      zhPart.title = isSentence ? '双击编辑句子' : '双击编辑翻译';
+    if (isEditMode && !isSentence) {
+      zhPart.title = '双击编辑翻译';
       zhPart.style.cursor = 'text';
       zhPart.ondblclick = (e) => {
         e.stopPropagation();
-        if (isSentence) {
-          openSentenceCardEditor(tagIndex, t);
-          return;
-        }
 
         const origWidth = zhPart.getBoundingClientRect().width;
         zhPart.style.width = origWidth + 'px';
@@ -2737,6 +2653,8 @@ function renderTagsGrid() {
           if (ev.key === 'Escape') renderTagsGrid();
         });
       };
+    } else if (isEditMode && isSentence) {
+      zhPart.title = '悬停在卡片上以编辑句子';
     }
 
     const enPart = document.createElement('div');
@@ -2744,15 +2662,11 @@ function renderTagsGrid() {
     enPart.textContent = isSentence ? sentenceEn : displayEn;
     
     // 编辑模式：双方皆可双击编辑
-    if (isEditMode) {
-      enPart.title = isSentence ? '双击编辑句子' : '双击编辑英文';
+    if (isEditMode && !isSentence) {
+      enPart.title = '双击编辑英文';
       enPart.style.cursor = 'text';
       enPart.ondblclick = (e) => {
         e.stopPropagation();
-        if (isSentence) {
-          openSentenceCardEditor(tagIndex, t);
-          return;
-        }
 
         const origWidth = enPart.getBoundingClientRect().width;
         enPart.style.width = origWidth + 'px';
@@ -2792,6 +2706,12 @@ function renderTagsGrid() {
           if (ev.key === 'Escape') renderTagsGrid();
         });
       };
+    } else if (isEditMode && isSentence) {
+      enPart.title = '悬停在卡片上以编辑句子';
+    }
+
+    if (isSentence) {
+      bindSentencePreview(card, t, currentCategory, currentGroup, zhPart, enPart);
     }
 
     card.appendChild(zhPart);
@@ -2800,9 +2720,8 @@ function renderTagsGrid() {
     // 编辑模式：拖拽 + × 删除角标
     if (isEditMode) {
       // 允许拖拽到其他分组或分类的 Tab 上来跨组移动
-      card.draggable = !isSentenceEditing;
+      card.draggable = true;
       card.addEventListener('dragstart', () => {
-        if (isSentenceEditing) return;
         draggedTagInfo = {
           tag: cloneData(t),
           sourceCategoryIndex: activeCategoryIndex,
