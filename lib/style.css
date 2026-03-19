@@ -124,6 +124,27 @@
     font-style: italic;
 }
 
+.tag-zh-row.tag-ai-pending {
+    color: #d1fae5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    line-height: 1;
+    min-height: 14px;
+    font-size: 10px;
+}
+
+.tag-ai-pending-label {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
 .tag-capsule.tag-ai-pending {
     background: linear-gradient(135deg, #1f2937 0%, #0f766e 100%);
     border-color: rgba(45, 212, 191, 0.6);
@@ -161,7 +182,15 @@
     color: #d1fae5;
     font-size: 10px;
     font-family: monospace;
+    font-variant-numeric: tabular-nums;
     line-height: 1.6;
+    min-width: 32px;
+    text-align: center;
+}
+
+.tag-zh-row.tag-ai-pending .tag-ai-spinner,
+.tag-zh-row.tag-ai-pending .tag-ai-timer {
+    margin-left: 0;
 }
 
 @keyframes tag-ai-spin {
@@ -323,8 +352,12 @@
 }
 
 /* Simplification for multi-selection: hide non-batch buttons */
-.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls > *:not(.tbtn-del):not(.tbtn-copy):not(.tbtn-toggle) {
+.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls > *:not(.tbtn-del):not(.tbtn-copy):not(.tbtn-toggle):not(.tbtn-ai-annotate-batch) {
     display: none !important;
+}
+
+.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls .tbtn-ai-annotate-batch {
+    display: flex !important;
 }
 
 /* Ensure the remaining buttons look balanced */
@@ -392,6 +425,45 @@
 .tbtn-retranslate:hover {
     color: #dbeafe;
     background: rgba(59, 130, 246, 0.2);
+}
+
+.tbtn-ai-annotate,
+.tbtn-ai-annotate-batch {
+    color: #f5d0fe;
+    background: rgba(168, 85, 247, 0.12);
+    border: 1px solid rgba(216, 180, 254, 0.25);
+    box-sizing: border-box;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.tbtn-ai-annotate:hover,
+.tbtn-ai-annotate-batch:hover {
+    color: #fff;
+    background: rgba(168, 85, 247, 0.28);
+    border-color: rgba(233, 213, 255, 0.45);
+}
+
+.tbtn-ai-annotate.is-loading,
+.tbtn-ai-annotate-batch.is-loading {
+    opacity: 0.85;
+    cursor: progress;
+}
+
+.tbtn-ai-annotate.is-loading::after,
+.tbtn-ai-annotate-batch.is-loading::after {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid rgba(236, 254, 255, 0.35);
+    border-top-color: #ecfeff;
+    animation: tag-ai-spin 0.8s linear infinite;
+}
+
+.tbtn-ai-annotate-batch {
+    display: none;
 }
 
 .fav-star {

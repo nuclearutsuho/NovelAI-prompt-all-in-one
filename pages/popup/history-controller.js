@@ -52,7 +52,8 @@ export default function createHistoryController(deps = {}) {
         !!tag.disabled,
         !!tag.isStart,
         tag.dynWeight || 1,
-        tag.aiOriginal || ''
+        tag.aiOriginal || '',
+        tag.aiZhTranslation || ''
       ])
     );
     const negFingerprint = JSON.stringify(
@@ -61,7 +62,8 @@ export default function createHistoryController(deps = {}) {
         !!tag.disabled,
         !!tag.isStart,
         tag.dynWeight || 1,
-        tag.aiOriginal || ''
+        tag.aiOriginal || '',
+        tag.aiZhTranslation || ''
       ])
     );
     const charactersFingerprint = JSON.stringify(
@@ -73,14 +75,16 @@ export default function createHistoryController(deps = {}) {
           !!tag.disabled,
           !!tag.isStart,
           tag.dynWeight || 1,
-          tag.aiOriginal || ''
+          tag.aiOriginal || '',
+          tag.aiZhTranslation || ''
         ]),
         nd: serializeTagList(character.negTags || []).map((tag) => [
           tag.value,
           !!tag.disabled,
           !!tag.isStart,
           tag.dynWeight || 1,
-          tag.aiOriginal || ''
+          tag.aiOriginal || '',
+          tag.aiZhTranslation || ''
         ])
       }))
     );

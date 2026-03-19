@@ -65,6 +65,13 @@ export default function createPromptSyncController(deps = {}) {
     return parsePromptToTags(promptText || '');
   }
 
+  function mergeIncomingTagsWithLocalState(currentTags = [], incomingTags = []) {
+    return preservePendingAiTags(
+      currentTags,
+      mergeTagsPreservingDisabled(currentTags, incomingTags)
+    );
+  }
+
   function clearPromptRetryTimer() {
     if (promptRetryTimer !== null) {
       window.clearTimeout(promptRetryTimer);
@@ -259,18 +266,14 @@ export default function createPromptSyncController(deps = {}) {
     if (shouldUpdatePos) {
       nextBaseState.rawPositive = positive || '';
       const parsedPosTags = getIncomingTagList(incomingPositiveTags, nextBaseState.rawPositive);
-      nextPositiveTags = Array.isArray(incomingPositiveTags)
-        ? preservePendingAiTags(currentPositiveTags, parsedPosTags)
-        : preservePendingAiTags(currentPositiveTags, mergeTagsPreservingDisabled(currentPositiveTags, parsedPosTags));
+      nextPositiveTags = mergeIncomingTagsWithLocalState(currentPositiveTags, parsedPosTags);
       nextBaseState.positiveTags = nextPositiveTags;
     }
 
     if (shouldUpdateNeg) {
       nextBaseState.rawNegative = negative || '';
       const parsedNegTags = getIncomingTagList(incomingNegativeTags, nextBaseState.rawNegative);
-      nextNegativeTags = Array.isArray(incomingNegativeTags)
-        ? preservePendingAiTags(currentNegativeTags, parsedNegTags)
-        : preservePendingAiTags(currentNegativeTags, mergeTagsPreservingDisabled(currentNegativeTags, parsedNegTags));
+      nextNegativeTags = mergeIncomingTagsWithLocalState(currentNegativeTags, parsedNegTags);
       nextBaseState.negativeTags = nextNegativeTags;
     }
 
@@ -370,18 +373,14 @@ export default function createPromptSyncController(deps = {}) {
 
       if (shouldUpdatePos || charObj.posPrompt === undefined) {
         const parsedPosTags = getIncomingTagList(charPrompt.positiveTags, charPrompt.positive || '');
-        newPosTags = Array.isArray(charPrompt.positiveTags)
-          ? preservePendingAiTags(charObj.posTags || [], parsedPosTags)
-          : preservePendingAiTags(charObj.posTags || [], mergeTagsPreservingDisabled(charObj.posTags || [], parsedPosTags));
+        newPosTags = mergeIncomingTagsWithLocalState(charObj.posTags || [], parsedPosTags);
         charObj.posPrompt = charPrompt.positive || '';
         charObj.posTags = newPosTags;
       }
 
       if (shouldUpdateNeg || charObj.negPrompt === undefined) {
         const parsedNegTags = getIncomingTagList(charPrompt.negativeTags, charPrompt.negative || '');
-        newNegTags = Array.isArray(charPrompt.negativeTags)
-          ? preservePendingAiTags(charObj.negTags || [], parsedNegTags)
-          : preservePendingAiTags(charObj.negTags || [], mergeTagsPreservingDisabled(charObj.negTags || [], parsedNegTags));
+        newNegTags = mergeIncomingTagsWithLocalState(charObj.negTags || [], parsedNegTags);
         charObj.negPrompt = charPrompt.negative || '';
         charObj.negTags = newNegTags;
       }

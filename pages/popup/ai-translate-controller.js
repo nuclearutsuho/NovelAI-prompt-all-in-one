@@ -2,12 +2,14 @@ const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
 const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 60000;
 const AI_PENDING_PLACEHOLDER_VALUE = '__AI_TRANSLATING__';
 const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
+const DEFAULT_AI_TAG_ANNOTATION_PROMPT = "You translate English NovelAI prompt tags or short prompt fragments into concise Simplified Chinese notes for human reading only. Keep the meaning accurate and natural. If the user sends plain text, reply with ONLY the Chinese translation text. If the user sends a JSON array of strings, reply with ONLY a JSON array of Chinese translations in the same order. Do not add markdown, numbering, explanations, or any extra text.";
 const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
   providerPreset: 'openai',
   apiUrl: 'https://api.openai.com/v1/chat/completions',
   apiKey: '',
   model: 'gpt-4o-mini',
-  systemPrompt: DEFAULT_AI_SYSTEM_PROMPT
+  systemPrompt: DEFAULT_AI_SYSTEM_PROMPT,
+  tagAnnotationPrompt: DEFAULT_AI_TAG_ANNOTATION_PROMPT
 });
 
 function cloneDeep(value) {
@@ -41,7 +43,10 @@ function normalizeAiProfile(profile = {}, index = 1) {
     model: String(profile.model || fallback.model).trim() || fallback.model,
     systemPrompt: typeof profile.systemPrompt === 'string' && profile.systemPrompt.trim()
       ? profile.systemPrompt
-      : fallback.systemPrompt
+      : fallback.systemPrompt,
+    tagAnnotationPrompt: typeof profile.tagAnnotationPrompt === 'string' && profile.tagAnnotationPrompt.trim()
+      ? profile.tagAnnotationPrompt
+      : fallback.tagAnnotationPrompt
   };
 }
 
@@ -112,7 +117,8 @@ export default function createAiTranslateController(deps = {}) {
     getTargetTagList = () => null,
     renderTargetIfVisible = () => {},
     syncTargetAfterResolve = () => {},
-    refreshPendingVisuals = () => {}
+    refreshPendingVisuals = () => {},
+    recordAnnotationChange = () => {}
   } = deps;
 
   let aiTranslateConfigState = null;
@@ -160,6 +166,13 @@ export default function createAiTranslateController(deps = {}) {
       return value.trim();
     }
     return String(value?.aiPendingRequestId || '').trim();
+  }
+
+  function getAiZhPendingRequestId(value) {
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+    return String(value?.aiZhPendingRequestId || '').trim();
   }
 
   function createAiPendingRequestId() {
@@ -225,6 +238,10 @@ export default function createAiTranslateController(deps = {}) {
 
   function isPendingTag(tag = {}) {
     return !!tag?.aiPending;
+  }
+
+  function isAiZhPendingTag(tag = {}) {
+    return !!tag?.aiZhPending;
   }
 
   function getSyncableTagList(tags = []) {
@@ -402,6 +419,103 @@ export default function createAiTranslateController(deps = {}) {
     return true;
   }
 
+  function findPendingAiZhTagIndex(tagList = [], pendingTagOrRequestId) {
+    const requestId = getAiZhPendingRequestId(pendingTagOrRequestId);
+    if (requestId) {
+      return tagList.findIndex((tag) => isAiZhPendingTag(tag) && getAiZhPendingRequestId(tag) === requestId);
+    }
+    if (!pendingTagOrRequestId) return -1;
+    return tagList.indexOf(pendingTagOrRequestId);
+  }
+
+  function markAiZhTagPending(targetContext, tagOrIndex, requestId) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !requestId) return false;
+
+    const pendingIndex = typeof tagOrIndex === 'number'
+      ? tagOrIndex
+      : tagList.indexOf(tagOrIndex);
+    if (pendingIndex < 0 || !tagList[pendingIndex]) return false;
+
+    const targetTag = tagList[pendingIndex];
+    targetTag.aiZhPending = true;
+    targetTag.aiZhPendingStartedAt = Date.now();
+    targetTag.aiZhPendingRequestId = requestId;
+    delete targetTag.aiZhErrorMessage;
+    renderTargetIfVisible(target);
+    syncPendingVisualTimer();
+    return true;
+  }
+
+  function resolveAiZhTag(targetContext, pendingTagOrRequestId, translatedText) {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiZhTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const targetTag = tagList[pendingIndex];
+    targetTag.aiZhTranslation = String(translatedText || '').replace(/\s+/g, ' ').trim();
+    delete targetTag.aiZhPending;
+    delete targetTag.aiZhPendingStartedAt;
+    delete targetTag.aiZhPendingRequestId;
+    delete targetTag.aiZhErrorMessage;
+    renderTargetIfVisible(target);
+    return true;
+  }
+
+  function restoreAiZhTag(targetContext, pendingTagOrRequestId, previousTranslation = '') {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiZhTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const targetTag = tagList[pendingIndex];
+    const normalizedPrevious = String(previousTranslation || '').trim();
+    if (normalizedPrevious) {
+      targetTag.aiZhTranslation = normalizedPrevious;
+    } else {
+      delete targetTag.aiZhTranslation;
+    }
+    delete targetTag.aiZhPending;
+    delete targetTag.aiZhPendingStartedAt;
+    delete targetTag.aiZhPendingRequestId;
+    delete targetTag.aiZhErrorMessage;
+    renderTargetIfVisible(target);
+    return true;
+  }
+
+  function markAiZhTagFailed(targetContext, pendingTagOrRequestId, previousTranslation = '', errorMessage = '') {
+    const target = normalizeTargetContext(targetContext);
+    const tagList = getTargetTagList(target);
+    if (!tagList || !pendingTagOrRequestId) return false;
+
+    const pendingIndex = findPendingAiZhTagIndex(tagList, pendingTagOrRequestId);
+    if (pendingIndex === -1) return false;
+
+    const targetTag = tagList[pendingIndex];
+    const normalizedPrevious = String(previousTranslation || '').trim();
+    if (normalizedPrevious) {
+      targetTag.aiZhTranslation = normalizedPrevious;
+    } else {
+      delete targetTag.aiZhTranslation;
+    }
+    delete targetTag.aiZhPending;
+    delete targetTag.aiZhPendingStartedAt;
+    delete targetTag.aiZhPendingRequestId;
+    if (errorMessage) {
+      targetTag.aiZhErrorMessage = String(errorMessage).trim();
+    } else {
+      delete targetTag.aiZhErrorMessage;
+    }
+    renderTargetIfVisible(target);
+    return true;
+  }
+
   async function ensureAiApiPermission(apiUrl) {
     const originPattern = getOriginPatternFromApiUrl(apiUrl);
     if (await containsOriginPermission([originPattern])) {
@@ -410,7 +524,7 @@ export default function createAiTranslateController(deps = {}) {
     return requestOriginPermission([originPattern]);
   }
 
-  async function aiTranslateText(sourceText, profile, { controller = null } = {}) {
+  async function runAiCompletion(sourceText, profile, { controller = null, systemPrompt = DEFAULT_AI_SYSTEM_PROMPT } = {}) {
     const requestController = controller || new AbortController();
     const timer = window.setTimeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
 
@@ -430,7 +544,7 @@ export default function createAiTranslateController(deps = {}) {
         body: JSON.stringify({
           model: profile.model,
           messages: [
-            { role: 'system', content: profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT },
+            { role: 'system', content: systemPrompt || DEFAULT_AI_SYSTEM_PROMPT },
             { role: 'user', content: sourceText }
           ],
           temperature: 0.3
@@ -443,15 +557,58 @@ export default function createAiTranslateController(deps = {}) {
       }
 
       const responseJson = await response.json();
-      const translatedText = extractTranslatedText(responseJson).replace(/\s+/g, ' ').trim();
-      if (!translatedText) {
+      const completionText = extractTranslatedText(responseJson).trim();
+      if (!completionText) {
         throw new Error('EMPTY_TRANSLATION');
       }
 
-      return translatedText;
+      return completionText;
     } finally {
       window.clearTimeout(timer);
     }
+  }
+
+  async function aiTranslateText(sourceText, profile, { controller = null } = {}) {
+    const translatedText = await runAiCompletion(sourceText, profile, {
+      controller,
+      systemPrompt: profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT
+    });
+    return translatedText.replace(/\s+/g, ' ').trim();
+  }
+
+  function extractJsonPayload(text) {
+    const rawText = String(text || '').trim();
+    if (!rawText) return '';
+
+    const fencedMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fencedMatch && fencedMatch[1]) {
+      return fencedMatch[1].trim();
+    }
+
+    return rawText;
+  }
+
+  function parseTagAnnotationBatchResponse(responseText, expectedCount) {
+    let parsed;
+    try {
+      parsed = JSON.parse(extractJsonPayload(responseText));
+    } catch (error) {
+      throw new Error('INVALID_BATCH_TRANSLATION_JSON');
+    }
+
+    let items = [];
+    if (Array.isArray(parsed)) {
+      items = parsed;
+    } else if (Array.isArray(parsed?.translations)) {
+      items = parsed.translations;
+    }
+
+    const normalized = items.map((item) => String(item ?? '').replace(/\s+/g, ' ').trim());
+    if (normalized.length !== expectedCount || normalized.some((item) => !item)) {
+      throw new Error('BATCH_TRANSLATION_COUNT_MISMATCH');
+    }
+
+    return normalized;
   }
 
   function renderAiTranslateProfileOptions() {
@@ -482,12 +639,14 @@ export default function createAiTranslateController(deps = {}) {
     const apiKeyInput = document.getElementById('ai-api-key');
     const modelInput = document.getElementById('ai-model');
     const systemPromptInput = document.getElementById('ai-system-prompt');
+    const tagAnnotationPromptInput = document.getElementById('ai-tag-annotation-prompt');
 
     if (profileNameInput) profileNameInput.value = profile.name || '';
     if (apiUrlInput) apiUrlInput.value = profile.apiUrl || '';
     if (apiKeyInput) apiKeyInput.value = profile.apiKey || '';
     if (modelInput) modelInput.value = profile.model || '';
     if (systemPromptInput) systemPromptInput.value = profile.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT;
+    if (tagAnnotationPromptInput) tagAnnotationPromptInput.value = profile.tagAnnotationPrompt || DEFAULT_AI_TAG_ANNOTATION_PROMPT;
 
     renderAiTranslateProfileOptions();
   }
@@ -506,6 +665,7 @@ export default function createAiTranslateController(deps = {}) {
     const apiKeyInput = document.getElementById('ai-api-key');
     const modelInput = document.getElementById('ai-model');
     const systemPromptInput = document.getElementById('ai-system-prompt');
+    const tagAnnotationPromptInput = document.getElementById('ai-tag-annotation-prompt');
 
     const nextConfig = cloneDeep(aiTranslateConfigState);
     const profileIndex = nextConfig.profiles.findIndex((item) => item.id === profile.id);
@@ -517,7 +677,8 @@ export default function createAiTranslateController(deps = {}) {
       apiUrl: apiUrlInput?.value,
       apiKey: apiKeyInput?.value,
       model: modelInput?.value,
-      systemPrompt: systemPromptInput?.value
+      systemPrompt: systemPromptInput?.value,
+      tagAnnotationPrompt: tagAnnotationPromptInput?.value
     }, profileIndex + 1);
 
     await saveConfig(nextConfig);
@@ -534,11 +695,174 @@ export default function createAiTranslateController(deps = {}) {
       return getLocalizedText('toast_ai_translate_empty', 'The API returned an empty translation.');
     }
 
+     if (message === 'INVALID_BATCH_TRANSLATION_JSON') {
+      return getLocalizedText('toast_ai_tag_annotation_invalid_json', 'The AI response is not valid JSON.');
+    }
+
+    if (message === 'BATCH_TRANSLATION_COUNT_MISMATCH') {
+      return getLocalizedText('toast_ai_tag_annotation_count_mismatch', 'The AI response count does not match the selected tags.');
+    }
+
     if (!message) {
       return getLocalizedText('toast_ai_translate_failed', 'Translation failed.');
     }
 
     return `${getLocalizedText('toast_ai_translate_failed', 'Translation failed.')}: ${message}`;
+  }
+
+  function extractAnnotatableTagText(tag = {}) {
+    const rawValue = String(tag?.value || '').trim();
+    if (!rawValue) return '';
+
+    const isDynHeader = rawValue.startsWith('||') && (rawValue !== '||' || tag?.isStart);
+    const isDynFooter = rawValue === '||' && !tag?.isStart;
+    const isCompFooter = rawValue === ' ::';
+    const blockMatch = rawValue.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+    const headerMatch = rawValue.match(/^([-?\d\.]+)::$/);
+
+    if (isDynHeader || isDynFooter || isCompFooter || headerMatch) {
+      return '';
+    }
+
+    let cleanText = blockMatch ? blockMatch[2] : rawValue;
+
+    if (!blockMatch && (cleanText.startsWith('{') || cleanText.startsWith('['))) {
+      let inc = 0;
+      while (cleanText.startsWith('{') && cleanText.endsWith('}')) {
+        inc += 1;
+        cleanText = cleanText.slice(1, -1);
+      }
+      if (inc === 0) {
+        while (cleanText.startsWith('[') && cleanText.endsWith(']')) {
+          cleanText = cleanText.slice(1, -1);
+        }
+      }
+    }
+
+    if (Number.isFinite(Number(tag?.dynWeight)) && Number(tag.dynWeight) !== 1) {
+      cleanText = cleanText.replace(/^(.*?)(?::\s*-?\d+(?:\.\d+)?)$/, '$1').trim();
+    }
+
+    return cleanText.trim();
+  }
+
+  async function annotateTags({ buttonEl, targetContext, tags = [] } = {}) {
+    const sourceTags = Array.isArray(tags) ? tags.filter(Boolean) : [];
+    if (!sourceTags.length) {
+      showToast('warning', getLocalizedText('toast_ai_tag_annotation_missing', 'Select at least one tag to translate.'));
+      return;
+    }
+
+    if (!aiTranslateConfigState) {
+      await loadConfig();
+    }
+
+    await persistAiTranslateProfileForm();
+
+    const profile = getActiveAiProfile();
+    if (!profile) {
+      showToast('error', getLocalizedText('toast_ai_missing_profile', 'No AI profile is available.'));
+      return;
+    }
+
+    if (!profile.apiUrl) {
+      showToast('warning', getLocalizedText('toast_ai_missing_api_url', 'Please configure an API URL first.'));
+      return;
+    }
+
+    if (!profile.model) {
+      showToast('warning', getLocalizedText('toast_ai_missing_model', 'Please configure a model name first.'));
+      return;
+    }
+
+    try {
+      new URL(profile.apiUrl);
+    } catch (error) {
+      showToast('error', getLocalizedText('toast_ai_invalid_api_url', 'The API URL is invalid.'));
+      return;
+    }
+
+    const target = normalizeTargetContext(targetContext);
+    if (!target) return;
+
+    const requestEntries = sourceTags
+      .map((tag) => ({
+        tag,
+        sourceText: extractAnnotatableTagText(tag),
+        previousTranslation: String(tag?.aiZhTranslation || '').trim(),
+        requestId: createAiPendingRequestId()
+      }))
+      .filter((entry) => entry.sourceText);
+
+    if (!requestEntries.length) {
+      showToast('warning', getLocalizedText('toast_ai_tag_annotation_missing', 'Select at least one tag to translate.'));
+      return;
+    }
+
+    setAiTranslateButtonLoading(buttonEl, true);
+    requestEntries.forEach((entry) => {
+      registerAiPendingRequest(entry.requestId, {
+        targetType: target.type,
+        targetMode: target.mode,
+        charIndex: target.type === 'character' ? target.charIndex : -1,
+        sourceText: entry.sourceText,
+        kind: 'tag-annotation',
+        previousTranslation: entry.previousTranslation
+      });
+      markAiZhTagPending(target, entry.tag, entry.requestId);
+    });
+
+    const granted = await ensureAiApiPermission(profile.apiUrl);
+    if (!granted) {
+      const message = getLocalizedText('toast_ai_permission_denied', 'The API origin permission was denied.');
+      requestEntries.forEach((entry) => {
+        markAiZhTagFailed(target, entry.requestId, entry.previousTranslation, message);
+        cleanupAiPendingRequest(entry.requestId);
+      });
+      syncPendingVisualTimer();
+      setAiTranslateButtonLoading(buttonEl, false);
+      showToast('warning', message);
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      requestEntries.forEach((entry) => setAiPendingRequestController(entry.requestId, controller));
+
+      let translatedItems = [];
+      if (requestEntries.length === 1) {
+        const translatedText = await runAiCompletion(requestEntries[0].sourceText, profile, {
+          controller,
+          systemPrompt: profile.tagAnnotationPrompt || DEFAULT_AI_TAG_ANNOTATION_PROMPT
+        });
+        translatedItems = [translatedText.replace(/\s+/g, ' ').trim()];
+      } else {
+        const payload = JSON.stringify(requestEntries.map((entry) => entry.sourceText));
+        const completionText = await runAiCompletion(payload, profile, {
+          controller,
+          systemPrompt: profile.tagAnnotationPrompt || DEFAULT_AI_TAG_ANNOTATION_PROMPT
+        });
+        translatedItems = parseTagAnnotationBatchResponse(completionText, requestEntries.length);
+      }
+
+      requestEntries.forEach((entry, index) => {
+        resolveAiZhTag(target, entry.requestId, translatedItems[index]);
+        cleanupAiPendingRequest(entry.requestId);
+      });
+      syncTargetAfterResolve(target, 'popup');
+      recordAnnotationChange(target);
+    } catch (error) {
+      const errorMessage = formatAiTranslateError(error);
+      console.error('[AI Translate] 译注失败:', error);
+      requestEntries.forEach((entry) => {
+        markAiZhTagFailed(target, entry.requestId, entry.previousTranslation, errorMessage);
+        cleanupAiPendingRequest(entry.requestId);
+      });
+      showToast('error', errorMessage);
+    } finally {
+      syncPendingVisualTimer();
+      setAiTranslateButtonLoading(buttonEl, false);
+    }
   }
 
   async function translateFromInput({ inputEl, buttonEl, tagEditor, scrollContainer, targetContext, pendingTag = null, existingTag = null }) {
@@ -634,10 +958,6 @@ export default function createAiTranslateController(deps = {}) {
       }
     }
 
-    if (scrollContainer) {
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    }
-
     syncPendingVisualTimer();
 
     const granted = await ensureAiApiPermission(profile.apiUrl);
@@ -677,9 +997,6 @@ export default function createAiTranslateController(deps = {}) {
       const replaced = resolvePendingAiTag(target, requestId, translatedText);
       if (!replaced) return;
 
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
     } catch (error) {
       if (isAiPendingRequestCanceled(requestId)) {
         if (isRetranslatingExistingTag) {
@@ -716,7 +1033,8 @@ export default function createAiTranslateController(deps = {}) {
       document.getElementById('ai-api-url'),
       document.getElementById('ai-api-key'),
       document.getElementById('ai-model'),
-      document.getElementById('ai-system-prompt')
+      document.getElementById('ai-system-prompt'),
+      document.getElementById('ai-tag-annotation-prompt')
     ].filter(Boolean);
 
     const scheduleSave = () => {
@@ -814,6 +1132,7 @@ export default function createAiTranslateController(deps = {}) {
     loadConfig,
     bindSettingsUI,
     translateFromInput,
+    annotateTags,
     handleRemovedTags,
     preservePendingTags,
     isPendingTag,

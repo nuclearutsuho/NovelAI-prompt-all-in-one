@@ -56,6 +56,25 @@ function normalizeTagObject(tag = {}) {
     normalized.aiOriginal = tag.aiOriginal.trim();
   }
 
+  if (typeof tag.aiZhTranslation === 'string' && tag.aiZhTranslation.trim()) {
+    normalized.aiZhTranslation = tag.aiZhTranslation.trim();
+  }
+
+  if (tag.aiZhPending) normalized.aiZhPending = true;
+
+  const aiZhPendingStartedAt = Number(tag.aiZhPendingStartedAt);
+  if (Number.isFinite(aiZhPendingStartedAt) && aiZhPendingStartedAt > 0) {
+    normalized.aiZhPendingStartedAt = aiZhPendingStartedAt;
+  }
+
+  if (typeof tag.aiZhPendingRequestId === 'string' && tag.aiZhPendingRequestId.trim()) {
+    normalized.aiZhPendingRequestId = tag.aiZhPendingRequestId.trim();
+  }
+
+  if (typeof tag.aiZhErrorMessage === 'string' && tag.aiZhErrorMessage.trim()) {
+    normalized.aiZhErrorMessage = tag.aiZhErrorMessage.trim();
+  }
+
   return normalized;
 }
 
@@ -647,6 +666,24 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       },
       existingTag: tag
     }),
+    onAnnotateTag: (tag, buttonEl) => aiTranslateController?.annotateTags({
+      buttonEl,
+      targetContext: {
+        type: 'character',
+        charIndex: index,
+        mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+      },
+      tags: [tag]
+    }),
+    onAnnotateSelectedTags: (tags, buttonEl) => aiTranslateController?.annotateTags({
+      buttonEl,
+      targetContext: {
+        type: 'character',
+        charIndex: index,
+        mode: (charEditors[index]?.activeTab === 'neg') ? 'negative' : 'positive'
+      },
+      tags
+    }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
@@ -847,7 +884,8 @@ function initUI() {
       getTargetTagList: getAiTargetTagList,
       renderTargetIfVisible: renderAiTargetIfVisible,
       syncTargetAfterResolve: syncAiTargetAfterResolve,
-      refreshPendingVisuals: refreshPendingAiVisuals
+      refreshPendingVisuals: refreshPendingAiVisuals,
+      recordAnnotationChange: () => recordHistory('immediate')
     });
   }
   aiTranslateController.bindSettingsUI();
@@ -1159,6 +1197,22 @@ function initUI() {
         mode: currentMode
       },
       existingTag: tag
+    }),
+    onAnnotateTag: (tag, buttonEl) => aiTranslateController?.annotateTags({
+      buttonEl,
+      targetContext: {
+        type: 'base',
+        mode: currentMode
+      },
+      tags: [tag]
+    }),
+    onAnnotateSelectedTags: (tags, buttonEl) => aiTranslateController?.annotateTags({
+      buttonEl,
+      targetContext: {
+        type: 'base',
+        mode: currentMode
+      },
+      tags
     }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onChange: (tags) => {
@@ -2219,6 +2273,27 @@ function mergeTagMetadata(oldTag = {}, newTag = {}) {
 
   if (typeof oldTag.aiOriginal === 'string' && oldTag.aiOriginal.trim() && !mergedTag.aiOriginal) {
     mergedTag.aiOriginal = oldTag.aiOriginal;
+  }
+
+  if (typeof oldTag.aiZhTranslation === 'string' && oldTag.aiZhTranslation.trim() && !mergedTag.aiZhTranslation) {
+    mergedTag.aiZhTranslation = oldTag.aiZhTranslation;
+  }
+
+  if (oldTag.aiZhPending && !mergedTag.aiZhPending) {
+    mergedTag.aiZhPending = true;
+  }
+
+  const oldAiZhPendingStartedAt = Number(oldTag.aiZhPendingStartedAt);
+  if (Number.isFinite(oldAiZhPendingStartedAt) && oldAiZhPendingStartedAt > 0 && !mergedTag.aiZhPendingStartedAt) {
+    mergedTag.aiZhPendingStartedAt = oldAiZhPendingStartedAt;
+  }
+
+  if (typeof oldTag.aiZhPendingRequestId === 'string' && oldTag.aiZhPendingRequestId.trim() && !mergedTag.aiZhPendingRequestId) {
+    mergedTag.aiZhPendingRequestId = oldTag.aiZhPendingRequestId;
+  }
+
+  if (typeof oldTag.aiZhErrorMessage === 'string' && oldTag.aiZhErrorMessage.trim() && !mergedTag.aiZhErrorMessage) {
+    mergedTag.aiZhErrorMessage = oldTag.aiZhErrorMessage;
   }
 
   return mergedTag;

@@ -1065,7 +1065,9 @@ const MODAL_ID = 'nai-history-modal';
           const zhRow = document.createElement('div');
           zhRow.className = 'nhm-tag-zh-row';
           // AI 翻译 tag 在历史详情里优先显示原始输入，其余 tag 继续回退到字典翻译。
-          const secondaryText = (typeof tag.aiOriginal === 'string' && tag.aiOriginal.trim())
+          const secondaryText = (typeof tag.aiZhTranslation === 'string' && tag.aiZhTranslation.trim())
+            ? tag.aiZhTranslation.trim()
+            : (typeof tag.aiOriginal === 'string' && tag.aiOriginal.trim())
             ? tag.aiOriginal.trim()
             : ((info && info.zhCN) || '');
           zhRow.textContent = secondaryText || '\u00A0';
