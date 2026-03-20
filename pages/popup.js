@@ -1632,7 +1632,18 @@ function initUI() {
   // Observe width for responsive short-text mode
   const resizeObserver = new ResizeObserver(entries => {
     for (let entry of entries) {
-      const isNarrow = entry.contentRect.width < 540;
+      const w = entry.contentRect.width;
+      
+      // 1. SVG 按键文字隐藏阈值 (改为 < 540px 时隐藏，确保拉宽展开时有足够空间不顶爆)
+      const hideIcons = w < 560;
+      document.body.classList.toggle('hide-icon-text', hideIcons);
+
+      // 2. 超窄屏阈值 (< 420px 时隐藏自定义分辨率输入框)
+      const hideResCustom = w < 420;
+      document.body.classList.toggle('hide-res-custom', hideResCustom);
+
+      // 3. Tab 和 分辨率文字缩短阈值 (改为 < 720px 时缩短)
+      const isNarrow = w < 720;
       if (isShortMode !== isNarrow) {
         isShortMode = isNarrow;
         applyTranslations(currentLang);
