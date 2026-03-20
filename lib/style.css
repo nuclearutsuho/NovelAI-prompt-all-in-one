@@ -846,8 +846,20 @@
     cursor: pointer;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start; /* 顶部对齐，以便换行时更美观 */
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    flex-wrap: wrap;       /* 核心：遇到超长文本允许容器换行 */
+    gap: 4px;              /* 换行时的行距 */
+}
+
+/* 右侧的翻译与使用次数 */
+.autocomplete-item > span:last-child {
+    flex-shrink: 0;
+    white-space: normal;   /* 翻译如果超长也允许自我换行 */
+    word-break: break-all;
+    margin-left: auto;     /* 核心：如果被挤到第二行，依然保持靠右对齐 */
+    text-align: right;
+    max-width: 100%;
 }
 
 .autocomplete-item.autocomplete-section {
@@ -874,6 +886,11 @@
 .autocomplete-tag {
     color: #e0e0e0;
     font-weight: 500;
+    white-space: normal;      /* 允许完整的 Tag 多行显示 */
+    word-break: break-all;    /* 对于没有空格的过长 Tag（如下划线）自动折断，避免再次撑爆 */
+    flex: 1 1 auto;
+    min-width: 0;
+    line-height: 1.4;
 }
 
 .autocomplete-item.autocomplete-folder .autocomplete-tag {
