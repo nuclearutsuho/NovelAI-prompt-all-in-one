@@ -177,14 +177,14 @@
       border-color: #818cf8;
     }
 
-    #app.special-favorites-mode .secondary-tabs {
+    .secondary-tabs.special-favorites-surface {
       background:
         linear-gradient(180deg, rgba(25, 34, 39, 0.98), rgba(18, 25, 31, 0.98)),
         #1d2630;
       border-bottom-color: rgba(94, 234, 212, 0.16);
     }
 
-    #app.special-favorites-mode .tags-grid-container {
+    .tags-grid-container.special-favorites-surface {
       background:
         radial-gradient(circle at top left, rgba(45, 212, 191, 0.08), transparent 28%),
         linear-gradient(180deg, rgba(16, 24, 31, 0.98), rgba(13, 20, 27, 0.98)),
@@ -279,9 +279,9 @@
 
     /* 在另一侧输入框中使用的标签 */
     .tag-card.used-other {
-      filter: grayscale(0.5) opacity(0.4);
       cursor: not-allowed;
       position: relative;
+      filter: grayscale(0.5) opacity(0.4);
     }
     .tag-card.used-other::after {
       content: '';
@@ -499,9 +499,9 @@
 
     /* 在另一侧输入框中使用的标签 */
     .tag-card.used-other {
-      filter: grayscale(0.5) opacity(0.4);
       cursor: not-allowed;
       position: relative;
+      filter: grayscale(0.5) opacity(0.4);
     }
     .tag-card.used-other::after {
       content: '';

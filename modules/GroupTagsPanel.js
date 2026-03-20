@@ -20,6 +20,8 @@ let draggedTagInfo = null; // 普通标签拖拽状态：{ tag, sourceCategoryIn
 let favoritePreviewPopover = null;
 let favoritesHistorySnapshot = null;
 let favoritePreviewHideTimer = null;
+let sentenceCardEditState = null;
+let specialFavoritesDirty = false;
 
 function normalizeGroupItemType(value) {
   if (groupTagsDataUtils.normalizeGroupItemType) {
@@ -211,6 +213,7 @@ const dom = {
   primaryTabs: document.getElementById('primary-tabs-container'),
   secondaryTabs: document.getElementById('secondary-tabs-container'),
   tagsGrid: document.getElementById('tags-grid'),
+  tagsGridContainer: document.querySelector('.tags-grid-container'),
   inlineAddPanel: document.getElementById('inline-add-panel'),
   colorPicker: document.getElementById('group-color'),
   colorPickerWrapper: document.querySelector('.color-picker-wrapper'),
@@ -331,6 +334,16 @@ async function rebuildWithSpecialFavorites(baseData, options = {}) {
   return nextData;
 }
 
+async function refreshSpecialFavoritesCategoryInPlace(options = {}) {
+  const preserveSelection = options.preserveSelection !== false;
+  const previousSelection = preserveSelection ? getActiveSelectionIds() : null;
+  customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
+  if (preserveSelection && previousSelection) {
+    restoreActiveSelectionByIds(previousSelection);
+  }
+  specialFavoritesDirty = false;
+}
+
 function getFavoriteItemsCount(category) {
   if (!isSpecialFavoritesCategory(category)) return 0;
   return (category.groups || []).reduce((total, group) => total + ((group.items || []).length), 0);
@@ -392,9 +405,6 @@ function clampPreviewPosition(value, min, max) {
 
 function updateSpecialCategoryControls() {
   const specialActive = isSpecialFavoritesActive();
-  if (dom.app) {
-    dom.app.classList.toggle('special-favorites-mode', specialActive);
-  }
   if (dom.inlineAddPanel) {
     // 收藏片段分类不支持直接新增收藏项，因此沿用现有面板时直接隐藏普通 tag 新增区。
     dom.inlineAddPanel.style.display = specialActive ? 'none' : '';
@@ -405,6 +415,13 @@ function updateSpecialCategoryControls() {
   if (dom.btnAddGroup) {
     dom.btnAddGroup.title = specialActive ? 'Add Folder' : 'Add Group';
   }
+}
+
+function applyVisibleCurrentGroupColor(newColor) {
+  if (!dom.tagsGrid) return;
+  dom.tagsGrid.querySelectorAll('.tag-card:not(.special-favorite-card) .tag-zh-part').forEach((part) => {
+    part.style.backgroundColor = newColor;
+  });
 }
 
 // ========== 拖拽排序 ==========
@@ -2172,6 +2189,8 @@ function bindTagDropOnPrimaryTab(button, targetCategoryIndex) {
 function renderSpecialFavoritesGrid(currentCategory, currentGroup) {
   const items = currentGroup?.items || [];
   dom.tagsGrid.innerHTML = '';
+  dom.secondaryTabs?.classList.add('special-favorites-surface');
+  dom.tagsGridContainer?.classList.add('special-favorites-surface');
 
   if (dom.colorPicker) {
     dom.colorPicker.value = '#4a4a6a';
@@ -2302,10 +2321,15 @@ function renderPrimaryTabs() {
       btn.appendChild(badgeSpan);
     }
 
-    btn.onclick = () => {
+    btn.onclick = async () => {
       if (index === activeCategoryIndex) return; // 已激活则跳过，避免打断双击
       activeCategoryIndex = index;
       activeGroupIndex = 0;
+      if (isSpecialFavoritesCategory(customGroupsData.categories[activeCategoryIndex]) && specialFavoritesDirty) {
+        await refreshSpecialFavoritesCategoryInPlace({ preserveSelection: false });
+        activeCategoryIndex = getSpecialFavoritesIndex();
+        activeGroupIndex = 0;
+      }
       renderPrimaryTabs();
       renderSecondaryTabs();
     };
@@ -2545,6 +2569,8 @@ function renderSecondaryTabs() {
 function renderTagsGrid() {
   hideFavoritePreviewPopover();
   if (!customGroupsData || !customGroupsData.categories.length) {
+    dom.secondaryTabs?.classList.remove('special-favorites-surface');
+    dom.tagsGridContainer?.classList.remove('special-favorites-surface');
     updateSpecialCategoryControls();
     scheduleSortableRefresh();
     return;
@@ -2552,6 +2578,8 @@ function renderTagsGrid() {
   dom.tagsGrid.innerHTML = '';
   
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  dom.secondaryTabs?.classList.remove('special-favorites-surface');
+  dom.tagsGridContainer?.classList.remove('special-favorites-surface');
   updateSpecialCategoryControls();
   if (!currentCategory || !currentCategory.groups.length) {
     scheduleSortableRefresh();
@@ -2869,6 +2897,12 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 
   if (!changes.groupTagsUserData && !changes.promptHistory && !changes.groupTagsSpecialCategoryPosition) return;
+  const onlyPromptHistoryChanged = !!changes.promptHistory && !changes.groupTagsUserData && !changes.groupTagsSpecialCategoryPosition;
+
+  if (onlyPromptHistoryChanged && !isSpecialFavoritesActive()) {
+    specialFavoritesDirty = true;
+    return;
+  }
 
   const previousSelection = getActiveSelectionIds();
   // 非编辑模式下允许响应 popup 的 +G 写入，并沿用默认库补增规则重新生成有效数据
@@ -2877,6 +2911,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     : stripSpecialFavoritesCategory(customGroupsData);
   customGroupsData = await rebuildWithSpecialFavorites(persistableData, { apply: false });
   restoreActiveSelectionByIds(previousSelection);
+
   renderPrimaryTabs();
   renderSecondaryTabs();
   syncColorsToParent();
@@ -2900,7 +2935,24 @@ dom.colorPicker.addEventListener('input', (e) => {
   
   const btn = document.getElementById('color-picker-btn');
   if (btn) btn.style.backgroundColor = newColor;
-  
+  applyVisibleCurrentGroupColor(newColor);
+});
+
+dom.colorPicker.addEventListener('change', (e) => {
+  if (isSpecialFavoritesActive()) return;
+  const newColor = e.target.value;
+  const currentCategory = customGroupsData.categories[activeCategoryIndex];
+  if (!currentCategory) return;
+  const currentGroup = currentCategory.groups[activeGroupIndex];
+  if (!currentGroup) return;
+
+  currentGroup.color = newColor;
+  currentGroup._modified = true;
+  currentCategory._modified = true;
+
+  const btn = document.getElementById('color-picker-btn');
+  if (btn) btn.style.backgroundColor = newColor;
+
   renderTagsGrid();
   syncColorsToParent();
 });
