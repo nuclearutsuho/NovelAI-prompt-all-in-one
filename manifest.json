@@ -4,7 +4,6 @@
   "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
   "version": "3.0.5",
   "permissions": [
-    "permissions",
     "storage",
     "unlimitedStorage"
   ],

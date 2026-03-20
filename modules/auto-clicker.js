@@ -176,12 +176,21 @@
 
   function applyModeI18n() {
     if (!modeBtnEl) return;
+    modeBtnEl.dataset.mode = clickMode; // 记录状态供 hover 反馈使用
     if (clickMode === 'fixed') {
       modeBtnEl.textContent = autoClickerI18n.fixedShort || 'Fixed';
       modeBtnEl.title = autoClickerI18n.fixedTitle || 'Fixed Interval';
+      modeBtnEl.style.color = 'rgb(120, 160, 255)'; // 亮蓝文字
+      modeBtnEl.style.borderColor = 'rgb(100, 150, 255)'; // 亮蓝边框
+      modeBtnEl.style.backgroundColor = 'transparent'; // 无底色 (幽灵按钮)
+      modeBtnEl.style.boxShadow = '0 0 5px rgba(100, 150, 255, 0.25)'; // 微蓝发光
     } else {
       modeBtnEl.textContent = autoClickerI18n.onImageShort || 'On Img';
       modeBtnEl.title = autoClickerI18n.onImageTitle || 'On Image';
+      modeBtnEl.style.color = 'rgb(255, 100, 150)'; // 亮粉文字
+      modeBtnEl.style.borderColor = 'rgb(255, 100, 150)'; // 亮粉边框
+      modeBtnEl.style.backgroundColor = 'transparent'; // 无底色 (幽灵按钮)
+      modeBtnEl.style.boxShadow = '0 0 5px rgba(255, 100, 150, 0.25)'; // 微红发光
     }
   }
 
@@ -629,7 +638,29 @@
     const btnMode = document.createElement('button');
     btnMode.textContent = autoClickerI18n.fixedShort || 'Fixed';
     btnMode.title = autoClickerI18n.fixedTitle || 'Fixed Interval';
-    styleBtn(btnMode, { paddingLeft: '8px', paddingRight: '8px', minWidth: '52px' });
+    // 恢复与工具条一致的方块造型与 3px 微圆角，靠粗高亮边框强调为独立控件
+    styleBtn(btnMode, { 
+      paddingLeft: '10px', 
+      paddingRight: '10px', 
+      minWidth: '56px',
+      borderRadius: '3px',
+      borderWidth: '1.5px', // 幽灵风格加粗边框
+      fontWeight: 'bold',
+      transition: 'all 0.15s ease'
+    });
+    
+    // 幽灵按钮悬停效果：根据当前模式泛起半透明的对应色彩底色
+    btnMode.addEventListener('mouseenter', () => {
+      btnMode.style.backgroundColor = btnMode.dataset.mode === 'fixed' 
+        ? 'rgba(100, 150, 255, 0.15)' 
+        : 'rgba(255, 100, 150, 0.15)';
+    });
+    btnMode.addEventListener('mouseleave', () => {
+      btnMode.style.backgroundColor = 'transparent';
+    });
+    btnMode.addEventListener('mousedown', () => btnMode.style.transform = 'scale(0.95)');
+    btnMode.addEventListener('mouseup', () => btnMode.style.transform = 'scale(1)');
+
     container.appendChild(btnMode);
     modeBtnEl = btnMode;
 
