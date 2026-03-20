@@ -585,7 +585,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const dict = getPopupDict();
   const getKey = (base) => (isShortMode && dict[base + '_short']) ? base + '_short' : base;
 
-  if(input && dict.input_placeholder) input.placeholder = dict.input_placeholder;
+  if(input && dict.char_input_placeholder) input.placeholder = dict.char_input_placeholder;
   
   if (btnAiTranslate) {
       const aiTranslateKey = getKey('btn_ai_translate');
@@ -803,14 +803,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     // Use local closure reference 'charEditor' not the mutable charEditors[]
     cleanTags.forEach(t => charEditor.addTag(t));
     input.value = '';
-    input.focus();
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.altKey) {
-        e.preventDefault();
-        charEditor.addTag('\n');
-    }
+  input.focus();
   });
 
   // Attach buttons
@@ -1510,11 +1503,6 @@ function initUI() {
   btnAdd.addEventListener('click', addTag);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      if (e.altKey) {
-        e.preventDefault();
-        editor.addTag('\n');
-        return;
-      }
       e.preventDefault();
       if (e.shiftKey && btnAiTranslate) {
         btnAiTranslate.click();
