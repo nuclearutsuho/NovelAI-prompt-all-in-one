@@ -806,6 +806,13 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     input.focus();
   });
 
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.altKey) {
+        e.preventDefault();
+        charEditor.addTag('\n');
+    }
+  });
+
   // Attach buttons
   const addTag = () => {
     const val = input.value.trim();
@@ -1367,6 +1374,12 @@ function initUI() {
         inputEl.value += '__';
       } else if (action === 'seq-wildcard') {
         inputEl.value += 's__';
+      } else if (action === 'newline') {
+        const _editor = getEditorFn ? getEditorFn() : null;
+        if (_editor) {
+          _editor.addTag('\n');
+          return;
+        }
       } else if (action === 'random') {
         const _editor = getEditorFn ? getEditorFn() : null;
         if (_editor) {
@@ -1497,6 +1510,11 @@ function initUI() {
   btnAdd.addEventListener('click', addTag);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
+      if (e.altKey) {
+        e.preventDefault();
+        editor.addTag('\n');
+        return;
+      }
       e.preventDefault();
       if (e.shiftKey && btnAiTranslate) {
         btnAiTranslate.click();
@@ -1667,6 +1685,7 @@ function initUI() {
         // Initial state for editor
         if (key === 'renderNewlines') {
           editor.options.renderNewlines = el.checked;
+          charEditors.forEach(ce => { if (ce?.editor) ce.editor.options.renderNewlines = el.checked; });
         }
 
         el.addEventListener('change', () => {
@@ -1674,6 +1693,12 @@ function initUI() {
           if (key === 'renderNewlines') {
             editor.options.renderNewlines = el.checked;
             editor.render();
+            charEditors.forEach(ce => {
+              if (ce?.editor) {
+                ce.editor.options.renderNewlines = el.checked;
+                ce.editor.render();
+              }
+            });
           }
         });
       }
