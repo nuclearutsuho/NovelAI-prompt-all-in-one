@@ -527,7 +527,13 @@
         <span style="color:#e0e0e0; font-size:11px; font-weight:600; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
           <span style="color:#10b981;">🏷️</span> Tags Matrix
         </span>
-        <div style="display:flex; gap:4px;">
+        <div style="display:flex; gap:4px; align-items:center;">
+          <span class="gt-dock-indicator" title="磁吸未激活" style="
+            display:flex; align-items:center; justify-content:center;
+            width:20px; height:20px; border-radius:4px;
+            color:#555; font-size:13px; transition:all 0.3s;
+            cursor:default; user-select:none;
+          ">🧲</span>
           <button class="gt-min-btn" title="Minimize" style="
             width:20px; height:20px; border:1px solid #4a4a6a; border-radius:4px;
             background:rgba(255,255,255,0.05); color:#aaa; cursor:pointer;
@@ -589,8 +595,47 @@
       #group-tags-manager-container.minimized #group-tags-header {
         border-bottom: none;
       }
+      /* 磁吸吸附瞬间的平滑过渡动效 */
+      #group-tags-manager-container.snap-transition {
+        transition: left 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                    top 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      }
+      /* 磁吸预告虚线框 */
+      .gt-snap-ghost {
+        position: fixed;
+        border: 2px dashed rgba(129, 140, 248, 0.5);
+        background: rgba(129, 140, 248, 0.06);
+        border-radius: 8px;
+        pointer-events: none;
+        z-index: 2147483645;
+        display: none;
+        transition: left 0.1s, top 0.1s, width 0.1s, height 0.1s;
+      }
+      /* 磁铁指示器的吸附/脱离状态 —— 增强显眼度 */
+      .gt-dock-indicator.docked {
+        color: #a78bfa !important;
+        text-shadow: 0 0 8px rgba(167, 139, 250, 0.8), 0 0 16px rgba(129, 140, 248, 0.4);
+        background: rgba(129, 140, 248, 0.15);
+        border-radius: 4px;
+        animation: gt-dock-pulse 2s ease-in-out infinite;
+      }
+      @keyframes gt-dock-pulse {
+        0%, 100% { text-shadow: 0 0 8px rgba(167, 139, 250, 0.8), 0 0 16px rgba(129, 140, 248, 0.4); }
+        50% { text-shadow: 0 0 12px rgba(167, 139, 250, 1), 0 0 24px rgba(129, 140, 248, 0.6); }
+      }
     `;
     document.head.appendChild(minStyle);
+
+    // 创建磁吸预告虚线框元素
+    const snapGhost = document.createElement('div');
+    snapGhost.className = 'gt-snap-ghost';
+    document.body.appendChild(snapGhost);
+
+    // 磁铁指示器引用
+    const dockIndicator = container.querySelector('.gt-dock-indicator');
+
+    // 预告虚线框对应的待吸附方向（松手时自动完成吸附）
+    let pendingSnapDir = null;
 
     // 联动 wildcard-manager 最小化：当它最小化时，group-tags 完全隐藏；恢复时显示回来
     let wasVisibleBeforeWMMinimize = false;
@@ -627,7 +672,7 @@
     }, 500);
 
     // ─── 磁吸式吸附系统 ───
-    const SNAP_THRESHOLD = 15;  // 吸附触发距离（px）
+    const SNAP_THRESHOLD = 8;  // 吸附触发距离（px）
     const UNDOCK_THRESHOLD = 20; // 脱离距离（px）
     let dockState = null; // null | 'left' | 'right' | 'top' | 'bottom'
     let wmObserver = null; // MutationObserver for wildcard-manager
@@ -718,10 +763,17 @@
 
     // 吸附入场
     function dock(direction) {
+      const wasUndocked = !dockState;
       dockState = direction;
+      // 首次吸附时触发平滑过渡动效
+      if (wasUndocked) {
+        container.classList.add('snap-transition');
+        setTimeout(() => container.classList.remove('snap-transition'), 200);
+      }
       applyDockedPosition();
       startWMTracking();
       saveDockState();
+      updateDockIndicator();
     }
 
     // 脱离
@@ -729,6 +781,31 @@
       dockState = null;
       stopWMTracking();
       saveDockState();
+      updateDockIndicator();
+    }
+
+    // 更新磁铁指示器的视觉状态
+    function updateDockIndicator() {
+      if (!dockIndicator) return;
+      if (dockState) {
+        dockIndicator.classList.add('docked');
+        dockIndicator.title = '磁吸已激活 — 面板将跟随主输入框移动';
+      } else {
+        dockIndicator.classList.remove('docked');
+        dockIndicator.title = '磁吸未激活';
+      }
+    }
+
+    // 显示/隐藏/更新磁吸预告虚线框
+    function showSnapGhost(left, top, width, height) {
+      snapGhost.style.left = left + 'px';
+      snapGhost.style.top = top + 'px';
+      snapGhost.style.width = width + 'px';
+      snapGhost.style.height = height + 'px';
+      snapGhost.style.display = 'block';
+    }
+    function hideSnapGhost() {
+      snapGhost.style.display = 'none';
     }
 
     // 在拖拽 mousemove 中检测是否应吸附或脱离
@@ -834,12 +911,71 @@
       container.style.left = snap.left + 'px';
       container.style.top = snap.top + 'px';
       container.style.right = 'auto';
+
+      // 磁吸预告虚线框：已经吸附时不显示（避免多余视觉干扰）
+      if (snap.snapped) {
+        hideSnapGhost();
+        pendingSnapDir = null; // 已经吸附了，不需要待吸附
+      } else {
+        // 如果未吸附，检查是否从外部接近主面板（只有外部接近才显示预告）
+        const wm = getWMContainer();
+        if (wm && wm.style.display !== 'none') {
+          const wmRect = wm.getBoundingClientRect();
+          const gtW = container.offsetWidth;
+          const gtH = container.offsetHeight;
+          const gtRight = newLeft + gtW;
+          const gtBottom = newTop + gtH;
+          const PREVIEW_RANGE = 60;
+          let previewPos = null;
+          let previewDir = null;
+
+          // 右侧吸附预告：tags面板在主面板右边，从右向左靠近
+          const vOverlap = gtBottom > wmRect.top && newTop < wmRect.bottom;
+          const hOverlap = gtRight > wmRect.left && newLeft < wmRect.right;
+          if (vOverlap && newLeft > wmRect.right && (newLeft - wmRect.right) < PREVIEW_RANGE) {
+            previewPos = { left: wmRect.right, top: newTop };
+            previewDir = 'right';
+          }
+          // 左侧吸附预告：tags面板在主面板左边，从左向右靠近
+          else if (vOverlap && gtRight < wmRect.left && (wmRect.left - gtRight) < PREVIEW_RANGE) {
+            previewPos = { left: wmRect.left - gtW, top: newTop };
+            previewDir = 'left';
+          }
+          // 下方吸附预告：tags面板在主面板下方，从下向上靠近
+          else if (hOverlap && newTop > wmRect.bottom && (newTop - wmRect.bottom) < PREVIEW_RANGE) {
+            previewPos = { left: newLeft, top: wmRect.bottom };
+            previewDir = 'bottom';
+          }
+          // 上方吸附预告：tags面板在主面板上方，从上向下靠近
+          else if (hOverlap && gtBottom < wmRect.top && (wmRect.top - gtBottom) < PREVIEW_RANGE) {
+            previewPos = { left: newLeft, top: wmRect.top - gtH };
+            previewDir = 'top';
+          }
+
+          if (previewPos) {
+            showSnapGhost(previewPos.left, previewPos.top, gtW, gtH);
+            pendingSnapDir = previewDir;
+          } else {
+            hideSnapGhost();
+            pendingSnapDir = null;
+          }
+        } else {
+          hideSnapGhost();
+          pendingSnapDir = null;
+        }
+      }
     });
 
     document.addEventListener('mouseup', () => {
       if (isDragging) {
         isDragging = false;
         container.classList.remove('dragging');
+        hideSnapGhost();
+        // 如果松手时有待吸附的预告方向，自动完成吸附
+        if (pendingSnapDir) {
+          dock(pendingSnapDir);
+          pendingSnapDir = null;
+        }
         saveState();
       }
     });
@@ -889,6 +1025,7 @@
               dockState = state.docked;
               applyDockedPosition();
               startWMTracking();
+              updateDockIndicator();
             });
           });
         } else {
