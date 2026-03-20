@@ -1,7 +1,7 @@
 const AI_TRANSLATE_STORAGE_KEY = 'aiTranslateConfig';
 const AI_TRANSLATE_REQUEST_TIMEOUT_MS = 60000;
 const AI_PENDING_PLACEHOLDER_VALUE = '__AI_TRANSLATING__';
-const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for NovelAI image generation. Translate the user's input into natural English that describes an image scene. Output ONLY the translated English text, nothing else. Keep the description vivid and detailed. Do not add any tags, formatting, or explanation.";
+const DEFAULT_AI_SYSTEM_PROMPT = "You are a professional translator for image generation prompts. Translate the user's input into natural English. Output ONLY the translated English text. Strictly translate the exact meaning of the original text without adding any unmentioned elements, characters, or environment details. Do not add any formatting or explanation.";
 const DEFAULT_AI_TAG_ANNOTATION_PROMPT = "You translate English NovelAI prompt tags or short prompt fragments into concise Simplified Chinese notes for human reading only. Keep the meaning accurate and natural. If the user sends plain text, reply with ONLY the Chinese translation text. If the user sends a JSON array of strings, reply with ONLY a JSON array of Chinese translations in the same order. Do not add markdown, numbering, explanations, or any extra text.";
 const DEFAULT_AI_PROFILE_TEMPLATE = Object.freeze({
   providerPreset: 'openai',

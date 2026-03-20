@@ -1690,13 +1690,21 @@ function initUI() {
   const btnSettings = document.getElementById('btn-settings');
   const modal = document.getElementById('settings-modal');
   const closeSettings = document.getElementById('close-settings');
+  const closeSettingsModal = () => {
+    modal.style.display = 'none';
+  };
 
   btnSettings.addEventListener('click', () => {
     modal.style.display = 'flex';
     updateStorageMonitor();
   });
   
-  closeSettings.addEventListener('click', () => { modal.style.display = 'none'; });
+  closeSettings.addEventListener('click', closeSettingsModal);
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeSettingsModal();
+    }
+  });
 
   // Update Chrome Storage Monitor
   function updateStorageMonitor() {

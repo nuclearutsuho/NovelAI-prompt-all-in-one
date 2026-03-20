@@ -1244,17 +1244,24 @@ function promptImportMode() {
   return new Promise(resolve => {
     showModal(`
       <h3>选择导入方式</h3>
+      <div style="margin-bottom:12px;padding:10px 12px;border:1px solid rgba(245, 158, 11, 0.28);border-radius:8px;background:rgba(245, 158, 11, 0.08);color:#fcd34d;font-size:12px;line-height:1.7;">
+        导入前建议先备份当前 Tags 组信息，尤其是在使用“覆盖”导入时，原有自定义内容可能被替换。
+      </div>
       <div style="color:#d1d5db;font-size:12px;line-height:1.6;">
         覆盖：用文件内容替换当前数据，再补齐默认库新增项。<br>
         合并：保留当前数据，只补充文件中的缺失项。
       </div>
       <div class="modal-buttons">
+        <button class="modal-btn" id="modal-import-backup">下载当前备份</button>
         <button class="modal-btn" id="modal-import-cancel">取消</button>
         <button class="modal-btn" id="modal-import-merge">合并</button>
         <button class="modal-btn primary" id="modal-import-overwrite">覆盖</button>
       </div>
     `);
 
+    document.getElementById('modal-import-backup').onclick = async () => {
+      await exportGroupTagsData();
+    };
     document.getElementById('modal-import-cancel').onclick = () => {
       hideModal();
       resolve(null);
