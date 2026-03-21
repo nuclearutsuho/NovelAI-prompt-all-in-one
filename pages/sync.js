@@ -1506,19 +1506,28 @@ chrome.storage.onChanged.addListener((changes, area) => {
             }
         }
     }
+});
 
-    // JSON 资源实体变更写回物理环境
-    if (boundDirHandle && !localSyncService.isSyncing) {
-        const trySyncJson = async (fileName, dataObj) => {
-            if (!dataObj) return;
-            const dataStr = typeof dataObj === 'string' ? dataObj : JSON.stringify(dataObj, null, 2);
-            const ok = await localSyncService.safeWriteFile(fileName, dataStr);
-            if (!ok) showToast(`【安全网】写入 ${fileName} 失败，本地已有新版本，请自顶部刷新`, 'error');
-        };
-
-        if (changes.promptHistory) trySyncJson('favorites.json', changes.promptHistory.newValue);
-        if (changes.groupTagsUserData) trySyncJson('group_tags.json', changes.groupTagsUserData.newValue);
-        if (changes.dictOverlay) trySyncJson('user_dict.json', changes.dictOverlay.newValue);
+// JSON 资源智能节流回推（3秒防抖）
+let jsonSyncDebounceTimer = null;
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !boundDirHandle || localSyncService.isSyncing) return;
+    
+    // 监听背景守护进程打上的时间戳变脏信号
+    const hasDirtyMark = changes.promptHistory_lastModified || 
+                         changes.groupTagsUserData_lastModified || 
+                         changes.dictOverlay_lastModified;
+                         
+    if (hasDirtyMark) {
+        clearTimeout(jsonSyncDebounceTimer);
+        jsonSyncDebounceTimer = setTimeout(() => {
+            if (boundDirHandle && !localSyncService.isSyncing) {
+                // 触发底层的全维安全同步引擎，它带有 15 份快照和防呆机制
+                localSyncService.scanAndPullChanges({ silent: true }).then(hasChanges => {
+                    if (hasChanges) refreshFileTree();
+                });
+            }
+        }, 10000);
     }
 });
 
