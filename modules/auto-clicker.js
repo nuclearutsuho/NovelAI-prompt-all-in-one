@@ -38,6 +38,10 @@
   let startBtnEl = null;
   let modeBtnEl = null;
   let intervalInputEl = null;
+  let randomInputEl = null;
+  let timeStrEl = null; // 生成耗时显示元素
+  let lastGenerateTime = 0; // 记录上次点击生成的时间戳
+  let spanTimingTextEl = null; // 折叠态耗时文本
 
   let autoClickerI18n = {
     fixedShort: 'Fixed',
@@ -123,6 +127,14 @@
 
         imageCount++;
         if (imgCounterEl) imgCounterEl.textContent = `📷 ${imageCount}`;
+        
+        // 统一处理耗时显示：不论是连点器自动触发还是手动触发
+        if (lastGenerateTime > 0) {
+          const waitTimeSec = ((performance.now() - lastGenerateTime) / 1000).toFixed(1);
+          if (timeStrEl) timeStrEl.textContent = `⏱ ${waitTimeSec}s`;
+          lastGenerateTime = 0; // 结算完毕，清空防重
+        }
+
         notifyImageWaiters();
         console.log('[AutoClicker] 检测到新生成图片:', src.substring(0, 60));
       }
@@ -169,8 +181,19 @@
     if (maxLoops > 0) {
       loopCounterEl.textContent = `${currentLoop}/${maxLoops}`;
     } else {
-      // 无限模式：直接显示已执行次数
-      loopCounterEl.textContent = String(currentLoop);
+      // 无限模式：对于极简面板，可以显示更好看的样式
+      loopCounterEl.textContent = `${currentLoop}/∞`;
+    }
+  }
+
+  function updateTimingText() {
+    if (!spanTimingTextEl) return;
+    const baseS = loopTime / 1000;
+    const randS = randomTime / 1000;
+    if (clickMode === 'fixed') {
+      spanTimingTextEl.textContent = `${baseS}s ±${randS}s`;
+    } else {
+      spanTimingTextEl.textContent = `+${randS}s`;
     }
   }
 
@@ -196,8 +219,16 @@
 
   function updateModeUI() {
     applyModeI18n();
+    updateTimingText();
     if (intervalInputEl) {
       intervalInputEl.style.display = (clickMode === 'fixed') ? 'block' : 'none';
+    }
+    if (randomInputEl) {
+      const randS = randomTime / 1000;
+      randomInputEl.placeholder = (clickMode === 'fixed') ? `± ${randS}s` : `+ ${randS}s`;
+    }
+    if (startBtnEl) {
+      startBtnEl.dataset.mode = clickMode;
     }
   }
 
@@ -271,7 +302,7 @@
     if (interval) clearTimeout(interval);
     interval = null;
     cancelPendingWaits();
-    if (startBtnEl) startBtnEl.textContent = 'Start';
+    if (startBtnEl) startBtnEl.textContent = '▶';
     if (reason) console.log('[AutoClicker] stopped:', reason);
   }
 
@@ -534,6 +565,7 @@
 
     const target = findGenerateButton();
     if (target) {
+      lastGenerateTime = performance.now(); // 记录起步时间
       triggerClick(target);
     } else {
       console.error('[AutoClicker] Visible Generate button not found');
@@ -568,6 +600,8 @@
         return;
       }
     }
+    
+    // （耗时计算已移至 startImageObserver 的 checkImg 函数中进行全局处理）
 
     const baseDelay = Math.abs(randomTime);
     const jitter = randInt(0, baseDelay);
@@ -579,274 +613,328 @@
   // ─── UI 创建 ──────────────────────────────────────────────────
 
   function createComponent() {
-    // 防止重复创建
     if (document.getElementById('nai-auto-clicker')) return;
 
-    // 颜色主题（与 NovelAI 深色界面一致）
     const BG    = 'rgb(34, 37, 63)';
     const FG    = 'rgb(245, 243, 194)';
     const BORDER = `0.1px solid ${FG}`;
 
-    /** 通用按钮样式 */
+    // ── 注入全局 CSS（用于展开/收起过渡） ──
+    const styleId = 'nai-auto-clicker-style';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        #nai-auto-clicker {
+          transition: background-color 0.3s, border-color 0.3s;
+          padding: 0 6px !important;
+          border-radius: 4px !important; /* 原生面板的小圆角 */
+          border: 1px solid rgba(245, 243, 194, 0.2) !important;
+          background-color: rgba(34, 37, 63, 0.75) !important;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          backdrop-filter: blur(4px);
+          cursor: grab;
+          height: 38px !important;
+          display: flex;
+          align-items: center;
+        }
+        #nai-auto-clicker:active {
+          cursor: grabbing;
+        }
+        #nai-auto-clicker button[data-mode="fixed"] {
+          border-color: rgba(100, 150, 255, 0.6) !important;
+          box-shadow: 0 0 6px rgba(100, 150, 255, 0.3) !important;
+        }
+        #nai-auto-clicker button[data-mode="on-image"] {
+          border-color: rgba(255, 100, 150, 0.6) !important;
+          box-shadow: 0 0 6px rgba(255, 100, 150, 0.3) !important;
+        }
+        #nai-auto-clicker.expanded {
+          background-color: rgba(34, 37, 63, 0.95) !important;
+          border-color: rgba(245, 243, 194, 0.6) !important;
+        }
+        #nai-auto-clicker input, #nai-auto-clicker button {
+          cursor: pointer;
+        }
+        
+        .nai-ac-expanded { 
+          opacity: 1; 
+          max-width: 80px; 
+          margin-left: 6px;
+          transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+          overflow: hidden;
+          white-space: nowrap;
+        }
+        #nai-auto-clicker:not(.expanded) .nai-ac-expanded { 
+          opacity: 0; 
+          max-width: 0 !important; 
+          margin-left: 0 !important; 
+          padding-left: 0 !important; 
+          padding-right: 0 !important; 
+          border-width: 0 !important; 
+          pointer-events: none !important; 
+        }
+        .nai-ac-collapsed {
+          transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+          white-space: nowrap;
+          overflow: hidden;
+          max-width: 120px;
+        }
+        #nai-auto-clicker.expanded .nai-ac-collapsed {
+          opacity: 0;
+          max-width: 0 !important;
+          margin-left: 0 !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          border-width: 0 !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     function styleBtn(el, extraStyles = {}) {
       Object.assign(el.style, {
-        height: '34px',
-        backgroundColor: BG,
-        color: FG,
-        border: BORDER,
-        borderRadius: '3px',
-        fontFamily: 'Source Sans Pro',
-        fontSize: '15px',
-        userSelect: 'none',
-        cursor: 'pointer',
-        ...extraStyles
+        height: '32px', backgroundColor: BG, color: FG, border: BORDER, borderRadius: '3px',
+        fontFamily: 'Source Sans Pro', fontSize: '15px', userSelect: 'none', ...extraStyles
       });
     }
-
-    /** 通用输入框样式 */
     function styleInput(el, extraStyles = {}) {
       Object.assign(el.style, {
-        height: '34px',
-        backgroundColor: BG,
-        color: FG,
-        border: BORDER,
-        borderRadius: '3px',
-        fontSize: '13px',
-        userSelect: 'none',
-        ...extraStyles
+        height: '32px', backgroundColor: BG, color: FG, border: BORDER, borderRadius: '3px',
+        fontSize: '13px', userSelect: 'none', ...extraStyles
       });
     }
 
-    // ── 容器 ──
     const container = document.createElement('div');
     container.id = 'nai-auto-clicker';
     Object.assign(container.style, {
-      position: 'fixed',
-      bottom: '90px',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      height: '34px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '4px',
-      userSelect: 'none',
-      zIndex: '9999',
+      position: 'fixed', bottom: '90px', left: '50%', transform: 'translateX(-50%)',
+      userSelect: 'none', zIndex: '9999'
     });
     document.body.appendChild(container);
 
-    // Mode toggle (leftmost)
-    const btnMode = document.createElement('button');
-    btnMode.textContent = autoClickerI18n.fixedShort || 'Fixed';
-    btnMode.title = autoClickerI18n.fixedTitle || 'Fixed Interval';
-    // 恢复与工具条一致的方块造型与 3px 微圆角，靠粗高亮边框强调为独立控件
-    styleBtn(btnMode, { 
-      paddingLeft: '10px', 
-      paddingRight: '10px', 
-      minWidth: '56px',
-      borderRadius: '3px',
-      borderWidth: '1.5px', // 幽灵风格加粗边框
-      fontWeight: 'bold',
-      transition: 'all 0.15s ease'
-    });
-    
-    // 幽灵按钮悬停效果：根据当前模式泛起半透明的对应色彩底色
-    btnMode.addEventListener('mouseenter', () => {
-      btnMode.style.backgroundColor = btnMode.dataset.mode === 'fixed' 
-        ? 'rgba(100, 150, 255, 0.15)' 
-        : 'rgba(255, 100, 150, 0.15)';
-    });
-    btnMode.addEventListener('mouseleave', () => {
-      btnMode.style.backgroundColor = 'transparent';
-    });
-    btnMode.addEventListener('mousedown', () => btnMode.style.transform = 'scale(0.95)');
-    btnMode.addEventListener('mouseup', () => btnMode.style.transform = 'scale(1)');
-
-    container.appendChild(btnMode);
-    modeBtnEl = btnMode;
-
-    // ── 实际图片计数显示框（Start 按钮左边）──
-    const spanImgCounter = document.createElement('span');
-    Object.assign(spanImgCounter.style, {
-      color: FG,
-      fontSize: '12px',
-      fontFamily: 'Source Sans Pro, monospace',
-      minWidth: '52px',
-      height: '34px',
-      lineHeight: '34px',
-      textAlign: 'center',
-      padding: '0 5px',
-      border: BORDER,
-      borderRadius: '3px',
-      backgroundColor: BG,
-      boxSizing: 'border-box',
-    });
-    spanImgCounter.textContent = '📷 0';
-    spanImgCounter.title = '实际生成图片数（MutationObserver 监听，页面加载前的旧图不计入）';
-    container.appendChild(spanImgCounter);
-    imgCounterEl = spanImgCounter;
-
-    // ── Start / Pause 按钮 ──
+    // 1. 启停按钮 (Always，从 Hover 区域剥离)
     const btnStart = document.createElement('button');
-    btnStart.textContent = 'Start';
-    styleBtn(btnStart, { paddingLeft: '10px', paddingRight: '10px' });
+    btnStart.textContent = isRunning ? '⏸' : '▶';
+    btnStart.title = 'Start / Pause Auto Clicker';
+    styleBtn(btnStart, { padding: '0', width: '32px', transition: 'all 0.3s ease' }); 
     container.appendChild(btnStart);
     startBtnEl = btnStart;
 
-    // ── 循环次数输入框 ──
+    // ── 创建中部动态区域容器 (限制 Hover 触发范围) ──
+    const middleWrapper = document.createElement('div');
+    Object.assign(middleWrapper.style, {
+      display: 'flex', alignItems: 'center'
+    });
+    container.appendChild(middleWrapper);
+
+    // ── 仅中部悬停展开逻辑 ──
+    let collapseTimeout;
+    middleWrapper.addEventListener('mouseenter', () => {
+      clearTimeout(collapseTimeout);
+      container.classList.add('expanded');
+    });
+    middleWrapper.addEventListener('mouseleave', () => {
+      clearTimeout(collapseTimeout);
+      collapseTimeout = setTimeout(() => {
+        const active = document.activeElement;
+        // 如果输入框还在焦点状态，不收起
+        if (active && active.tagName === 'INPUT' && middleWrapper.contains(active)) return;
+        container.classList.remove('expanded');
+      }, 600);
+    });
+    
+    // 模糊焦点时需基于 middleWrapper 状态判断
+    function bindCollapseCheck(inp) {
+      inp.addEventListener('blur', () => {
+        clearTimeout(collapseTimeout);
+        collapseTimeout = setTimeout(() => {
+          if (!middleWrapper.matches(':hover')) container.classList.remove('expanded');
+        }, 600);
+      });
+    }
+
+    // ── 中部子元素按顺序添加 ──
+
+    // 2. 模式切换 (Expanded)
+    const btnMode = document.createElement('button');
+    btnMode.className = 'nai-ac-expanded';
+    btnMode.title = '切换 固定时间/看图生成 模式';
+    styleBtn(btnMode, { paddingLeft: '8px', paddingRight: '8px', borderRadius: '4px', fontWeight: 'bold' });
+    btnMode.addEventListener('mouseenter', () => {
+      btnMode.style.backgroundColor = btnMode.dataset.mode === 'fixed' ? 'rgba(100, 150, 255, 0.15)' : 'rgba(255, 100, 150, 0.15)';
+    });
+    btnMode.addEventListener('mouseleave', () => { btnMode.style.backgroundColor = BG; });
+    middleWrapper.appendChild(btnMode);
+    modeBtnEl = btnMode;
+
+    // 3. 进度文本 (Always)
+    const spanLoopCounter = document.createElement('span');
+    Object.assign(spanLoopCounter.style, {
+      color: FG, fontSize: '12px', fontFamily: 'Source Sans Pro, monospace',
+      minWidth: '32px', height: '32px', lineHeight: '32px', textAlign: 'center', marginLeft: '6px',
+      padding: '0 5px', border: BORDER, borderRadius: '3px', backgroundColor: BG, boxSizing: 'border-box'
+    });
+    spanLoopCounter.textContent = '0/∞';
+    middleWrapper.appendChild(spanLoopCounter);
+    loopCounterEl = spanLoopCounter;
+
+    // 4. 输入框：Max Loops (Expanded)
     const inputLoops = document.createElement('input');
     inputLoops.type = 'number';
     inputLoops.min  = '1';
-    inputLoops.placeholder = '循环次数';
-    inputLoops.title = '输入需要连点的总次数，不填或清空为无限';
-    styleInput(inputLoops, { width: '64px', padding: '0 5px', textAlign: 'center' });
-    container.appendChild(inputLoops);
+    inputLoops.placeholder = '循环';
+    inputLoops.title = '需要连点的总次数，清空为无限';
+    inputLoops.className = 'nai-ac-expanded';
+    styleInput(inputLoops, { width: '48px', padding: '0 4px', textAlign: 'center' });
+    bindCollapseCheck(inputLoops);
+    middleWrapper.appendChild(inputLoops);
 
-    // ── 进度显示 (当前/总次数) ──
-    const spanLoopCounter = document.createElement('span');
-    Object.assign(spanLoopCounter.style, {
-      color: FG,
-      fontSize: '12px',
-      fontFamily: 'Source Sans Pro, monospace',
-      minWidth: '26px',
-      height: '34px',
-      lineHeight: '34px',
-      textAlign: 'center',
-      padding: '0 5px',
-      border: BORDER,
-      borderRadius: '3px',
-      backgroundColor: BG,
-      boxSizing: 'border-box',
-    });
-    spanLoopCounter.textContent = '0';
-    container.appendChild(spanLoopCounter);
-    loopCounterEl = spanLoopCounter; // 将引用存入模块作用域变量，供 runAutoClicker 访问
-
-    // ── 自定义生成键 ↺ ──
+    // 5. 刷新重绘 (Expanded)
     const btnCustom = document.createElement('button');
     btnCustom.textContent = '↺';
     btnCustom.title = '清除图生图/重绘后生成一次，同时重置 Seed';
-    styleBtn(btnCustom, { width: '34px', padding: '0' });
-    container.appendChild(btnCustom);
+    btnCustom.className = 'nai-ac-expanded';
+    styleBtn(btnCustom, { width: '32px', padding: '0' });
+    middleWrapper.appendChild(btnCustom);
 
-    // ── 间隔输入框 ──
+    // 6. 耗时参数折叠展示文本 (Collapsed)
+    const spanTimingText = document.createElement('span');
+    spanTimingText.className = 'nai-ac-collapsed';
+    Object.assign(spanTimingText.style, {
+      color: FG, fontSize: '12px', fontFamily: 'Source Sans Pro, monospace', textAlign: 'center',
+      marginLeft: '6px', height: '32px', lineHeight: '32px', padding: '0 5px', 
+      border: BORDER, borderRadius: '3px', backgroundColor: BG, boxSizing: 'border-box'
+    });
+    spanTimingText.textContent = '6s ±1s';
+    middleWrapper.appendChild(spanTimingText);
+    spanTimingTextEl = spanTimingText;
+
+    // 7. 输入框：Interval (Expanded)
     const inputInterval = document.createElement('input');
     inputInterval.type = 'number';
     inputInterval.min  = '1';
     inputInterval.placeholder = `间隔: ${loopTime / 1000}s`;
-    styleInput(inputInterval, { width: '64px', padding: '0 5px' });
-    container.appendChild(inputInterval);
+    inputInterval.className = 'nai-ac-expanded';
+    styleInput(inputInterval, { width: '60px', padding: '0 4px' });
+    bindCollapseCheck(inputInterval);
+    middleWrapper.appendChild(inputInterval);
     intervalInputEl = inputInterval;
 
-    // ── 随机偏移输入框 ──
+    // 8. 输入框：Random (Expanded)
     const inputRandom = document.createElement('input');
     inputRandom.type = 'number';
     inputRandom.min  = '0';
-    inputRandom.placeholder = `± ${randomTime / 1000}s`;
-    styleInput(inputRandom, { width: '38px', padding: '0 4px' });
-    container.appendChild(inputRandom);
+    inputRandom.className = 'nai-ac-expanded';
+    styleInput(inputRandom, { width: '44px', padding: '0 4px' });
+    bindCollapseCheck(inputRandom);
+    middleWrapper.appendChild(inputRandom);
+    randomInputEl = inputRandom;
 
-    updateModeUI();
-
-
-    // ── 拖拽手柄 ↔ ──
-    const btnMover = document.createElement('button');
-    btnMover.textContent = '↔';
-    btnMover.title = '长按拖动浮窗';
-    styleBtn(btnMover, { paddingLeft: '7px', paddingRight: '7px', fontSize: '20px' });
-    container.appendChild(btnMover);
-
-    // ─── 事件：Start / Pause ───────────────────────────────────
-    btnMode.addEventListener('click', () => {
-      setClickMode(clickMode === 'fixed' ? 'on-image' : 'fixed');
+    // 9. 右侧动态双层：图像计数与测速悬浮 (Always)
+    const counterWrapper = document.createElement('div');
+    Object.assign(counterWrapper.style, {
+      position: 'relative', display: 'flex', alignItems: 'center', height: '34px', marginLeft: '6px'
     });
+    container.appendChild(counterWrapper);
+
+    const spanImgCounter = document.createElement('span');
+    Object.assign(spanImgCounter.style, {
+      color: FG, fontSize: '12px', fontFamily: 'Source Sans Pro, monospace',
+      minWidth: '50px', height: '32px', lineHeight: '32px', textAlign: 'center',
+      padding: '0 5px', border: BORDER, borderRadius: '3px', backgroundColor: BG, boxSizing: 'border-box'
+    });
+    spanImgCounter.textContent = '📷 0';
+    spanImgCounter.title = '实际生成图片数';
+    counterWrapper.appendChild(spanImgCounter);
+    imgCounterEl = spanImgCounter;
+
+    const spanTimeCounter = document.createElement('span');
+    Object.assign(spanTimeCounter.style, {
+      position: 'absolute', bottom: '34px', left: '50%', transform: 'translateX(-50%)',
+      color: FG, fontSize: '11px', fontFamily: 'Source Sans Pro, monospace',
+      minWidth: '40px', height: '18px', lineHeight: '18px', textAlign: 'center',
+      padding: '0 4px', border: BORDER, borderRadius: '3px', backgroundColor: BG,
+      boxSizing: 'border-box', whiteSpace: 'nowrap', opacity: '0.85', pointerEvents: 'none',
+    });
+    spanTimeCounter.textContent = '⏱ --s';
+    counterWrapper.appendChild(spanTimeCounter);
+    timeStrEl = spanTimeCounter;
+
+    // ─── 事件绑定 ───────────────────────────────────
+    btnMode.addEventListener('click', () => setClickMode(clickMode === 'fixed' ? 'on-image' : 'fixed'));
 
     btnStart.addEventListener('click', async () => {
       if (isRunning) {
         stopAutoClicker('pause');
-
         const dialog = document.getElementById('nai-anlas-dialog');
         if (dialog) {
-          const cancelBtn = Array.from(dialog.querySelectorAll('button'))
-            .find(b => b.textContent.includes('取消'));
-          if (cancelBtn) cancelBtn.click();
-          else dialog.remove();
+          const cancelBtn = Array.from(dialog.querySelectorAll('button')).find(b => b.textContent.includes('取消'));
+          if (cancelBtn) cancelBtn.click(); else dialog.remove();
         }
       } else {
         runToken += 1;
         if (interval) clearTimeout(interval);
         interval = null;
         cancelPendingWaits();
-
-        currentLoop = 0;
-        imageCount = 0;
+        currentLoop = 0; imageCount = 0; lastGenerateTime = 0;
         if (imgCounterEl) imgCounterEl.textContent = '📷 0';
+        if (timeStrEl) timeStrEl.textContent = '⏱ --s';
         const v = parseInt(inputLoops.value, 10);
         maxLoops = (!isNaN(v) && v > 0) ? v : 0;
         updateLoopCounter();
 
         console.log(`[AutoClicker] Starting, target loops: ${maxLoops > 0 ? maxLoops : 'inf'}`);
-        isRunning = true;
-        ignoreAnlasWarning = false;
-        btnStart.textContent = 'Pause';
+        isRunning = true; ignoreAnlasWarning = false;
+        btnStart.textContent = '⏸';
         runAutoClicker();
       }
     });
 
-    // ─── 事件：循环次数输入 ───────────────────────────────────
     inputLoops.addEventListener('change', () => {
       const v = parseInt(inputLoops.value, 10);
       maxLoops = (!isNaN(v) && v > 0) ? v : 0;
-      // 保留输入的数字，不清空不改占位符，方便用户直接删除切换回无限循环
       updateLoopCounter();
     });
 
-    // 根据输入内容动态调整宽度：空时用占位符宽度，有内容时按字符数缩窄
-    inputLoops.addEventListener('input', () => {
-      const len = inputLoops.value.length;
-      inputLoops.style.width = len > 0 ? `${len * 9 + 10}px` : '64px';
-    });
-
-    // ─── 事件：自定义生成键 ↺ ──────────────────────────────────
     btnCustom.addEventListener('click', async () => {
       if (!(await checkAnlas())) return;
-      // 清除所有图生图 / 重绘输入
-      XPATH_I2I_LIST.forEach(xpath => {
-        const el = xpathNode(xpath);
-        if (el) triggerClick(el);
-      });
-      // 延迟后生成并重置 Seed
+      XPATH_I2I_LIST.forEach(xpath => { const el = xpathNode(xpath); if (el) triggerClick(el); });
       setTimeout(() => triggerClick(findGenerateButton()), 600);
       setTimeout(() => resetSeed(), 1000);
     });
 
-    // ─── 事件：间隔输入 ────────────────────────────────────────
     inputInterval.addEventListener('change', () => {
       const v = parseFloat(inputInterval.value);
       if (!isNaN(v) && v > 0) {
         loopTime = Math.round(v * 1000);
         inputInterval.placeholder = `间隔: ${v}s`;
+        updateTimingText();
       }
       inputInterval.value = '';
     });
 
-    // ─── 事件：随机偏移 ────────────────────────────────────────
     inputRandom.addEventListener('change', () => {
       const v = parseFloat(inputRandom.value);
       if (!isNaN(v) && v >= 0) {
         randomTime = Math.round(v * 1000);
-        inputRandom.placeholder = `± ${v}s`;
+        updateModeUI();
       }
       inputRandom.value = '';
     });
 
+    // 根据输入内容动态调整宽度
+    inputLoops.addEventListener('input', () => {
+      const len = inputLoops.value.length;
+      inputLoops.style.width = len > 0 ? `${len * 9 + 10}px` : '48px';
+    });
 
-
-    // ─── 拖拽逻辑 ──────────────────────────────────────────────
-    let initX, initY, startLeft, startTop;
-
-    btnMover.addEventListener('mousedown', e => {
+    // ─── 全局拖拽逻辑（直接做在 container 上） ─────────────────
+    let isDragging = false, initX, initY, startLeft, startTop;
+    container.addEventListener('mousedown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
       e.preventDefault();
-      // 拖拽时取消 transform 居中，改用绝对坐标
+      isDragging = true;
       if (container.style.transform) {
         const rect = container.getBoundingClientRect();
         container.style.left      = rect.left + 'px';
@@ -854,33 +942,46 @@
         container.style.bottom    = 'auto';
         container.style.transform = '';
       }
-      initX     = e.clientX;
-      initY     = e.clientY;
+      initX = e.clientX; initY = e.clientY;
       startLeft = parseInt(container.style.left, 10) || 0;
       startTop  = parseInt(container.style.top,  10) || 0;
-
       document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
     });
 
     function onMouseMove(e) {
-      const dx = e.clientX - initX;
-      const dy = e.clientY - initY;
-      // 边界限制
+      if (!isDragging) return;
+      const dx = e.clientX - initX, dy = e.clientY - initY;
       const maxLeft = window.innerWidth  - container.offsetWidth;
       const maxTop  = window.innerHeight - container.offsetHeight;
       container.style.left = Math.max(0, Math.min(startLeft + dx, maxLeft)) + 'px';
       container.style.top  = Math.max(0, Math.min(startTop  + dy, maxTop )) + 'px';
     }
 
-    document.addEventListener('mouseup', () => {
+    function onMouseUp() {
+      isDragging = false;
       document.removeEventListener('mousemove', onMouseMove);
-    });
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+
+    /** 确保浮窗在窗口边界内 */
+    function ensureInBounds() {
+      if (container.style.transform) return;
+      const maxLeft = window.innerWidth  - container.offsetWidth;
+      const maxTop  = window.innerHeight - container.offsetHeight;
+      const left    = parseInt(container.style.left, 10) || 0;
+      const top     = parseInt(container.style.top,  10) || 0;
+      container.style.left = Math.max(0, Math.min(left, maxLeft)) + 'px';
+      container.style.top  = Math.max(0, Math.min(top,  maxTop )) + 'px';
+    }
+    window.addEventListener('resize', ensureInBounds);
 
     startImageObserver();
-    console.log('[AutoClicker] 浮窗已创建');
+    console.log('[AutoClicker] 浮窗已完善为悬停胶囊设计');
     
-    // 强制基于当前字典进行一次文本刷新，双重保险
-    applyModeI18n();
+    // 初始化同步状态
+    updateModeUI();
+    updateLoopCounter();
   }
 
   // ─── 等待生成按钮出现后初始化 ────────────────────────────────
@@ -915,6 +1016,7 @@
     if (type === '__TRIGGER_GENERATE__') {
       const btn = findGenerateButton();
       if (btn) {
+        lastGenerateTime = performance.now(); // 记录快捷键触发耗时起点
         triggerClick(btn);
         console.log('[AutoClicker] 快捷键触发生成图像');
       } else {
@@ -922,6 +1024,24 @@
       }
     }
   });
+
+  // ─── 全局监听器：捕获手动生成，以便记录耗时 ────────────────────
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (btn) {
+      const txt = btn.textContent || '';
+      if (txt.includes('Generate') && txt.includes('Image')) {
+        lastGenerateTime = performance.now();
+      }
+    }
+  }, { capture: true }); // 使用 capture 保证在被其它逻辑阻止冒泡前拿到记录
+
+  document.addEventListener('keydown', e => {
+    // 捕捉 NAI 原生的 Ctrl+Enter 或 Meta+Enter 快捷键
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      lastGenerateTime = performance.now();
+    }
+  }, { capture: true });
 
   const initTimer = setInterval(() => {
     const btn = xpathNode(XPATH_GENERATE);
