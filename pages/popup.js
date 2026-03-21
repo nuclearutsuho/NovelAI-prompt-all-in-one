@@ -529,6 +529,23 @@ async function initData() {
 
   await refreshSequentialCountersFromActiveTab();
 
+  // ===== 同步页面存活状态指示器 =====
+  const libraryBtn = document.getElementById('btn-library');
+  function updateSyncLiveIndicator(isActive) {
+    if (!libraryBtn) return;
+    if (isActive) {
+      libraryBtn.classList.add('sync-live');
+      libraryBtn.setAttribute('data-sync-tooltip', '⚡ 实时同步中');
+    } else {
+      libraryBtn.classList.remove('sync-live');
+      libraryBtn.setAttribute('data-sync-tooltip', '点击打开以启用同步');
+    }
+  }
+  // 初始化时读取当前状态
+  chrome.storage.local.get(['syncPageActive'], (d) => {
+    updateSyncLiveIndicator(!!d.syncPageActive);
+  });
+
   // Listen for storage changes to keep counters in sync and hot-reload dictionary
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
@@ -541,6 +558,10 @@ async function initData() {
             if (c.editor) c.editor.render();
           });
         });
+      }
+      // 同步页面存活状态变化时，实时更新按钮指示器
+      if (changes.syncPageActive) {
+        updateSyncLiveIndicator(!!changes.syncPageActive.newValue);
       }
     }
   });

@@ -448,13 +448,14 @@ const MODAL_ID = 'nai-history-modal';
 
       /* ── 收藏夹工具栏 ── */
       .nhm-fav-toolbar {
-        display: flex; align-items: center; gap: 6px;
-        padding: 6px 12px; border-bottom: 1px solid #2e2e50; flex-shrink: 0;
+        display: flex; align-items: center; gap: 4px;
+        padding: 6px 8px; border-bottom: 1px solid #2e2e50; flex-shrink: 0;
+        flex-wrap: wrap; /* 允许必要时换行但不打断单个按钮 */
       }
       .nhm-toolbar-btn {
         background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.15);
-        border-radius: 5px; padding: 4px 10px; font-size: 11px; color: #999;
-        cursor: pointer; transition: all 0.15s;
+        border-radius: 5px; padding: 4px 6px; font-size: 11px; color: #999;
+        cursor: pointer; transition: all 0.15s; white-space: nowrap;
       }
       .nhm-toolbar-btn:hover { background: rgba(255,255,255,0.12); color: #fff; border-style: solid; }
 
@@ -1451,6 +1452,59 @@ const MODAL_ID = 'nai-history-modal';
             setTimeout(() => { exportBtn.textContent = '📤 导出'; }, 1500);
           });
           toolbar.appendChild(exportBtn);
+
+          // 导入收藏夹按钮
+          const importBtn = document.createElement('label');
+          importBtn.className = 'nhm-toolbar-btn';
+          importBtn.textContent = '📥 导入';
+          importBtn.style.cursor = 'pointer';
+          const importInput = document.createElement('input');
+          importInput.type = 'file';
+          importInput.accept = '.json';
+          importInput.style.display = 'none';
+
+          importInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const originalText = importBtn.childNodes[0].nodeValue; // 取出文本节点
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              try {
+                const importedData = JSON.parse(event.target.result);
+                if (!Array.isArray(importedData)) throw new Error('Invalid format');
+                
+                const existingIds = new Set(historyData.map(item => item.id));
+                let addedCount = 0;
+                
+                // 将导入的项目强制设为收藏属性，合并进现存列表
+                importedData.forEach(item => {
+                  if (item && item.id && !existingIds.has(item.id)) {
+                    item.isFavorite = true;
+                    historyData.unshift(item);
+                    existingIds.add(item.id);
+                    addedCount++;
+                  }
+                });
+                
+                if (addedCount > 0) {
+                  saveHistoryData(historyData);
+                  renderList();
+                }
+                
+                importBtn.childNodes[0].nodeValue = `✅ 导入了 ${addedCount} 项`;
+                setTimeout(() => { importBtn.childNodes[0].nodeValue = originalText; }, 2000);
+              } catch (err) {
+                console.error('[Favorites Import Error]', err);
+                importBtn.childNodes[0].nodeValue = '❌ 解析失败';
+                setTimeout(() => { importBtn.childNodes[0].nodeValue = originalText; }, 2000);
+              }
+              e.target.value = '';
+            };
+            reader.readAsText(file);
+          });
+
+          importBtn.appendChild(importInput);
+          toolbar.appendChild(importBtn);
 
           const manageBtn = document.createElement('button');
           manageBtn.className = 'nhm-toolbar-btn';

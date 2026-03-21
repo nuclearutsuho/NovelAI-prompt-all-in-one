@@ -1,5 +1,9 @@
 // ============================================================
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
+import { localSyncService } from '../lib/LocalSyncService.js';
+
+// 向后台注册心跳长连接，让 popup 等其他组件感知到同步页面已打开
+const syncHeartbeat = chrome.runtime.connect({ name: 'sync-heartbeat' });
 
 // Wildcard Sync Manager - sync.js
 // Features: Bidirectional Sync, Snapshot Backup, CodeMirror Editor, Drag-and-Drop Organization
@@ -316,16 +320,6 @@ async function createSnapshot(label, type = 'auto') {
 
     await saveSnapshot(snapshot);
 
-    // Save to local .snapshots/ if directory is bound
-    try {
-        const handle = await getDirHandle();
-        if (handle && await verifyPermission(handle, false)) {
-            await saveSnapshotToLocal(handle, snapshot);
-        }
-    } catch (e) {
-        log(tf('log_local_snapshot_save_failed', { message: e.message }), 'warn');
-    }
-
     // Auto-cleanup: keep max N auto snapshots
     const autoSnaps = allSnaps.filter(s => s.type === 'auto');
     if (autoSnaps.length >= snapshotSettings.maxSnapshots) {
@@ -339,6 +333,15 @@ async function createSnapshot(label, type = 'auto') {
     await renderSnapshotList();
     return snapshot;
 }
+
+// ============================
+// 注册核心引擎的防灾拦截图腾
+// 当 LocalSyncService 在对比本地文件发现大面积被删时，触发自动兜底快照
+// ============================
+localSyncService.registerSnapshotCallback(async (reason, type) => {
+    // 转发到底层的快照创建器（它会自动连带存储此时的 wildcards 全貌）
+    await createSnapshot(reason, type);
+});
 
 async function loadSnapshotSettings() {
     const data = await new Promise(r => chrome.storage.local.get('snapshotSettings', r));
@@ -388,17 +391,6 @@ async function saveSnapshotToLocal(rootHandle, snapshot) {
 async function deleteSnapshotFull(id) {
     // Delete from IndexedDB
     await deleteSnapshotFromDB(id);
-
-    // Delete from local .snapshots/
-    try {
-        const handle = await getDirHandle();
-        if (handle && await verifyPermission(handle, false)) {
-            const snapDir = await handle.getDirectoryHandle(SNAPSHOT_DIR, { create: false });
-            await snapDir.removeEntry(id, { recursive: true });
-        }
-    } catch (e) {
-        // Local snapshot dir may not exist, that's OK
-    }
 }
 
 async function restoreSnapshot(id) {
@@ -682,121 +674,7 @@ async function removeEmptyDirs(handle, allowedDirs = new Set(), prefix = '', ski
     }
 }
 
-// Export: browser → local (with deletion of stale files)
-async function doExport() {
-    const handle = boundDirHandle || await getDirHandle();
-    if (!handle) {
-        return log(t('log_bind_first'), 'error');
-    }
-    if (!await verifyPermission(handle, true)) {
-        updateTopUI(handle.name, 'reauthorize');
-        return log(t('log_reauthorize_first'), 'error');
-    }
-    boundDirHandle = handle;
-    updateTopUI(handle.name, 'bound');
-
-    log(t('log_export_start'), 'info');
-
-    // 1. Auto snapshot
-    await createSnapshot(t('snapshot_label_before_export'), 'auto');
-
-    // 2. Get browser data
-    const data = await new Promise(r => chrome.storage.local.get(['wildcards', 'wildcardFolders'], r));
-    const wildcards = data.wildcards || {};
-    const folders = data.wildcardFolders || [];
-
-    // 3. Scan local files
-    log(t('log_scan_local_files'), 'info');
-    const local = await scanLocalDir(handle);
-    const browserKeys = new Set(Object.keys(wildcards));
-
-    // 4. Delete local files not in browser
-    let deleteCount = 0;
-    for (const [localKey] of local.files) {
-        if (!browserKeys.has(localKey)) {
-            const parts = localKey.split('/');
-            const fileName = parts.pop() + '.txt';
-            let parentDir = handle;
-            if (parts.length > 0) {
-                try {
-                    parentDir = await ensureDir(handle, parts);
-                } catch { continue; }
-            }
-            try {
-                await parentDir.removeEntry(fileName);
-                log(tf('log_deleted_local_file', { key: localKey }), 'warn');
-                deleteCount++;
-            } catch (e) {
-                log(tf('log_delete_failed', { key: localKey, message: e.message }), 'error');
-            }
-        }
-    }
-
-    // 5. Create folders
-    for (const folder of folders) {
-        await ensureDir(handle, folder.split('/'));
-    }
-
-    // 6. Write files
-    let writeCount = 0;
-    for (const [key, content] of Object.entries(wildcards)) {
-        const parts = key.split('/');
-        const fileName = parts.pop() + '.txt';
-        let targetDir = handle;
-        if (parts.length > 0) targetDir = await ensureDir(handle, parts);
-        const fh = await targetDir.getFileHandle(fileName, { create: true });
-        const w = await fh.createWritable();
-        await w.write(content);
-        await w.close();
-        writeCount++;
-    }
-
-    // 7. Clean up empty dirs
-    const allowedFolders = new Set(folders);
-    await removeEmptyDirs(handle, allowedFolders);
-
-    log(tf('log_export_complete_counts', { writeCount, deleteCount }), 'success');
-    showToast(tf('toast_export_done', { writeCount, deleteCount }), 'success');
-}
-
-// Import: local → browser (full replace)
-async function doImport() {
-    const handle = boundDirHandle || await getDirHandle();
-    if (!handle) {
-        return log(t('log_bind_first'), 'error');
-    }
-    if (!await verifyPermission(handle, true)) {
-        updateTopUI(handle.name, 'reauthorize');
-        return log(t('log_reauthorize_first'), 'error');
-    }
-    boundDirHandle = handle;
-    updateTopUI(handle.name, 'bound');
-
-    log(t('log_import_start'), 'info');
-
-    // 1. Auto snapshot
-    await createSnapshot(t('snapshot_label_before_import'), 'auto');
-
-    // 2. Scan local
-    const local = await scanLocalDir(handle);
-
-    // 3. Build data
-    const wildcards = {};
-    for (const [key, content] of local.files) {
-        wildcards[key] = content;
-    }
-
-    // 4. Save to storage
-    await new Promise(r => chrome.storage.local.set({
-        wildcards,
-        wildcardFolders: local.folders
-    }, r));
-
-    const fileCount = Object.keys(wildcards).length;
-    log(tf('log_import_complete_counts', { fileCount, folderCount: local.folders.length }), 'success');
-    showToast(tf('toast_import_done', { fileCount }), 'success');
-    refreshFileTree();
-}
+// [已移除] doExport / doImport 已被 LocalSyncService 的实时双向同步完全取代
 
 // ============================
 // Section 7: File Tree & Drag-and-Drop
@@ -867,7 +745,7 @@ async function handleDrop(e, targetFolder) {
     log(tf('log_move_start', { type: moveTypeLabel, oldPath, newPath }), 'info');
 
     // Perform move logic
-    chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
+    chrome.storage.local.get(['wildcards', 'wildcardFolders'], async data => {
         const wildcards = data.wildcards || {};
         const folders = data.wildcardFolders || [];
 
@@ -877,6 +755,8 @@ async function handleDrop(e, targetFolder) {
             if (wildcards[newPath]) {
                 if (!confirm(tf('confirm_overwrite_file', { key: newPath }))) return;
             }
+            // 物理移动
+            await localSyncService.moveFile(oldPath + '.txt', newPath + '.txt', wildcards[oldPath]);
             wildcards[newPath] = wildcards[oldPath];
             delete wildcards[oldPath];
             modified = true;
@@ -1057,9 +937,10 @@ function attachDeleteHandlers() {
             e.stopPropagation();
             const key = btn.dataset.fileDelete;
             if (!await customConfirm(tf('confirm_delete_file', { key }))) return;
-            chrome.storage.local.get('wildcards', d => {
+            chrome.storage.local.get('wildcards', async d => {
                 const map = d.wildcards || {};
                 delete map[key];
+                await localSyncService.deleteFile(key + '.txt');
                 chrome.storage.local.set({ wildcards: map }, () => {
                     if (currentFile === key) closeEditor();
                     log(tf('log_file_deleted', { key }), 'info');
@@ -1074,12 +955,13 @@ function attachDeleteHandlers() {
             e.stopPropagation();
             const folder = btn.dataset.folderDelete;
             if (!await customConfirm(tf('confirm_delete_folder', { folder }))) return;
-            chrome.storage.local.get(['wildcards', 'wildcardFolders'], d => {
+            chrome.storage.local.get(['wildcards', 'wildcardFolders'], async d => {
                 const map = d.wildcards || {};
                 const folders = d.wildcardFolders || [];
                 const newMap = {};
                 Object.keys(map).forEach(k => { if (!k.startsWith(folder + '/')) newMap[k] = map[k]; });
                 const newFolders = folders.filter(f => f !== folder && !f.startsWith(folder + '/'));
+                await localSyncService.deleteFolder(folder);
                 chrome.storage.local.set({ wildcards: newMap, wildcardFolders: newFolders }, () => {
                     if (currentFile && currentFile.startsWith(folder + '/')) closeEditor();
                     expandedFolders.delete(folder);
@@ -1302,13 +1184,24 @@ function saveCurrentFile() {
     const content = editorView.state.doc.toString();
     const newName = fileNameInput.value.trim().replace(/\s+/g, '_').replace(/_+/g, '_');
     if (!newName) return showToast(t('toast_enter_file_name'), 'error');
-    chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
+    chrome.storage.local.get(['wildcards', 'wildcardFolders'], async data => {
         const map = data.wildcards || {};
         const oldParts = currentFile.split('/');
         oldParts.pop();
         const newKey = oldParts.length > 0 ? `${oldParts.join('/')}/${newName}` : newName;
         if (newKey !== currentFile && map[newKey]) return showToast(tf('toast_file_exists', { name: newKey }), 'error');
-        if (newKey !== currentFile) delete map[currentFile];
+        
+        // 核心接入：写回物理硬盘
+        const writeSuccess = await localSyncService.safeWriteFile(newKey + '.txt', content);
+        if (!writeSuccess) {
+            return showToast('保存失败或遇到冲突拦截', 'error');
+        }
+
+        if (newKey !== currentFile) {
+            delete map[currentFile];
+            await localSyncService.deleteFile(currentFile + '.txt');
+        }
+        
         map[newKey] = content;
         localContent = content;
         currentFile = newKey;
@@ -1379,8 +1272,9 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
         linkBtn.style.display = 'none';
         linkBtn.textContent = t('action_bind_folder');
         unlinkBtn.style.display = '';
-        exportBtn.style.display = '';
+        exportBtn.style.display = 'none';
         importBtn.style.display = '';
+        importBtn.textContent = '🔄 从本地加载/刷新';
         snapshotBtn.style.display = '';
         return;
     }
@@ -1421,6 +1315,11 @@ let bottomExpanded = true;
 toggleBottom.addEventListener('click', () => {
     bottomExpanded = !bottomExpanded;
     bottomContent.style.display = bottomExpanded ? '' : 'none';
+    if (bottomExpanded) {
+        bottomPanel.classList.remove('collapsed');
+    } else {
+        bottomPanel.classList.add('collapsed');
+    }
     updateBottomToggleText();
 });
 
@@ -1437,6 +1336,12 @@ document.addEventListener('mousemove', (e) => {
         const newWidth = Math.min(Math.max(e.clientX, 180), window.innerWidth * 0.5);
         sidebar.style.width = newWidth + 'px';
     } else if (isResizingBottom) {
+        if (!bottomExpanded) {
+            bottomExpanded = true;
+            bottomContent.style.display = '';
+            bottomPanel.classList.remove('collapsed');
+            updateBottomToggleText();
+        }
         const newHeight = Math.max(36, window.innerHeight - e.clientY);
         bottomPanel.style.height = newHeight + 'px';
         bottomPanel.style.maxHeight = 'none'; // release max-height restriction
@@ -1473,10 +1378,11 @@ newFileBtn.addEventListener('click', () => {
     // Handle creation in selected folder
     const fullName = selectedFolder ? `${selectedFolder}/${name}` : name;
 
-    chrome.storage.local.get('wildcards', data => {
+    chrome.storage.local.get('wildcards', async data => {
         const map = data.wildcards || {};
         if (map[fullName]) return showToast(tf('toast_file_exists', { name: fullName }), 'error');
         map[fullName] = '';
+        await localSyncService.safeWriteFile(fullName + '.txt', '');
         chrome.storage.local.set({ wildcards: map }, () => {
             newItemName.value = '';
             log(tf('log_created_file', { key: fullName }), 'info');
@@ -1523,6 +1429,7 @@ linkBtn.addEventListener('click', async () => {
         const dirHandle = await window.showDirectoryPicker();
         await saveDirHandle(dirHandle);
         boundDirHandle = dirHandle;
+        localSyncService.init(boundDirHandle);
         updateTopUI(dirHandle.name, 'bound');
         log(tf('log_bound', { dirName: dirHandle.name }), 'success');
     } catch (e) {
@@ -1534,21 +1441,26 @@ linkBtn.addEventListener('click', async () => {
 unlinkBtn.addEventListener('click', async () => {
     await removeDirHandle();
     boundDirHandle = null;
+    localSyncService.clear();
     updateTopUI(null, 'unbound');
     log(t('log_unbound'), 'info');
 });
 
 exportBtn.addEventListener('click', async () => {
-    exportBtn.disabled = true;
-    try { await doExport(); }
-    catch (e) { log(tf('log_export_failed', { message: e.message }), 'error'); showToast(t('toast_export_failed'), 'error'); }
-    finally { exportBtn.disabled = false; }
+    showToast('该功能已被实时双向同步取代', 'info');
 });
 
 importBtn.addEventListener('click', async () => {
     if (!await customConfirm(t('confirm_import_overwrite'))) return;
     importBtn.disabled = true;
-    try { await doImport(); }
+    try { 
+        log('开始基于本地文件更新...', 'info');
+        await createSnapshot(t('snapshot_label_before_import'), 'auto');
+        const hasChanges = await localSyncService.scanAndPullChanges(); 
+        if (hasChanges) refreshFileTree();
+        log('成功基于本地文件更新', 'success');
+        showToast('从本地加载成功', 'success');
+    }
     catch (e) { log(tf('log_import_failed', { message: e.message }), 'error'); showToast(t('toast_import_failed'), 'error'); }
     finally { importBtn.disabled = false; }
 });
@@ -1564,6 +1476,8 @@ dismissBannerBtn.addEventListener('click', () => { extChangeBanner.classList.rem
 
 chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    
+    // 同步资源树 UI 与通配符
     if (changes.wildcards || changes.wildcardFolders) {
         refreshFileTree();
         if (currentFile && changes.wildcards) {
@@ -1571,12 +1485,40 @@ chrome.storage.onChanged.addListener((changes, area) => {
             if (currentFile in newData) {
                 const externalContent = newData[currentFile];
                 const editorContent = editorView ? editorView.state.doc.toString() : '';
-                if (externalContent !== editorContent && externalContent !== localContent) extChangeBanner.classList.add('show');
+                
+                const normalize = s => (s || '').replace(/\r\n/g, '\n');
+                
+                // 如果外部内容和编辑器内不一样 (忽略换行符差异)
+                if (normalize(externalContent) !== normalize(editorContent)) {
+                    if (normalize(editorContent) === normalize(localContent)) {
+                        // 且用户在扩展内并未进行任何改动（编辑器是干净的/与上次保存一致），则直接安全覆盖刷新
+                        openFile(currentFile);
+                        showToast(`文件 ${currentFile} 已自动从本地同步最新内容`, 'info');
+                        extChangeBanner.classList.remove('show');
+                    } else {
+                        // 用户敲了字但没保存，弹窗警告避免丢字
+                        extChangeBanner.classList.add('show');
+                    }
+                }
             } else {
                 showToast(t('toast_current_file_deleted'), 'error');
                 closeEditor();
             }
         }
+    }
+
+    // JSON 资源实体变更写回物理环境
+    if (boundDirHandle && !localSyncService.isSyncing) {
+        const trySyncJson = async (fileName, dataObj) => {
+            if (!dataObj) return;
+            const dataStr = typeof dataObj === 'string' ? dataObj : JSON.stringify(dataObj, null, 2);
+            const ok = await localSyncService.safeWriteFile(fileName, dataStr);
+            if (!ok) showToast(`【安全网】写入 ${fileName} 失败，本地已有新版本，请自顶部刷新`, 'error');
+        };
+
+        if (changes.promptHistory) trySyncJson('favorites.json', changes.promptHistory.newValue);
+        if (changes.groupTagsUserData) trySyncJson('group_tags.json', changes.groupTagsUserData.newValue);
+        if (changes.dictOverlay) trySyncJson('user_dict.json', changes.dictOverlay.newValue);
     }
 });
 
@@ -1620,9 +1562,7 @@ closeDiffBtn.addEventListener('click', () => diffModal.classList.remove('show'))
 // Close modals on outside click
 window.addEventListener('click', (e) => {
     if (e.target === snapSettingsModal) snapSettingsModal.classList.remove('show');
-    if (e.target === snapSettingsModal) snapSettingsModal.classList.remove('show');
     if (e.target === diffModal) diffModal.classList.remove('show');
-    if (e.target === dictChangesModal) dictChangesModal.classList.remove('show');
 });
 // ============================
 // Section 12: Dictionary Editor (Virtual Scroll)
@@ -2018,9 +1958,12 @@ dictAddBtn.addEventListener('click', async () => {
 
 dictExportBtn.addEventListener('click', () => {
     if (!dictMergedView.length) { showToast(t('toast_no_data_to_export'), 'error'); return; }
+    const escapeCsv = (str) => {
+        if (typeof str !== 'string') return str;
+        return /[,"\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+    };
     const lines = dictMergedView.map(item => {
-        const alias = item.aliases.includes(',') ? `"${item.aliases}"` : item.aliases;
-        return `${item.tag},${item.color},${item.count},${alias},${item.zhCN}`;
+        return `${escapeCsv(item.tag)},${item.color},${item.count},${escapeCsv(item.aliases)},${escapeCsv(item.zhCN)}`;
     });
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -2247,8 +2190,15 @@ async function init() {
         const handle = await getDirHandle();
         if (handle && await verifyPermission(handle, false)) {
             boundDirHandle = handle;
+            localSyncService.init(handle);
             updateTopUI(handle.name, 'bound');
             log(tf('log_restored_bound', { dirName: handle.name }), 'success');
+            
+            // 初始化安全拉取，保证用户刷新 F5 时能读取到外部最新修改
+            localSyncService.scanAndPullChanges({ silent: true }).then(hasChanges => {
+                if (hasChanges) refreshFileTree();
+            });
+            
         } else if (handle) {
             boundDirHandle = handle;
             updateTopUI(handle.name, 'reauthorize');
@@ -2270,3 +2220,14 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// 生命周期：当用户切回浏览器窗口时，静默自本地拉取更新
+window.addEventListener('focus', async () => {
+    if (boundDirHandle && !localSyncService.isSyncing && currentTopUiState === 'bound') {
+        const hasChanges = await localSyncService.scanAndPullChanges({ silent: true });
+        if (hasChanges) {
+            refreshFileTree();
+            // 注意：如果有已经被打开的文件发生了更新，chrome.storage.onChanged 会接到通知并显示更新 Banner
+        }
+    }
+});

@@ -1348,6 +1348,9 @@ async function importGroupTagsData(file) {
     nextData = mergedWithDefault.data;
 
     nextData = await saveGroupTagsData(nextData);
+    if (groupTagsDataUtils.syncTranslationsToDictionary) {
+      await groupTagsDataUtils.syncTranslationsToDictionary(nextData);
+    }
     nextData = await rebuildWithSpecialFavorites(nextData, { apply: false });
     applyGroupTagsData(nextData);
 
