@@ -1801,7 +1801,6 @@ function initUI() {
   const settings = [
     'preservePrompt',
     'alternativeDanbooruAutocomplete',
-    'renderNewlines',
     'hideAutoClicker',
     'settingSyncPulse',
     'tagEditorDensity',
@@ -1829,10 +1828,6 @@ function initUI() {
         el.checked = !!val;
 
         // Apply initial state
-        if (key === 'renderNewlines') {
-          editor.options.renderNewlines = el.checked;
-          charEditors.forEach(ce => { if (ce?.editor) ce.editor.options.renderNewlines = el.checked; });
-        }
         
         // Phase 14.7: Breathing Light toggle
         if (key === 'settingSyncPulse') {
@@ -1853,17 +1848,6 @@ function initUI() {
 
         el.addEventListener('change', () => {
           chrome.storage.local.set({ [key]: el.checked });
-          if (key === 'renderNewlines') {
-            editor.options.renderNewlines = el.checked;
-            editor.render();
-            charEditors.forEach(ce => {
-              if (ce?.editor) {
-                ce.editor.options.renderNewlines = el.checked;
-                ce.editor.render();
-              }
-            });
-          }
-          
           if (key === 'settingSyncPulse') {
               document.body.classList.toggle('disable-pulse', !el.checked);
           }

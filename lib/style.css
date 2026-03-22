@@ -786,37 +786,8 @@
     justify-content: center;
 }
 
-/* When renderNewlines is enabled, make the ↵ tag break the line but keep the capsule compact */
-.render-newlines .tag-item.tag-newline {
-    flex-basis: 100%;
-    width: 100%;
-    flex-direction: row; /* Layout capsule and separator horizontally */
-    align-items: center;
-    justify-content: flex-start;
-    padding-top: 4px;
-    padding-bottom: 4px;
-    pointer-events: none; /* Make the wide row click-through */
-}
 
-/* Re-enable pointer events ONLY for the actual capsule */
-.render-newlines .tag-item.tag-newline .tag-capsule {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 40px;
-    pointer-events: auto; /* Allow dragging and clicking only on the capsule */
-}
-
-/* Decorative separator line extending to the right of the compact capsule */
-.render-newlines .tag-item.tag-newline::after {
-    content: '';
-    display: block;
-    flex: 1; /* Take up remaining space on the line */
-    height: 1px;
-    margin-left: 12px;
-    background: linear-gradient(90deg, rgba(129, 140, 248, 0.4), transparent);
-    opacity: 0.7;
-}
-
+/* 换行符标签的基础视觉样式 */
 .tag-item.tag-newline .tag-text {
     opacity: 0.6;
     font-size: 16px;
@@ -824,21 +795,15 @@
 }
 
 .tag-item.tag-newline .tag-zh-row {
-    visibility: hidden;
-    /* Newlines don't need translations */
+    visibility: hidden; /* 换行符无需翻译行 */
 }
 
-/* 强制将换行符标签的后置内容挤入下一行的不可见占位元素 */
+/* 不可见换行占位符：flex-basis: 100% 使其撑满整行，从而强制后续标签另起一行 */
 .tag-newline-separator { 
     flex-basis: 100%; 
     height: 0; 
     margin: 0; 
     padding: 0; 
-}
-
-/* 当启用了换行符分割线渲染时，因为换行符标签本身已经撑满了全行，所以该占位符元素应当隐藏 */
-.render-newlines .tag-newline-separator { 
-    display: none; 
 }
 
 .autocomplete-item {
