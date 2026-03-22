@@ -229,6 +229,22 @@ const dom = {
   importFileInput: document.getElementById('import-group-tags-input')
 };
 
+// ========== 辅助交互 (滚轮横向滚动) (Phase 16.18) ==========
+[dom.primaryTabs, dom.secondaryTabs].forEach(el => {
+  if (el) {
+    el.addEventListener('wheel', (e) => {
+      if (e.deltaY !== 0) {
+        // 将垂直滚轮偏移量转换为平滑的横向滚动 (Phase 16.19)
+        e.preventDefault();
+        el.scrollBy({
+          left: e.deltaY,
+          behavior: 'smooth'
+        });
+      }
+    }, { passive: false });
+  }
+});
+
 function isSpecialFavoritesCategory(category) {
   return category?.id === SPECIAL_FAVORITES_CATEGORY_ID || category?.isSpecialFavoritesCategory;
 }

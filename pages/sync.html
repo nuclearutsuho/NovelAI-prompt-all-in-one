@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="utf-8">
-    <title>NovelAI-prompt-all-in-one - Resource Manager</title>
+    <title data-i18n="sync_center">同步中心</title>
     <style>
         /* ===== Reset & Base ===== */
         *,
@@ -51,12 +51,23 @@
         .topbar {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             padding: 10px 16px;
             background: #1a1a2e;
             border-bottom: 1px solid #2a2a44;
             flex-shrink: 0;
-            flex-wrap: wrap;
+            flex-wrap: nowrap; /* 强制单行 */
+            overflow-x: auto;  /* 空间不足时横向滚动，不折行 */
+            position: relative;
+            z-index: 100; /* 确保顶栏在内容之上 */
+        }
+        /* 美化顶栏滚动条 */
+        .topbar::-webkit-scrollbar {
+            height: 4px;
+        }
+        .topbar::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
         }
 
         .topbar-logo {
@@ -79,8 +90,9 @@
 
         .topbar-actions {
             display: flex;
+            align-items: center;
             gap: 6px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap; /* 强制单行 */
         }
 
         /* ===== Sync Dashboard ===== */
@@ -140,6 +152,142 @@
             to { opacity: 1; transform: scale(1.3); }
         }
 
+        .sync-settings-btn {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #888;
+            border-radius: 6px;
+            padding: 4px;
+            margin-left: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            font-size: 1.1rem;
+        }
+
+        .sync-settings-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+        }
+        .sync-badge.pending::before {
+            background: #fbbf24; /* Amber */
+            box-shadow: 0 0 6px rgba(251, 191, 36, 0.8);
+            animation: status-pulse 1s infinite alternate;
+        }
+
+        /* Quick Settings Popover (Bubble) - Refined */
+        .sync-quick-popover {
+            display: none;
+            position: fixed; /* 改为 fixed 以便脱离顶栏裁剪 */
+            background: rgba(35, 35, 56, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid #6366f1; /* Indigo */
+            border-radius: 12px;
+            padding: 14px 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+            z-index: 10000; /* 极高层级，确保不被任何编辑器遮挡 */
+            min-width: 240px;
+        }
+
+        .sync-quick-popover.show {
+            display: block;
+            animation: popover-slide-down 0.25s cubic-bezier(0, 0, 0.2, 1);
+        }
+
+        @keyframes popover-slide-down {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .sync-quick-popover::after {
+            content: '';
+            position: absolute;
+            top: -6px;
+            right: 12px;
+            width: 10px;
+            height: 10px;
+            background: #232338;
+            border-left: 1px solid #6366f1;
+            border-top: 1px solid #6366f1;
+            transform: rotate(45deg);
+        }
+
+        .popover-header {
+            font-size: 0.72rem;
+            color: #8888aa;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .popover-control {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .popover-control input[type="range"] {
+            flex: 1;
+            height: 4px;
+            accent-color: #818cf8;
+            cursor: pointer;
+            background: rgba(255,255,255,0.08);
+            border-radius: 2px;
+            appearance: none;
+            outline: none;
+        }
+
+        .popover-control input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #818cf8;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid #232338;
+            box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
+            transition: transform 0.1s;
+        }
+
+        .popover-control input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+
+        .popover-val {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            color: #818cf8;
+            font-weight: 700;
+        }
+
+        .popover-val input {
+            width: 48px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(129, 140, 248, 0.3);
+            border-radius: 4px;
+            color: #818cf8;
+            font-family: inherit;
+            font-size: 1rem;
+            text-align: center;
+            padding: 2px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .popover-val input:focus {
+            border-color: #818cf8;
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        /* 隐藏原生箭头 */
+        .popover-val input::-webkit-inner-spin-button,
+        .popover-val input::-webkit-outer-spin-button {
+            appearance: none;
+            margin: 0;
+        }
         .sync-badge.pending::before {
             background: #fbbf24; /* Amber */
             box-shadow: 0 0 6px rgba(251, 191, 36, 0.8);
@@ -185,14 +333,7 @@
         }
 
         /* Responsiveness for dashboard */
-        @media (max-width: 1100px) {
-            .sync-dashboard {
-                flex-wrap: wrap;
-                margin: 5px 0;
-                width: 100%;
-                order: 3; /* 放在第二行 */
-            }
-        }
+        /* 移除原有的折行媒体查询，由 topbar 的 overflow-x 接管 */
 
         /* ===== Buttons ===== */
         button,
@@ -1355,7 +1496,7 @@
 <body>
     <!-- Top Bar -->
     <div class="topbar">
-        <span class="topbar-logo">📚 NovelAI-prompt-all-in-one</span>
+        <span class="topbar-logo" data-i18n="sync_center">同步中心</span>
         <div class="view-switcher" id="viewSwitcher">
             <button class="active" data-view="sync" data-i18n="view_sync">📂 通配符管理</button>
             <button data-view="dict" data-i18n="view_dict">📖 字典编辑</button>
@@ -1390,6 +1531,7 @@
                     <div class="sync-badge-status">待命</div>
                 </div>
             </div>
+            <button id="syncSettingsBtn" class="sync-settings-btn" title="同步设置" data-i18n-title="sync_settings_title">⚙️</button>
         </div>
 
         <span id="statusText" class="topbar-status" data-i18n="status_checking">检查中...</span>
@@ -1398,7 +1540,6 @@
             <button id="unlinkBtn" class="btn-danger btn-icon" style="display:none;" data-i18n="action_unbind">✕ 解除绑定</button>
             <button id="exportBtn" class="btn-icon" data-i18n="action_push_to_local">⬆ 回传到本地</button>
             <button id="importBtn" class="btn-icon" style="display:none;" data-i18n="action_import_from_local">⬇ 从本地导入</button>
-            <button id="snapshotBtn" class="btn-warning btn-icon" style="display:none;" data-i18n="action_manual_snapshot">📸 手动快照</button>
         </div>
     </div>
 
@@ -1481,6 +1622,7 @@
         <div class="bottom-tabs">
             <button class="bottom-tab active" data-tab="log" data-i18n="tab_log">📋 日志</button>
             <button class="bottom-tab" data-tab="snapshots" data-i18n="tab_snapshots">📸 快照</button>
+            <button id="snapshotBtn" class="btn-sm btn-icon" style="display:none; margin-left:10px; align-self:center; height:24px; padding:0 8px; font-size:0.75rem; border:1px solid #f59e0b; color:#f59e0b; background:rgba(245,158,11,0.1);" data-i18n="action_manual_snapshot">📸 手动快照</button>
             <button class="bottom-toggle" id="toggleBottom" data-i18n="toggle_bottom_collapse">▼ 折叠</button>
         </div>
         <div class="bottom-content" id="bottomContent">
@@ -1559,6 +1701,20 @@
             <div class="modal-actions">
                 <button id="confirmYes" class="btn-danger" data-i18n="action_confirm">确认</button>
                 <button id="confirmNo" data-i18n="action_cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    </div>
+
+    <!-- Sync Settings Popover (Body Level) -->
+    <div id="syncQuickPopover" class="sync-quick-popover">
+        <div class="popover-header" data-i18n="sync_debounce_time">自动同步防抖时间 (秒):</div>
+        <div class="popover-control">
+            <input type="range" id="settingSyncDebounceRange" min="1" max="60" step="1">
+            <div class="popover-val">
+                <input type="number" id="settingSyncDebounceInput" min="1" max="60">
+                <span>s</span>
             </div>
         </div>
     </div>

@@ -28,7 +28,7 @@ const groupTagsDataUtils = window.GroupTagsDataUtils || {};
 let expandedFolders = new Set(); // track expanded folders in tree
 let selectedFolder = null;    // currently selected folder for creation
 let draggedItem = null;       // item being dragged
-let snapshotSettings = { maxSnapshots: 20, confirmDelete: true };
+let snapshotSettings = { maxSnapshots: 20, confirmDelete: true, debounceTime: 10 };
 let selectedSnapshots = new Set();
 let boundDirHandle = null;
 let currentLang = DEFAULT_LANG;
@@ -108,6 +108,13 @@ const settingMaxSnapshots = document.getElementById('settingMaxSnapshots');
 const settingConfirmDelete = document.getElementById('settingConfirmDelete');
 const saveSnapSettingsBtn = document.getElementById('saveSnapSettingsBtn');
 const closeSnapSettingsBtn = document.getElementById('closeSnapSettingsBtn');
+
+// Sync Settings UI (Scheme 2 Popover)
+const syncSettingsBtn = document.getElementById('syncSettingsBtn');
+const syncQuickPopover = document.getElementById('syncQuickPopover');
+const settingSyncDebounceRange = document.getElementById('settingSyncDebounceRange');
+const settingSyncDebounceInput = document.getElementById('settingSyncDebounceInput');
+
 const diffModal = document.getElementById('diffModal');
 const diffSummary = document.getElementById('diffSummary');
 const diffContainer = document.getElementById('diffContainer');
@@ -1510,6 +1517,14 @@ linkBtn.addEventListener('click', async () => {
         localSyncService.init(boundDirHandle);
         updateTopUI(dirHandle.name, 'bound');
         log(tf('log_bound', { dirName: dirHandle.name }), 'success');
+
+        // 方案A：初次绑定强制 Pull（"认祖归宗"模式）
+        // 先建立自动快照保护当前浏览器数据，再以 initialBind 模式执行首次同步
+        await createSnapshot('绑定文件夹前自动备份', 'auto');
+        const res = await localSyncService.scanAndPullChanges({ silent: false, initialBind: true });
+        await handleSyncResult(res);
+        refreshFileTree();
+        log('初次绑定同步完成：已从本地文件夹加载数据', 'success');
     } catch (e) {
         if (e.name === 'AbortError') log(t('log_user_cancelled'), 'info');
         else log(tf('log_bind_failed', { message: e.message }), 'error');
@@ -1631,23 +1646,24 @@ let jsonSyncDebounceTimer = null;
 chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !boundDirHandle || localSyncService.isSyncing) return;
     
-    // 监听背景守护进程打上的时间戳变脏信号
-    const hasDirtyMark = changes.promptHistory_lastModified || 
-                         changes.groupTagsUserData_lastModified || 
-                         changes.dictOverlay_lastModified;
+    // 监听专属防抖脏信号，避免被底层引擎刷入的 _lastModified 干扰循环
+    const hasDirtyMark = (changes.sync_pending_favorites && changes.sync_pending_favorites.newValue) || 
+                         (changes.sync_pending_grouptags && changes.sync_pending_grouptags.newValue) || 
+                         (changes.sync_pending_userdict && changes.sync_pending_userdict.newValue);
                          
     if (hasDirtyMark) {
-        if (changes.promptHistory_lastModified) document.getElementById('badge-favorites')?.classList.add('pending');
-        if (changes.groupTagsUserData_lastModified) document.getElementById('badge-grouptags')?.classList.add('pending');
-        if (changes.dictOverlay_lastModified) document.getElementById('badge-userdict')?.classList.add('pending');
+        if (changes.sync_pending_favorites && changes.sync_pending_favorites.newValue) document.getElementById('badge-favorites')?.classList.add('pending');
+        if (changes.sync_pending_grouptags && changes.sync_pending_grouptags.newValue) document.getElementById('badge-grouptags')?.classList.add('pending');
+        if (changes.sync_pending_userdict && changes.sync_pending_userdict.newValue) document.getElementById('badge-userdict')?.classList.add('pending');
 
         clearTimeout(jsonSyncDebounceTimer);
+        const delayMs = (snapshotSettings.debounceTime || 10) * 1000;
         jsonSyncDebounceTimer = setTimeout(() => {
             if (boundDirHandle && !localSyncService.isSyncing) {
                 // 触发底层的全维安全同步引擎，它带有 15 份快照和防呆机制
                 localSyncService.scanAndPullChanges({ silent: true }).then(handleSyncResult);
             }
-        }, 10000);
+        }, delayMs);
     }
 });
 
@@ -1686,10 +1702,69 @@ saveSnapSettingsBtn.addEventListener('click', async () => {
 
 closeSnapSettingsBtn.addEventListener('click', () => snapSettingsModal.classList.remove('show'));
 
+function repositionQuickPopover() {
+    if (!syncQuickPopover.classList.contains('show')) return;
+    const rect = syncSettingsBtn.getBoundingClientRect();
+    syncQuickPopover.style.top = `${rect.bottom + 10}px`;
+    syncQuickPopover.style.left = 'auto';
+    syncQuickPopover.style.right = `${window.innerWidth - rect.right}px`;
+}
+
+// Sync Settings Modal Events (Scheme 2 Popover)
+syncSettingsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isShow = syncQuickPopover.classList.contains('show');
+    if (!isShow) {
+        const val = snapshotSettings.debounceTime || 10;
+        settingSyncDebounceRange.value = val;
+        settingSyncDebounceInput.value = val;
+        syncQuickPopover.classList.add('show');
+        repositionQuickPopover();
+    } else {
+        syncQuickPopover.classList.remove('show');
+    }
+});
+
+settingSyncDebounceRange.addEventListener('input', () => {
+    settingSyncDebounceInput.value = settingSyncDebounceRange.value;
+});
+
+settingSyncDebounceRange.addEventListener('change', async () => {
+    snapshotSettings.debounceTime = parseInt(settingSyncDebounceRange.value, 10);
+    await saveSnapshotSettings();
+});
+
+settingSyncDebounceInput.addEventListener('input', () => {
+    let val = parseInt(settingSyncDebounceInput.value, 10);
+    if (!isNaN(val)) {
+        if (val < 1) val = 1;
+        if (val > 60) val = 60;
+        settingSyncDebounceRange.value = val;
+    }
+});
+
+settingSyncDebounceInput.addEventListener('change', async () => {
+    let val = parseInt(settingSyncDebounceInput.value, 10);
+    if (isNaN(val) || val < 1) val = 1;
+    if (val > 60) val = 60;
+    settingSyncDebounceInput.value = val;
+    settingSyncDebounceRange.value = val;
+    snapshotSettings.debounceTime = val;
+    await saveSnapshotSettings();
+});
+
+// Window and Layout Events for Popover Tracking
+window.addEventListener('resize', repositionQuickPopover);
+document.querySelector('.topbar').addEventListener('scroll', repositionQuickPopover);
+
 // Diff Modal Events
 closeDiffBtn.addEventListener('click', () => diffModal.classList.remove('show'));
 // Close modals on outside click
+// Close modals/popovers on outside click
 window.addEventListener('click', (e) => {
+    if (syncQuickPopover.classList.contains('show') && !syncQuickPopover.contains(e.target)) {
+        syncQuickPopover.classList.remove('show');
+    }
     if (e.target === snapSettingsModal) snapSettingsModal.classList.remove('show');
     if (e.target === diffModal) diffModal.classList.remove('show');
 });

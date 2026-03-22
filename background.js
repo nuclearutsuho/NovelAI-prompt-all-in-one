@@ -68,13 +68,28 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
     // 如果修改伴随了 _lastModified 字段（来自 sync 拉取时的操作），则绕过
     if (changes.promptHistory && !changes.promptHistory_lastModified) {
-        timeUpdates.promptHistory_lastModified = now;
+        // 只在收藏/文件夹部分真正变化时才打时间戳，忽略临时历史记录的更新
+        const extractFavFingerprint = (arr) => {
+            if (!Array.isArray(arr)) return '';
+            return JSON.stringify(
+                arr.filter(s => s && (s.isFavorite || s.isFolder))
+                   .map(s => ({ id: s.id, name: s.name, positive: s.positive, negative: s.negative, isFavorite: s.isFavorite, isFolder: s.isFolder, children: s.children, folderId: s.folderId, sortOrder: s.sortOrder }))
+            );
+        };
+        const oldFav = extractFavFingerprint(changes.promptHistory.oldValue);
+        const newFav = extractFavFingerprint(changes.promptHistory.newValue);
+        if (oldFav !== newFav) {
+            timeUpdates.promptHistory_lastModified = now;
+            timeUpdates.sync_pending_favorites = true;
+        }
     }
     if (changes.groupTagsUserData && !changes.groupTagsUserData_lastModified) {
         timeUpdates.groupTagsUserData_lastModified = now;
+        timeUpdates.sync_pending_grouptags = true;
     }
     if (changes.dictOverlay && !changes.dictOverlay_lastModified) {
         timeUpdates.dictOverlay_lastModified = now;
+        timeUpdates.sync_pending_userdict = true;
     }
 
     if (Object.keys(timeUpdates).length > 0) {
@@ -82,15 +97,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 });
 
-// ===== Sync 页面存活心跳 =====
+// ===== Sync 页面存活心跳 (支持多开检测) =====
 // sync.html 打开时通过 Port 连接通知后台，关闭/崩溃时 Chrome 自动触发 onDisconnect
-let syncPagePort = null;
+const activeSyncPorts = new Set();
 chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'sync-heartbeat') return;
-    syncPagePort = port;
+    
+    activeSyncPorts.add(port);
     chrome.storage.local.set({ syncPageActive: true });
+    
     port.onDisconnect.addListener(() => {
-        syncPagePort = null;
-        chrome.storage.local.set({ syncPageActive: false });
+        activeSyncPorts.delete(port);
+        // 只有当所有 sync 页面都关闭时，才将挂载状态标为 false
+        if (activeSyncPorts.size === 0) {
+            chrome.storage.local.set({ syncPageActive: false });
+        }
     });
 });

@@ -44,6 +44,7 @@ const SyncStatusManager = {
       grouptags: document.getElementById('popover-badge-grouptags'),
       userdict: document.getElementById('popover-badge-userdict')
     };
+    this.libraryBtn = document.getElementById('btn-library');
     this.cachedStats = {};
     
     // 初始加载缓存快照
@@ -68,10 +69,10 @@ const SyncStatusManager = {
         this.updateReadyState(!!changes.syncPageActive.newValue);
       }
 
-      // 3. 琥珀色挂起状态触发 (检测 Dirty Marks)
-      if (changes.promptHistory_lastModified) this.setPending('favorites');
-      if (changes.groupTagsUserData_lastModified) this.setPending('grouptags');
-      if (changes.dictOverlay_lastModified) this.setPending('userdict');
+      // 3. 琥珀色挂起状态触发 (检测专属安全挂起标志，避免死循环)
+      if (changes.sync_pending_favorites && changes.sync_pending_favorites.newValue) this.setPending('favorites');
+      if (changes.sync_pending_grouptags && changes.sync_pending_grouptags.newValue) this.setPending('grouptags');
+      if (changes.sync_pending_userdict && changes.sync_pending_userdict.newValue) this.setPending('userdict');
 
       // 4. 绿色涟漪触发 (由任意页面落盘成功后广播)
       if (changes.last_sync_event) {
@@ -123,6 +124,10 @@ const SyncStatusManager = {
         }
         badge.classList.remove('pending');
       }
+      // 数据更新说明防抖期的同步已经落地，解除主按钮的黄色挂起状态
+      if (this.libraryBtn) {
+        this.libraryBtn.classList.remove('sync-pending');
+      }
     }
   },
 
@@ -137,6 +142,7 @@ const SyncStatusManager = {
   setPending(id) {
     const badge = this.badges[id];
     if (badge) badge.classList.add('pending');
+    if (this.libraryBtn) this.libraryBtn.classList.add('sync-pending');
   },
 
   triggerPing(id) {
@@ -1817,7 +1823,10 @@ function initUI() {
         let val = data[key];
         if (val === undefined) {
           // 默认开启的选项
-          if (key === 'alternativeDanbooruAutocomplete' || key === 'settingSyncPulse') {
+          if (key === 'alternativeDanbooruAutocomplete' || 
+              key === 'settingSyncPulse' || 
+              key === 'autoOpenSync' || 
+              key === 'triggerTab') {
             val = true;
           } else {
             val = false;
@@ -1871,8 +1880,12 @@ function initUI() {
   };
 
   btnSettings.addEventListener('click', () => {
-    modal.style.display = 'flex';
-    updateStorageMonitor();
+    if (modal.style.display === 'flex') {
+      closeSettingsModal();
+    } else {
+      modal.style.display = 'flex';
+      updateStorageMonitor();
+    }
   });
   
   closeSettings.addEventListener('click', closeSettingsModal);

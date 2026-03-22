@@ -233,6 +233,21 @@
       filter: drop-shadow(0 0 3px rgba(16, 185, 129, 0.5));
     }
 
+    /* Phase 16.1: 数据脏污待同步时的琥珀色防抖等待状态 */
+    @keyframes sync-pending-pulse {
+      0%, 100% { filter: drop-shadow(0 0 2px rgba(251, 191, 36, 0.3)); opacity: 0.8; }
+      50% { filter: drop-shadow(0 0 6px rgba(251, 191, 36, 0.7)); opacity: 1; transform: scale(1.05); }
+    }
+
+    #btn-library.sync-pending {
+      color: #fbbf24 !important; /* Amber-400 */
+      border-color: rgba(251, 191, 36, 0.5) !important;
+    }
+
+    #btn-library.sync-pending svg {
+      animation: sync-pending-pulse 1.2s ease-in-out infinite !important;
+    }
+
     /* 禁用呼吸灯：强制静止 */
     .disable-pulse #btn-library svg { 
         animation: none !important; 
@@ -242,6 +257,9 @@
     }
     .disable-pulse #btn-library.sync-live svg {
         filter: drop-shadow(0 0 3px rgba(16, 185, 129, 0.5)) !important;
+    }
+    .disable-pulse #btn-library.sync-pending svg {
+        filter: drop-shadow(0 0 3px rgba(251, 191, 36, 0.6)) !important;
     }
 
     /* ===== 【Phase 14】实时同步浮窗样式与动画 ===== */
@@ -1846,11 +1864,11 @@
 
       <!-- Existing Settings -->
       <div class="setting-group">
-        <label><input type="checkbox" class="toggle-switch" id="autoOpenSync"> <span data-i18n="setting_auto_sync">Auto-open Sync Page on Launch</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="autoOpenSync" checked> <span data-i18n="setting_auto_sync">Auto-open Sync Page on Launch</span></label>
         <div class="setting-desc" data-i18n="setting_auto_sync_desc">Automatically open the sync background page when using the extension.</div>
       </div>
       <div class="setting-group">
-        <label><input type="checkbox" class="toggle-switch" id="preservePrompt" checked> <span data-i18n="setting_preserve">Preserve Original
+        <label><input type="checkbox" class="toggle-switch" id="preservePrompt" > <span data-i18n="setting_preserve">Preserve Original
             img prompts on Enhance</span></label>
         <div class="setting-desc" data-i18n="setting_preserve_desc">Uncheck this to randomize enhance prompts.</div>
       </div>
@@ -1867,8 +1885,8 @@
       </div>
       <div class="setting-group">
         <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>
-        <label><input type="checkbox" class="toggle-switch" id="triggerSpace" checked> <span data-i18n="setting_space">Space</span></label>
-        <label><input type="checkbox" class="toggle-switch" id="triggerTab"> <span data-i18n="setting_tab">Tab</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="triggerSpace"> <span data-i18n="setting_space">Space</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="triggerTab" checked> <span data-i18n="setting_tab">Tab</span></label>
       </div>
 
       <!-- 全局快捷键设置 -->
