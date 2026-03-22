@@ -33,6 +33,13 @@ let selectedSnapshots = new Set();
 let boundDirHandle = null;
 let currentLang = DEFAULT_LANG;
 let currentTopUiState = 'unbound';
+// 资产状态管理 (用于顶栏看板)
+const assetMetadata = {
+    wildcards: { count: 0, lastSync: 0 },
+    favorites: { count: 0, lastSync: 0 },
+    grouptags: { count: 0, lastSync: 0 },
+    userdict: { count: 0, lastSync: 0 }
+};
 
 function getSyncDict() {
     return getI18nDict(currentLang, 'sync');
@@ -1265,6 +1272,8 @@ async function loadDictionary() {
 // ============================
 function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
     currentTopUiState = state;
+    const syncDashboard = document.getElementById('syncDashboard');
+    const badges = syncDashboard.querySelectorAll('.sync-badge');
 
     if (state === 'bound' && dirName) {
         statusText.textContent = tf('status_bound', { dirName });
@@ -1276,6 +1285,13 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
         importBtn.style.display = '';
         importBtn.textContent = '🔄 从本地加载/刷新';
         snapshotBtn.style.display = '';
+        
+        syncDashboard.classList.add('show');
+        badges.forEach(b => {
+            b.classList.add('ready');
+        });
+        // 刷新一次看板数据
+        refreshDashboardUI();
         return;
     }
 
@@ -1288,6 +1304,7 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
         exportBtn.style.display = 'none';
         importBtn.style.display = 'none';
         snapshotBtn.style.display = 'none';
+        syncDashboard.classList.remove('show');
         return;
     }
 
@@ -1299,7 +1316,52 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
     exportBtn.style.display = 'none';
     importBtn.style.display = 'none';
     snapshotBtn.style.display = 'none';
+    syncDashboard.classList.remove('show');
 }
+
+/**
+ * 刷新看板 UI 文字 (数量 | 相对时间)
+ */
+function refreshDashboardUI() {
+    const formatTime = (ts) => {
+        if (!ts) return '未同步';
+        const diff = Math.floor((Date.now() - ts) / 1000);
+        if (diff < 30) return '刚刚';
+        if (diff < 60) return '1 分钟前';
+        if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+        return new Date(ts).toLocaleDateString();
+    };
+
+    const updateBadge = (id, meta, unit) => {
+        const status = document.querySelector(`#badge-${id} .sync-badge-status`);
+        if (status) {
+            status.textContent = `${meta.count}${unit} | ${formatTime(meta.lastSync)}`;
+        }
+    };
+
+    updateBadge('wildcards', assetMetadata.wildcards, ' 个');
+    updateBadge('favorites', assetMetadata.favorites, ' 条');
+    updateBadge('grouptags', assetMetadata.grouptags, ' 词');
+    updateBadge('userdict', assetMetadata.userdict, ' 词');
+}
+
+/**
+ * 外部推入全量统计数据
+ */
+function updateDashboardStats(stats) {
+    if (!stats) return;
+    const now = Date.now();
+    if (stats.wildcards !== undefined) { assetMetadata.wildcards.count = stats.wildcards; assetMetadata.wildcards.lastSync = now; }
+    if (stats.favorites !== undefined) { assetMetadata.favorites.count = stats.favorites; assetMetadata.favorites.lastSync = now; }
+    if (stats.grouptags !== undefined) { assetMetadata.grouptags.count = stats.grouptags; assetMetadata.grouptags.lastSync = now; }
+    if (stats.userdict !== undefined) { assetMetadata.userdict.count = stats.userdict; assetMetadata.userdict.lastSync = now; }
+    refreshDashboardUI();
+}
+
+// 每 60 秒自动刷新看板的相对时间
+setInterval(refreshDashboardUI, 60000);
+
 
 document.querySelectorAll('.bottom-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1456,8 +1518,10 @@ importBtn.addEventListener('click', async () => {
     try { 
         log('开始基于本地文件更新...', 'info');
         await createSnapshot(t('snapshot_label_before_import'), 'auto');
-        const hasChanges = await localSyncService.scanAndPullChanges(); 
+        const res = await localSyncService.scanAndPullChanges(); 
+        const hasChanges = res === true || (res && res.hasChanges);
         if (hasChanges) refreshFileTree();
+        if (res && res.stats) updateDashboardStats(res.stats);
         log('成功基于本地文件更新', 'success');
         showToast('从本地加载成功', 'success');
     }
@@ -1523,8 +1587,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
         jsonSyncDebounceTimer = setTimeout(() => {
             if (boundDirHandle && !localSyncService.isSyncing) {
                 // 触发底层的全维安全同步引擎，它带有 15 份快照和防呆机制
-                localSyncService.scanAndPullChanges({ silent: true }).then(hasChanges => {
+                localSyncService.scanAndPullChanges({ silent: true }).then(res => {
+                    const hasChanges = res === true || (res && res.hasChanges);
                     if (hasChanges) refreshFileTree();
+                    if (res && res.stats) updateDashboardStats(res.stats);
                 });
             }
         }, 10000);
@@ -2179,6 +2245,28 @@ viewSwitcher.addEventListener('click', async (e) => {
 async function init() {
     await initI18n();
     log(t('log_initializing'), 'info');
+
+    // 挂载同步看板交互反馈
+    localSyncService.onSyncSuccess = (fileName, count) => {
+        let id = '';
+        if (fileName.endsWith('.txt')) id = 'wildcards';
+        else if (fileName === 'favorites.json') id = 'favorites';
+        else if (fileName === 'group_tags.json') id = 'grouptags';
+        else if (fileName === 'user_dict.csv') id = 'userdict';
+
+        if (id) {
+            if (count !== undefined) assetMetadata[id].count = count;
+            assetMetadata[id].lastSync = Date.now();
+            
+            const badge = document.getElementById(`badge-${id}`);
+            if (badge) {
+                badge.classList.remove('pinging');
+                void badge.offsetWidth; // trigger reflow
+                badge.classList.add('pinging');
+                refreshDashboardUI(); 
+            }
+        }
+    };
     if (typeof chrome === 'undefined' || typeof chrome.storage === 'undefined') {
         log(t('log_error_chrome_api'), 'error');
         statusText.textContent = t('status_chrome_api_unavailable');
@@ -2204,8 +2292,10 @@ async function init() {
             log(tf('log_restored_bound', { dirName: handle.name }), 'success');
             
             // 初始化安全拉取，保证用户刷新 F5 时能读取到外部最新修改
-            localSyncService.scanAndPullChanges({ silent: true }).then(hasChanges => {
+            localSyncService.scanAndPullChanges({ silent: true }).then(res => {
+                const hasChanges = res === true || (res && res.hasChanges);
                 if (hasChanges) refreshFileTree();
+                if (res && res.stats) updateDashboardStats(res.stats);
             });
             
         } else if (handle) {
@@ -2233,10 +2323,11 @@ document.addEventListener('DOMContentLoaded', init);
 // 生命周期：当用户切回浏览器窗口时，静默自本地拉取更新
 window.addEventListener('focus', async () => {
     if (boundDirHandle && !localSyncService.isSyncing && currentTopUiState === 'bound') {
-        const hasChanges = await localSyncService.scanAndPullChanges({ silent: true });
+        const res = await localSyncService.scanAndPullChanges({ silent: true });
+        const hasChanges = res === true || (res && res.hasChanges);
         if (hasChanges) {
             refreshFileTree();
-            // 注意：如果有已经被打开的文件发生了更新，chrome.storage.onChanged 会接到通知并显示更新 Banner
         }
+        if (res && res.stats) updateDashboardStats(res.stats);
     }
 });

@@ -83,6 +83,105 @@
             flex-wrap: wrap;
         }
 
+        /* ===== Sync Dashboard ===== */
+        .sync-dashboard {
+            display: none; /* 默认隐藏，绑定目录后显示 */
+            align-items: center;
+            gap: 8px;
+            margin: 0 10px;
+            flex-shrink: 0;
+        }
+
+        .sync-dashboard.show {
+            display: flex;
+        }
+
+        .sync-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(45, 45, 72, 0.4);
+            border: 1px solid rgba(61, 61, 92, 0.6);
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-size: 0.72rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            cursor: help;
+        }
+
+        .sync-badge:hover {
+            background: rgba(61, 61, 92, 0.8);
+            border-color: #5b5bd6;
+            transform: translateY(-1px);
+        }
+
+        .sync-badge::before {
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #4b4b6b; /* 默认灰色 */
+            transition: background 0.3s;
+        }
+
+        .sync-badge.ready::before {
+            background: #4ade80;
+            box-shadow: 0 0 6px rgba(74, 222, 128, 0.6);
+        }
+
+        .sync-badge-icon {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            filter: grayscale(0.2);
+        }
+
+        .sync-badge-info {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.2;
+        }
+
+        .sync-badge-label {
+            color: #8888aa;
+            font-weight: 600;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .sync-badge-status {
+            color: #d4d4e0;
+            font-size: 0.75rem;
+        }
+
+        /* Sync Ripple Animation */
+        @keyframes sync-ripple {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+
+        .sync-badge.pinging {
+            animation: sync-ripple 1s ease-out;
+            border-color: #4ade80;
+            background: rgba(74, 222, 128, 0.1);
+        }
+
+        /* Responsiveness for dashboard */
+        @media (max-width: 1100px) {
+            .sync-dashboard {
+                flex-wrap: wrap;
+                margin: 5px 0;
+                width: 100%;
+                order: 3; /* 放在第二行 */
+            }
+        }
+
         /* ===== Buttons ===== */
         button,
         .btn {
@@ -1249,6 +1348,38 @@
             <button class="active" data-view="sync" data-i18n="view_sync">📂 通配符管理</button>
             <button data-view="dict" data-i18n="view_dict">📖 字典编辑</button>
         </div>
+
+        <div id="syncDashboard" class="sync-dashboard">
+            <div class="sync-badge" id="badge-wildcards" title="通配符列表 (*.txt)">
+                <div class="sync-badge-icon">📁</div>
+                <div class="sync-badge-info">
+                    <div class="sync-badge-label">Wildcards</div>
+                    <div class="sync-badge-status">待命</div>
+                </div>
+            </div>
+            <div class="sync-badge" id="badge-favorites" title="收藏夹 (favorites.json)">
+                <div class="sync-badge-icon">⭐</div>
+                <div class="sync-badge-info">
+                    <div class="sync-badge-label">Favorites</div>
+                    <div class="sync-badge-status">待命</div>
+                </div>
+            </div>
+            <div class="sync-badge" id="badge-grouptags" title="分类标签 (group_tags.json)">
+                <div class="sync-badge-icon">🏷️</div>
+                <div class="sync-badge-info">
+                    <div class="sync-badge-label">GroupTags</div>
+                    <div class="sync-badge-status">待命</div>
+                </div>
+            </div>
+            <div class="sync-badge" id="badge-userdict" title="翻译词库 (user_dict.csv)">
+                <div class="sync-badge-icon">📖</div>
+                <div class="sync-badge-info">
+                    <div class="sync-badge-label">UserDict</div>
+                    <div class="sync-badge-status">待命</div>
+                </div>
+            </div>
+        </div>
+
         <span id="statusText" class="topbar-status" data-i18n="status_checking">检查中...</span>
         <div class="topbar-actions" id="syncActions">
             <button id="linkBtn" class="btn-primary btn-icon" data-i18n="action_bind_folder">📂 绑定文件夹</button>
