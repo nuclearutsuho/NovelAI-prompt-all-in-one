@@ -1347,15 +1347,31 @@ function refreshDashboardUI() {
 }
 
 /**
- * 外部推入全量统计数据
+ * 外部推入全量统计数据 (由 scanAndPullChanges 触发)
+ * 仅依赖底层传回的绝对修改时间，不盲目刷新 `lastSync`。
  */
 function updateDashboardStats(stats) {
     if (!stats) return;
-    const now = Date.now();
-    if (stats.wildcards !== undefined) { assetMetadata.wildcards.count = stats.wildcards; assetMetadata.wildcards.lastSync = now; }
-    if (stats.favorites !== undefined) { assetMetadata.favorites.count = stats.favorites; assetMetadata.favorites.lastSync = now; }
-    if (stats.grouptags !== undefined) { assetMetadata.grouptags.count = stats.grouptags; assetMetadata.grouptags.lastSync = now; }
-    if (stats.userdict !== undefined) { assetMetadata.userdict.count = stats.userdict; assetMetadata.userdict.lastSync = now; }
+
+    // 获取到全量统计说明已完成读取/对齐，清除所有挂起状态
+    document.querySelectorAll('.sync-badge').forEach(b => b.classList.remove('pending'));
+
+    if (stats.wildcards !== undefined) {
+        assetMetadata.wildcards.count = stats.wildcards.count;
+        if (stats.wildcards.lastModified) assetMetadata.wildcards.lastSync = stats.wildcards.lastModified;
+    }
+    if (stats.favorites !== undefined) {
+        assetMetadata.favorites.count = stats.favorites.count;
+        if (stats.favorites.lastModified) assetMetadata.favorites.lastSync = stats.favorites.lastModified;
+    }
+    if (stats.grouptags !== undefined) {
+        assetMetadata.grouptags.count = stats.grouptags.count;
+        if (stats.grouptags.lastModified) assetMetadata.grouptags.lastSync = stats.grouptags.lastModified;
+    }
+    if (stats.userdict !== undefined) {
+        assetMetadata.userdict.count = stats.userdict.count;
+        if (stats.userdict.lastModified) assetMetadata.userdict.lastSync = stats.userdict.lastModified;
+    }
     refreshDashboardUI();
 }
 
@@ -1621,6 +1637,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
                          changes.dictOverlay_lastModified;
                          
     if (hasDirtyMark) {
+        if (changes.promptHistory_lastModified) document.getElementById('badge-favorites')?.classList.add('pending');
+        if (changes.groupTagsUserData_lastModified) document.getElementById('badge-grouptags')?.classList.add('pending');
+        if (changes.dictOverlay_lastModified) document.getElementById('badge-userdict')?.classList.add('pending');
+
         clearTimeout(jsonSyncDebounceTimer);
         jsonSyncDebounceTimer = setTimeout(() => {
             if (boundDirHandle && !localSyncService.isSyncing) {
@@ -2294,6 +2314,7 @@ async function init() {
             
             const badge = document.getElementById(`badge-${id}`);
             if (badge) {
+                badge.classList.remove('pending'); 
                 badge.classList.remove('pinging');
                 void badge.offsetWidth; // trigger reflow
                 badge.classList.add('pinging');

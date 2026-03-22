@@ -134,6 +134,18 @@
             box-shadow: 0 0 6px rgba(74, 222, 128, 0.6);
         }
 
+        /* 琥珀色挂起状态 (Pending) */
+        @keyframes status-pulse {
+            from { opacity: 0.7; transform: scale(1); }
+            to { opacity: 1; transform: scale(1.3); }
+        }
+
+        .sync-badge.pending::before {
+            background: #fbbf24; /* Amber */
+            box-shadow: 0 0 6px rgba(251, 191, 36, 0.8);
+            animation: status-pulse 0.8s infinite alternate ease-in-out;
+        }
+
         .sync-badge-icon {
             font-size: 0.9rem;
             opacity: 0.8;
