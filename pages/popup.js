@@ -31,6 +31,125 @@ let groupTagsController = null;
 let historyController = null;
 let promptSyncController = null;
 
+/**
+ * Phase 14: 同步看板状态管理器 (Popup 侧)
+ * 负责驱动主界面同步按钮悬浮窗中的 4 枚资源徽章
+ */
+const SyncStatusManager = {
+  init() {
+    this.container = document.getElementById('sync-status-container');
+    this.badges = {
+      wildcards: document.getElementById('popover-badge-wildcards'),
+      favorites: document.getElementById('popover-badge-favorites'),
+      grouptags: document.getElementById('popover-badge-grouptags'),
+      userdict: document.getElementById('popover-badge-userdict')
+    };
+    this.cachedStats = {};
+    
+    // 初始加载缓存快照
+    chrome.storage.local.get(['sync_stats_cache', 'syncPageActive'], (d) => {
+      this.cachedStats = d.sync_stats_cache || {};
+      this.updateUI(this.cachedStats);
+      this.updateReadyState(!!d.syncPageActive);
+    });
+
+    // 监听全域存储变更，实现跨页面状态共鸣
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      
+      // 1. 计数快照/物理时间变更 (由同步页发起持久化)
+      if (changes.sync_stats_cache) {
+        this.cachedStats = changes.sync_stats_cache.newValue || {};
+        this.updateUI(this.cachedStats);
+      }
+      
+      // 2. 存活状态变更
+      if (changes.syncPageActive) {
+        this.updateReadyState(!!changes.syncPageActive.newValue);
+      }
+
+      // 3. 琥珀色挂起状态触发 (检测 Dirty Marks)
+      if (changes.promptHistory_lastModified) this.setPending('favorites');
+      if (changes.groupTagsUserData_lastModified) this.setPending('grouptags');
+      if (changes.dictOverlay_lastModified) this.setPending('userdict');
+
+      // 4. 绿色涟漪触发 (由任意页面落盘成功后广播)
+      if (changes.last_sync_event) {
+        const ev = changes.last_sync_event.newValue;
+        if (ev && ev.id) this.triggerPing(ev.id);
+      }
+    });
+
+    // 每 60 秒自动刷新相对时间文字
+    setInterval(() => this.updateUI(this.cachedStats), 60000);
+  },
+
+  formatTime(ts) {
+    if (!ts) return '--';
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 30) return '刚刚';
+    if (diff < 60) return '1m';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  },
+
+  updateUI(stats) {
+    if (!stats) return;
+    this.cachedStats = stats;
+    
+    // Phase 14.5: Check if it's completely empty
+    const isEmpty = Object.keys(stats).length === 0;
+    if (this.container) {
+      if (isEmpty) {
+        this.container.classList.add('is-empty');
+      } else {
+        this.container.classList.remove('is-empty');
+      }
+    }
+
+    if (!isEmpty) {
+      for (const [id, data] of Object.entries(stats)) {
+        const badge = this.badges[id];
+        if (!badge) continue;
+        const statusEl = badge.querySelector('.popover-badge-status');
+        if (statusEl) {
+          const unit = id === 'wildcards' ? ' 个' : (id === 'favorites' ? ' 条' : ' 词');
+          const count = typeof data === 'object' ? data.count : (data || 0);
+          const lastSync = typeof data === 'object' ? data.lastModified : null;
+          
+          // 合并显示: 158 个 | 3m
+          statusEl.textContent = `${count}${unit} | ${this.formatTime(lastSync)}`;
+        }
+        badge.classList.remove('pending');
+      }
+    }
+  },
+
+  updateReadyState(isReady) {
+    // 移除 empty state 判定，只作用于 badges
+    Object.values(this.badges).forEach(b => {
+      if (!b) return;
+      isReady ? b.classList.add('ready') : b.classList.remove('ready');
+    });
+  },
+
+  setPending(id) {
+    const badge = this.badges[id];
+    if (badge) badge.classList.add('pending');
+  },
+
+  triggerPing(id) {
+    const badge = this.badges[id];
+    if (badge) {
+      badge.classList.remove('pending');
+      badge.classList.remove('pinging');
+      void badge.offsetWidth; // 触发 reflow 重新播放动画
+      badge.classList.add('pinging');
+    }
+  }
+};
+
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -565,6 +684,11 @@ async function initData() {
       }
     }
   });
+
+  // 【Phase 14】初始化主界面同步看板管理器
+  if (typeof SyncStatusManager !== 'undefined') {
+    SyncStatusManager.init();
+  }
 }
 
 // === Character Prompts Logic ===
@@ -1677,11 +1801,12 @@ function initUI() {
   const settings = [
     'preservePrompt',
     'alternativeDanbooruAutocomplete',
-    'triggerSpace',
-    'triggerTab',
     'renderNewlines',
     'hideAutoClicker',
-    'tagEditorDensity'
+    'settingSyncPulse',
+    'tagEditorDensity',
+    'triggerSpace',
+    'triggerTab'
   ];
 
   // Load Settings
@@ -1692,7 +1817,7 @@ function initUI() {
         let val = data[key];
         if (val === undefined) {
           // 默认开启的选项
-          if (key === 'alternativeDanbooruAutocomplete') {
+          if (key === 'alternativeDanbooruAutocomplete' || key === 'settingSyncPulse') {
             val = true;
           } else {
             val = false;
@@ -1702,10 +1827,15 @@ function initUI() {
         }
         el.checked = !!val;
 
-        // Initial state for editor
+        // Apply initial state
         if (key === 'renderNewlines') {
           editor.options.renderNewlines = el.checked;
           charEditors.forEach(ce => { if (ce?.editor) ce.editor.options.renderNewlines = el.checked; });
+        }
+        
+        // Phase 14.7: Breathing Light toggle
+        if (key === 'settingSyncPulse') {
+            document.body.classList.toggle('disable-pulse', !el.checked);
         }
 
         el.addEventListener('change', () => {
@@ -1719,6 +1849,10 @@ function initUI() {
                 ce.editor.render();
               }
             });
+          }
+          
+          if (key === 'settingSyncPulse') {
+              document.body.classList.toggle('disable-pulse', !el.checked);
           }
         });
       }
