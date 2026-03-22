@@ -1806,7 +1806,8 @@ function initUI() {
     'settingSyncPulse',
     'tagEditorDensity',
     'triggerSpace',
-    'triggerTab'
+    'triggerTab',
+    'autoOpenSync'
   ];
 
   // Load Settings
@@ -1836,6 +1837,18 @@ function initUI() {
         // Phase 14.7: Breathing Light toggle
         if (key === 'settingSyncPulse') {
             document.body.classList.toggle('disable-pulse', !el.checked);
+        }
+
+        // Phase 14.8: Auto-open Sync Page toggle
+        // 由于 manifest 中没有 tabs 权限，无法用 chrome.tabs.query 按 URL 检索。
+        // 改用 sync.html 自身写入的 syncPageActive 标记来判断是否已有活跃页面。
+        if (key === 'autoOpenSync' && el.checked) {
+          chrome.storage.local.get('syncPageActive', (result) => {
+            if (!result.syncPageActive) {
+              const syncUrl = chrome.runtime.getURL("pages/sync.html");
+              chrome.tabs.create({ url: syncUrl, active: false });
+            }
+          });
         }
 
         el.addEventListener('change', () => {
