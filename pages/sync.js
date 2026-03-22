@@ -1281,7 +1281,7 @@ function updateTopUI(dirName, state = dirName ? 'bound' : 'unbound') {
         linkBtn.style.display = 'none';
         linkBtn.textContent = t('action_bind_folder');
         unlinkBtn.style.display = '';
-        exportBtn.style.display = 'none';
+        exportBtn.style.display = '';
         importBtn.style.display = '';
         importBtn.textContent = '🔄 从本地加载/刷新';
         snapshotBtn.style.display = '';
@@ -1509,7 +1509,25 @@ unlinkBtn.addEventListener('click', async () => {
 });
 
 exportBtn.addEventListener('click', async () => {
-    showToast('该功能已被实时双向同步取代', 'info');
+    if (!boundDirHandle) return showToast(t('log_bind_first'), 'error');
+    if (!await customConfirm(t('confirm_push_to_local_desc') || '确认将浏览器当前所有通配符回传到本地文件夹？这可能覆盖同名文件。')) return;
+    
+    exportBtn.disabled = true;
+    try {
+        log(t('log_push_start'), 'info');
+        const res = await localSyncService.pushAllWildcards();
+        if (res.success) {
+            log(tf('log_push_complete', { count: res.count }), 'success');
+            showToast(tf('toast_push_success', { count: res.count }), 'success');
+        } else {
+            throw new Error(res.error);
+        }
+    } catch (e) {
+        log(tf('log_export_failed', { message: e.message }), 'error');
+        showToast(t('toast_export_failed'), 'error');
+    } finally {
+        exportBtn.disabled = false;
+    }
 });
 
 importBtn.addEventListener('click', async () => {
@@ -1519,15 +1537,35 @@ importBtn.addEventListener('click', async () => {
         log('开始基于本地文件更新...', 'info');
         await createSnapshot(t('snapshot_label_before_import'), 'auto');
         const res = await localSyncService.scanAndPullChanges(); 
-        const hasChanges = res === true || (res && res.hasChanges);
-        if (hasChanges) refreshFileTree();
-        if (res && res.stats) updateDashboardStats(res.stats);
+        await handleSyncResult(res);
         log('成功基于本地文件更新', 'success');
         showToast('从本地加载成功', 'success');
     }
     catch (e) { log(tf('log_import_failed', { message: e.message }), 'error'); showToast(t('toast_import_failed'), 'error'); }
     finally { importBtn.disabled = false; }
 });
+
+/**
+ * 统一处理同步结果，包括拦截风险提示
+ */
+async function handleSyncResult(res) {
+    if (!res) return;
+    
+    if (res.error === 'empty_local_dir_risk') {
+        const choice = await customConfirm(t('confirm_empty_dir_push'));
+        if (choice) {
+            // 用户选择补齐本地
+            await exportBtn.click();
+        } else {
+            log('同步已取消：本地目录为空。请手动通过“回传到本地”初始化文件夹。', 'warning');
+        }
+        return;
+    }
+
+    const hasChanges = res === true || res.hasChanges;
+    if (hasChanges) refreshFileTree();
+    if (res.stats) updateDashboardStats(res.stats);
+}
 
 snapshotBtn.addEventListener('click', async () => {
     await createSnapshot(t('snapshot_label_manual'), 'manual');
@@ -1587,11 +1625,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
         jsonSyncDebounceTimer = setTimeout(() => {
             if (boundDirHandle && !localSyncService.isSyncing) {
                 // 触发底层的全维安全同步引擎，它带有 15 份快照和防呆机制
-                localSyncService.scanAndPullChanges({ silent: true }).then(res => {
-                    const hasChanges = res === true || (res && res.hasChanges);
-                    if (hasChanges) refreshFileTree();
-                    if (res && res.stats) updateDashboardStats(res.stats);
-                });
+                localSyncService.scanAndPullChanges({ silent: true }).then(handleSyncResult);
             }
         }, 10000);
     }
@@ -2292,11 +2326,7 @@ async function init() {
             log(tf('log_restored_bound', { dirName: handle.name }), 'success');
             
             // 初始化安全拉取，保证用户刷新 F5 时能读取到外部最新修改
-            localSyncService.scanAndPullChanges({ silent: true }).then(res => {
-                const hasChanges = res === true || (res && res.hasChanges);
-                if (hasChanges) refreshFileTree();
-                if (res && res.stats) updateDashboardStats(res.stats);
-            });
+            localSyncService.scanAndPullChanges({ silent: true }).then(handleSyncResult);
             
         } else if (handle) {
             boundDirHandle = handle;
@@ -2324,10 +2354,6 @@ document.addEventListener('DOMContentLoaded', init);
 window.addEventListener('focus', async () => {
     if (boundDirHandle && !localSyncService.isSyncing && currentTopUiState === 'bound') {
         const res = await localSyncService.scanAndPullChanges({ silent: true });
-        const hasChanges = res === true || (res && res.hasChanges);
-        if (hasChanges) {
-            refreshFileTree();
-        }
-        if (res && res.stats) updateDashboardStats(res.stats);
+        await handleSyncResult(res);
     }
 });
