@@ -186,12 +186,12 @@
       0%, 100% { 
         opacity: 0.6; 
         transform: scale(1); 
-        filter: drop-shadow(0 0 2px rgba(6, 182, 212, 0.2)); 
+        filter: drop-shadow(0 0 2px rgba(37, 99, 235, 0.2)); 
       }
       50% { 
         opacity: 1; 
         transform: scale(1.08); /* 略微增大缩放感 */
-        filter: drop-shadow(0 0 10px rgba(6, 182, 212, 1.2)); /* 大幅增强发光亮度 */
+        filter: drop-shadow(0 0 10px rgba(37, 99, 235, 1.2)); /* 大幅增强发光亮度 */
       }
     }
 
@@ -200,10 +200,10 @@
       50% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.35), 0 0 16px rgba(16, 185, 129, 0.15); }
     }
 
-    /* 默认未连接/未开启状态：电光青基色 (#06b6d4) */
+    /* 默认未连接/未开启状态：深蓝色基色 (#2563eb) */
     #btn-library {
-      color: #06b6d4 !important;
-      border-color: rgba(6, 182, 212, 0.35);
+      color: #2563eb !important;
+      border-color: rgba(37, 99, 235, 0.35);
       transition: all 0.3s ease;
       position: relative;
     }
@@ -214,8 +214,8 @@
     }
 
     #btn-library:hover {
-      background: rgba(6, 182, 212, 0.15);
-      border-color: rgba(6, 182, 212, 0.6);
+      background: rgba(37, 99, 235, 0.15);
+      border-color: rgba(37, 99, 235, 0.6);
     }
     
     #btn-library:hover svg {
@@ -267,17 +267,19 @@
       position: absolute;
       top: calc(100% + 10px);
       left: 50%;
-      transform: translateX(-50%) translateY(10px);
+      --sync-popover-scale: 1;
+      transform-origin: top center;
+      transform: translateX(-50%) scale(var(--sync-popover-scale)) translateY(10px);
       background: #1e1e2e; /* 改为实底色，防止背景透视干扰 */
       backdrop-filter: blur(12px);
       border: 2px solid rgba(132, 132, 230, 0.35); /* 加粗加深边框 */
       border-radius: 12px;
-      padding: 12px;
+      padding: 14px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      min-width: 140px;
-      max-width: 220px;
+      gap: 10px;
+      min-width: 180px;
+      max-width: 300px;
       box-shadow: 0 15px 40px rgba(0, 0, 0, 0.8);
       opacity: 0;
       pointer-events: none;
@@ -288,7 +290,7 @@
 
     #btn-library:hover .sync-status-popover {
       opacity: 1;
-      transform: translateX(-50%) translateY(0);
+      transform: translateX(-50%) scale(var(--sync-popover-scale)) translateY(0);
       pointer-events: auto;
     }
 
@@ -301,8 +303,8 @@
       backdrop-filter: blur(8px);
       border: 1px solid rgba(132, 132, 230, 0.2);
       border-radius: 10px;
-      padding: 6px 12px;
-      font-size: 0.72rem;
+      padding: 8px 14px;
+      font-size: 0.85rem;
       position: relative;
       width: 100%;
       box-sizing: border-box;
@@ -326,10 +328,10 @@
       white-space: normal !important; /* 关键：允许换行 */
     }
     
-    .popover-badge-icon { font-size: 0.95rem; opacity: 1; flex-shrink: 0; line-height: 1; }
+    .popover-badge-icon { font-size: 1.1rem; opacity: 1; flex-shrink: 0; line-height: 1; }
     .popover-badge-info { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; overflow: hidden; flex: 1; }
-    .popover-badge-label { color: #8888aa; font-weight: 600; font-size: 0.6rem; text-transform: uppercase; white-space: nowrap; letter-spacing: 0.3px; }
-    .popover-badge-status { color: #d4d4e0; white-space: nowrap; font-size: 0.72rem; font-family: monospace; }
+    .popover-badge-label { color: #8888aa; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; white-space: nowrap; letter-spacing: 0.3px; }
+    .popover-badge-status { color: #d4d4e0; white-space: nowrap; font-size: 0.85rem; font-family: monospace; }
 
     /* 状态灯 logic (对齐 sync.html 尺寸) */
     .popover-badge::before {
@@ -371,12 +373,12 @@
     .sync-status-popover.is-empty .popover-badge { display: none !important; }
     .sync-status-popover.is-empty .popover-empty-state { display: flex !important; }
     
-    .empty-icon { font-size: 1.8rem; margin-bottom: 2px; opacity: 0.9; }
-    .empty-title { color: #d4d4e0; font-weight: 600; font-size: 0.85rem; margin: 0; white-space: nowrap !important; }
-    .empty-desc { color: #8888aa; font-size: 0.7rem; line-height: 1.5; margin: 0 2px; }
+    .empty-icon { font-size: 2.2rem; margin-bottom: 2px; opacity: 0.9; }
+    .empty-title { color: #d4d4e0; font-weight: 600; font-size: 1.0rem; margin: 0; white-space: nowrap !important; }
+    .empty-desc { color: #8888aa; font-size: 0.8rem; line-height: 1.5; margin: 0 2px; }
     .empty-hint { 
       color: #fbbf24; background: rgba(251, 191, 36, 0.1); 
-      padding: 6px 10px; border-radius: 6px; font-size: 0.65rem; 
+      padding: 8px 12px; border-radius: 6px; font-size: 0.75rem; 
       margin-top: 6px; border: 1px solid rgba(251, 191, 36, 0.25); 
       font-weight: 500;
     }

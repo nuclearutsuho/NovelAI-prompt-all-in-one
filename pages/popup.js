@@ -21,6 +21,7 @@ let characterPromptsData = []; // [{ posPrompt: "", posTags: [], negPrompt: "", 
 let charEditors = []; // Array of { editor: TagEditor, activeTab: 'pos' | 'neg' }
 let maxCharacters = 6;
 let isShortMode = false;
+let isInputShortMode = false;
 let currentSequentialCounters = {};
 let popupToastTimer = null;
 let popupToastFrame = null;
@@ -45,14 +46,36 @@ const SyncStatusManager = {
       userdict: document.getElementById('popover-badge-userdict')
     };
     this.libraryBtn = document.getElementById('btn-library');
-    this.cachedStats = {};
+    this.currentScale = 1.0;
     
-    // 初始加载缓存快照
-    chrome.storage.local.get(['sync_stats_cache', 'syncPageActive'], (d) => {
+    // 初始加载缓存快照与缩放比例
+    chrome.storage.local.get(['sync_stats_cache', 'syncPageActive', 'sync_popover_scale'], (d) => {
       this.cachedStats = d.sync_stats_cache || {};
       this.updateUI(this.cachedStats);
       this.updateReadyState(!!d.syncPageActive);
+      
+      // 应用持久化的缩放比例
+      if (d.sync_popover_scale) {
+        this.currentScale = d.sync_popover_scale;
+        this.applyScale();
+      }
     });
+
+    // 绑定滚轮缩放逻辑
+    if (this.libraryBtn) {
+      this.libraryBtn.addEventListener('wheel', (e) => {
+        // 允许在按键上通过滚轮调整比例
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.05 : 0.05;
+        const nextScale = Math.min(Math.max(0.5, this.currentScale + delta), 3.0);
+        
+        if (nextScale !== this.currentScale) {
+          this.currentScale = nextScale;
+          this.applyScale();
+          this.saveScale();
+        }
+      }, { passive: false });
+    }
 
     // 监听全域存储变更，实现跨页面状态共鸣
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -83,6 +106,19 @@ const SyncStatusManager = {
 
     // 每 60 秒自动刷新相对时间文字
     setInterval(() => this.updateUI(this.cachedStats), 60000);
+  },
+
+  applyScale() {
+    if (this.container) {
+      this.container.style.setProperty('--sync-popover-scale', this.currentScale.toFixed(2));
+    }
+  },
+
+  saveScale() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      chrome.storage.local.set({ sync_popover_scale: this.currentScale });
+    }, 500);
   },
 
   formatTime(ts) {
@@ -1681,7 +1717,9 @@ function initUI() {
       const baseKey = el.getAttribute('data-i18n');
       const shortKey = `${baseKey}_short`;
       const isDropdownItem = el.classList.contains('split-dropdown-item');
-      const key = (!isDropdownItem && isShortMode && (dict[shortKey] || fallbackDict[shortKey])) ? shortKey : baseKey;
+      const isInputItem = el.closest('#input-area');
+      const useShort = isInputItem ? isInputShortMode : isShortMode;
+      const key = (!isDropdownItem && useShort && (dict[shortKey] || fallbackDict[shortKey])) ? shortKey : baseKey;
       const text = dict[key] || fallbackDict[key];
       
       if (text) {
@@ -1790,13 +1828,20 @@ function initUI() {
       document.body.classList.toggle('hide-icon-text', hideIcons);
 
       // 2. 超窄屏阈值 (< 420px 时隐藏自定义分辨率输入框)
-      const hideResCustom = w < 420;
+      const hideResCustom = w < 410;
       document.body.classList.toggle('hide-res-custom', hideResCustom);
 
-      // 3. Tab 和 分辨率文字缩短阈值 (改为 < 720px 时缩短)
+      // 3. 顶部区域：Tab 和 分辨率文字缩短阈值 (维持宽度 < 720px 时缩短)
       const isNarrow = w < 720;
       if (isShortMode !== isNarrow) {
         isShortMode = isNarrow;
+        applyTranslations(currentLang);
+      }
+
+      // 4. 红框区域：输入区 (AI/下拉) 文字缩短阈值 (设为 < 640px 时缩短，不影响顶部)
+      const isInputNarrow = w < 460;
+      if (isInputShortMode !== isInputNarrow) {
+        isInputShortMode = isInputNarrow;
         applyTranslations(currentLang);
       }
     }
