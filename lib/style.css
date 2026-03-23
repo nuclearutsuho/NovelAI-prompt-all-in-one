@@ -20,7 +20,7 @@
 
 .tag-list {
     list-style: none;
-    padding: 0 40px 0 0;
+    padding: 8px 44px 8px 8px;
     margin: 0;
     display: flex;
     flex-wrap: wrap;
@@ -1011,9 +1011,14 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 0 8px 8px 8px;
+    padding: 0 0 8px 0;
     flex: 1;
+    box-sizing: border-box;
+    overflow-x: hidden;
     overflow-y: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #7078b8 #202234;
 }
 
 .char-prompt-block {
@@ -1022,6 +1027,7 @@
     border-radius: 6px;
     overflow: hidden;
     display: flex;
+    margin: 0 8px;
     flex-direction: column;
     /* Allow to grow into empty space (1) but never shrink (0) below its text content */
     flex: 1 0 auto;
