@@ -263,6 +263,55 @@
             font-weight: 700;
         }
 
+        /* 方案 2: 整理视图切换按钮强化 (Tab-style) */
+        #toggleOrganizerBtn {
+            background: #b4a078; /* 默认砂金，引导发现 */
+            border: 1px solid #c0a878;
+            color: #1a1a1a;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 2px 6px rgba(180, 160, 120, 0.4);
+        }
+
+        #toggleOrganizerBtn:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(180, 160, 120, 0.5);
+        }
+
+        #toggleOrganizerBtn.active {
+            background: #1a1a1a; /* 开启后变回深色，表示稳定 */
+            border-color: rgba(180, 160, 120, 0.4);
+            color: #b4a078;
+            box-shadow: inset 0 1px 4px rgba(0,0,0,0.6);
+            filter: none;
+        }
+
+        #toggleOrganizerBtn.active:hover {
+            background: rgba(180, 160, 120, 0.1);
+            border-color: #b4a078;
+        }
+
+        #toggleOrganizerBtn:active {
+            transform: translateY(0) scale(0.96);
+        }
+
+        /* 响应式收窄优化 */
+        @container (max-width: 380px) {
+            #toggleOrganizerBtn .btn-text {
+                display: none;
+            }
+            #toggleOrganizerBtn {
+                padding: 4px 8px;
+            }
+        }
         .popover-val input {
             width: 48px;
             background: rgba(0, 0, 0, 0.2);
@@ -597,10 +646,19 @@
             font-size: 1rem;
         }
 
-        .editor-container {
+        .editor-workspace {
             flex: 1;
             min-height: 0;
+            display: none;
             overflow: hidden;
+            align-items: stretch;
+        }
+
+        .editor-container {
+            flex: 1 1 42%;
+            min-height: 0;
+            overflow: hidden;
+            min-width: 280px;
         }
 
         .editor-container .cm-editor {
@@ -629,6 +687,954 @@
 
         .editor-statusbar .saved {
             color: #4ade80;
+        }
+
+        .organizer-panel {
+            --organizer-pin-drawer-height: 280px;
+            width: clamp(400px, 38vw, 700px);
+            min-width: 360px;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid rgba(255, 255, 255, 0.06);
+            background: linear-gradient(180deg, #17172d 0%, #0f0f1c 100%);
+            min-height: 0;
+            overflow: hidden;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+        }
+
+        .organizer-panel.collapsed {
+            display: none !important;
+            width: 0 !important;
+            flex: 0 0 0 !important;
+        }
+
+        /* 面板隐藏时，紧邻其后的右侧拖拽把手也同步隐藏 */
+        .organizer-panel.collapsed + #resizeHandleRight {
+            display: none !important;
+        }
+
+        /* ----- 新型单行工具栏 ----- */
+        .organizer-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(26, 26, 48, 0.6);
+            backdrop-filter: blur(8px);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .organizer-select {
+            background: rgba(34, 34, 56, 0.8);
+            color: #d4d4e0;
+            border: 1px solid rgba(58, 58, 85, 0.6);
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 0.75rem;
+            min-width: 100px;
+        }
+
+        .organizer-search {
+            flex: 1;
+            background: rgba(34, 34, 56, 0.8);
+            color: #d4d4e0;
+            border: 1px solid rgba(58, 58, 85, 0.6);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 0.75rem;
+            min-width: 0;
+        }
+
+        .organizer-search:focus, .organizer-select:focus {
+            outline: none;
+            border-color: #6366f1;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+        }
+
+        .organizer-btn-group {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .org-icon-btn {
+            background: rgba(45, 45, 72, 0.6);
+            border: 1px solid rgba(61, 61, 92, 0.6);
+            border-radius: 6px;
+            color: #c7d2fe;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 5px 8px;
+            min-width: 32px;
+            height: 32px;
+            white-space: nowrap;
+        }
+
+        .org-icon-btn:hover {
+            background: rgba(99, 102, 241, 0.25);
+            border-color: #6366f1;
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .org-icon-btn:active {
+            transform: translateY(0);
+        }
+
+        .org-icon-btn .btn-text {
+            display: none;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        /* 响应式：当面板宽度足够时显示文字并调整大小 */
+        .organizer-panel {
+            container-type: inline-size;
+        }
+
+        @container (min-width: 480px) {
+            .org-icon-btn {
+                padding: 5px 12px;
+                min-width: auto;
+            }
+            .org-icon-btn .btn-text {
+                display: inline;
+            }
+        }
+
+        .org-icon-btn.active {
+            background: rgba(99, 102, 241, 0.4);
+            border-color: #6366f1;
+            color: #fff;
+        }
+
+        /* 方案二：抽屉底部侧向功能流 (Side-action Flow) */
+        .pin-drawer-footer {
+            padding: 8px 12px;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            background: rgba(0,0,0,0.15);
+        }
+
+        .pin-compact-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .pin-input-badge-wrapper {
+            position: relative;
+            flex: 1;
+            display: flex;
+            align-items: center;
+        }
+
+        .organizer-pin-input {
+            width: 100%;
+            background: rgba(20,20,35,0.8);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #fff;
+            padding: 5px 10px;
+            padding-right: 130px; /* 略微增加，确保长状态能放得下 */
+            border-radius: 4px;
+            font-size: 0.8rem;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        /* 智能适配：仅针对占位符进行透明化处理，保护徽章清晰度 */
+        @container (max-width: 420px) {
+            .organizer-pin-input::placeholder {
+                opacity: 0.2; /* 进一步淡化占位符 */
+            }
+        }
+        
+        /* 确保徽章始终清晰 */
+        .pin-stat-badge {
+            position: absolute;
+            right: 6px;
+            pointer-events: none;
+            font-size: 0.75rem; /* 稍微调大一点点，保证清晰 */
+            color: rgba(165, 180, 252, 0.9); /* 强化颜色亮度和饱和度 */
+            background: rgba(20, 20, 40, 0.6);
+            padding: 2px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            box-shadow: 0 0 8px rgba(0,0,0,0.3); /* 增加阴影，使其在文字背景上浮现出来 */
+        }
+
+        /* 统计条还原后的全局样式 (原始风格但紧凑) */
+        .organizer-stats {
+            background: rgba(45, 45, 72, 0.4);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 6px 12px;
+            font-size: 0.72rem;
+            color: #888;
+            flex-shrink: 0;
+        }
+
+        .organizer-stats b {
+            color: #818cf8;
+        }
+
+        .organizer-pin-input:focus {
+            border-color: #818cf8;
+            background: rgba(25,25,45,0.95);
+        }
+
+        /* 极致方案：内置勋章式统计条 */
+        .pin-stat-badge {
+            position: absolute;
+            right: 8px;
+            pointer-events: none; /* 防止遮挡输入框点击 */
+            font-size: 0.7rem;
+            color: rgba(129, 140, 248, 0.6);
+            background: rgba(0,0,0,0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .pin-stat-badge b {
+            color: rgba(129, 140, 248, 0.9);
+            font-weight: 600;
+        }
+
+        .pin-action-icons {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .pin-inline-btn {
+            height: 30px;
+            padding: 0 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            border-radius: 6px;
+            white-space: nowrap;
+            font-size: 0.72rem;
+            flex-shrink: 0;
+        }
+
+        .pin-icon-btn {
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(129, 140, 248, 0.12);
+            border: 1px solid rgba(129, 140, 248, 0.25);
+            color: #818cf8;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            padding: 0;
+        }
+
+        .pin-icon-btn:hover {
+            background: rgba(129, 140, 248, 0.3);
+            border-color: #818cf8;
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .pin-icon-btn span {
+            font-size: 1.1rem;
+            line-height: 1;
+        }
+
+        .pin-stat-mini {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding-left: 8px;
+            margin-left: 4px;
+            border-left: 1px solid rgba(255,255,255,0.1);
+            color: #888;
+            font-size: 0.75rem;
+            white-space: nowrap;
+        }
+
+        .pin-stat-mini b {
+            color: #818cf8;
+            font-weight: 600;
+        }
+
+        .stat-icon {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .org-icon-btn.active {
+            background: #6366f1;
+            color: #fff;
+            border-color: #818cf8;
+        }
+
+        /* 搜索容器与计数 Badge */
+        .search-container {
+            position: relative;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+
+        .search-badge {
+            position: absolute;
+            right: 8px;
+            background: rgba(99, 102, 241, 0.2);
+            color: #818cf8;
+            font-size: 0.65rem;
+            padding: 1px 6px;
+            border-radius: 999px;
+            pointer-events: none;
+            font-variant-numeric: tabular-nums;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            display: none;
+        }
+
+        /* 编辑器行高亮 */
+        .cm-line-highlight {
+            background-color: rgba(99, 102, 241, 0.12) !important;
+            border-left: 3px solid #6366f1 !important;
+        }
+
+        /* ----- 置顶抽屉 ----- */
+        .organizer-pin-drawer {
+            height: 0;
+            overflow: hidden;
+            background: rgba(18, 18, 36, 0.95);
+            border-bottom: 0 solid rgba(255, 255, 255, 0.06);
+            transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s, border-bottom 0.3s;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            min-height: 0;
+        }
+
+        .organizer-pin-drawer.open {
+            height: var(--organizer-pin-drawer-height, 280px);
+            padding-bottom: 12px;
+            border-bottom-width: 1px;
+            overflow: hidden;
+        }
+
+        .organizer-pin-drawer.dragging {
+            transition: none;
+        }
+
+        .organizer-pin-resize-handle {
+            display: none;
+            height: 6px;
+            flex-shrink: 0;
+            cursor: row-resize;
+            background: rgba(26, 30, 52, 0.92);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            position: relative;
+            transition: background 0.2s;
+        }
+
+        .organizer-pin-drawer.open + .organizer-pin-resize-handle {
+            display: block;
+        }
+
+        .organizer-pin-resize-handle::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 52px;
+            height: 2px;
+            transform: translate(-50%, -50%);
+            border-radius: 999px;
+            background: rgba(129, 140, 248, 0.32);
+        }
+
+        .organizer-pin-resize-handle:hover,
+        .organizer-pin-resize-handle.dragging {
+            background: rgba(45, 52, 90, 0.96);
+        }
+
+        .pin-drawer-tabs {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px 0;
+            gap: 4px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .pin-drawer-tabs-status {
+            margin-left: auto;
+            font-size: 0.68rem;
+            color: #a5b4fc;
+            background: rgba(99, 102, 241, 0.12);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 999px;
+            padding: 3px 8px;
+            white-space: nowrap;
+            line-height: 1.2;
+        }
+
+        .pin-tab {
+            padding: 6px 12px;
+            font-size: 0.72rem;
+            color: #888;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            border-radius: 0;
+        }
+
+        .pin-tab:hover {
+            color: #ccc;
+        }
+
+        .pin-tab.active {
+            color: #818cf8;
+            border-bottom-color: #818cf8;
+            font-weight: 600;
+        }
+
+        .pin-drawer-content {
+            padding: 12px;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .pin-tab-panel {
+            display: none;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.1) transparent;
+        }
+
+        .pin-tab-panel::-webkit-scrollbar {
+            width: 4px;
+        }
+        .pin-tab-panel::-webkit-scrollbar-thumb {
+            background: rgba(129, 140, 248, 0.4);
+            border-radius: 4px;
+        }
+
+        .pin-tab-panel.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        #pinnedListPanel {
+            max-height: none;
+            overflow: hidden;
+        }
+
+        #pinnedListPanel.active {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+
+        .organizer-pinned-list-scroller {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.1) transparent;
+            padding-right: 2px;
+        }
+
+        .organizer-pinned-list-scroller::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .organizer-pinned-list-scroller::-webkit-scrollbar-thumb {
+            background: rgba(129, 140, 248, 0.4);
+            border-radius: 4px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .pin-drawer-footer {
+            padding: 0 12px 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .pin-input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .organizer-pinned-panel-tools {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .organizer-pin-input {
+            flex: 1;
+            background: rgba(29, 32, 56, 0.8);
+            color: #e5e7eb;
+            border: 1px solid rgba(53, 58, 93, 0.6);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.75rem;
+        }
+
+        /* ----- 核心列表与统计 ----- */
+        .organizer-stats {
+            padding: 4px 12px;
+            font-size: 0.7rem;
+            color: #6b7280;
+            background: rgba(0, 0, 0, 0.15);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .organizer-stats b {
+            color: #818cf8;
+            font-weight: 600;
+        }
+
+        .organizer-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            scrollbar-gutter: stable;
+        }
+
+        .organizer-item {
+            border: 1px solid rgba(47, 53, 83, 0.6);
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: rgba(33, 37, 63, 0.4);
+            transition: all 0.2s;
+            cursor: pointer;
+            position: relative;
+            border-left: 3px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .organizer-item:hover {
+            border-color: rgba(99, 102, 241, 0.6);
+            background: rgba(43, 48, 83, 0.8);
+            transform: translateX(2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        /* 置顶项 Chip 风格 */
+        #organizerPinnedList {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 4px 6px;
+        }
+
+        .organizer-pinned-card {
+            display: flex;
+            align-items: center;
+            background: rgba(129, 140, 248, 0.1);
+            border: 1px solid rgba(129, 140, 248, 0.2);
+            border-radius: 6px;
+            padding: 4px 8px;
+            gap: 6px;
+            cursor: grab;
+            transition: all 0.2s;
+            user-select: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .organizer-pinned-card:hover {
+            background: rgba(129, 140, 248, 0.18);
+            border-color: rgba(129, 140, 248, 0.4);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .organizer-pinned-card:active {
+            cursor: grabbing;
+        }
+
+        .organizer-pinned-content {
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+        }
+
+        .organizer-pinned-kind {
+            font-size: 0.6rem;
+            color: #818cf8;
+            opacity: 0.8;
+            font-weight: 600;
+        }
+
+        .organizer-pinned-label {
+            font-size: 0.75rem;
+            color: #e5e7eb;
+            font-weight: 500;
+        }
+
+        .pin-remove-btn {
+            background: none;
+            border: none;
+            color: rgba(248, 113, 113, 0.6);
+            cursor: pointer;
+            padding: 0 2px;
+            font-size: 0.8rem;
+            line-height: 1;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+        }
+
+        .pin-remove-btn:hover {
+            color: #f87171;
+            transform: scale(1.2);
+        }
+
+        /* 置顶项拖拽状态 */
+        .organizer-pinned-card.dragging {
+            opacity: 0.3;
+            border-style: dashed;
+            background: rgba(0,0,0,0.2);
+        }
+
+        .organizer-pinned-card.drag-over {
+            border-color: #818cf8;
+            background: rgba(129, 140, 248, 0.25);
+            box-shadow: 0 0 10px rgba(129, 140, 248, 0.3);
+        }
+
+        @keyframes duplicate-pulse {
+            0% { border-color: rgba(245, 158, 11, 0.3); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.1); }
+            50% { border-color: rgba(245, 158, 11, 0.8); box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.1); }
+            100% { border-color: rgba(245, 158, 11, 0.3); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.1); }
+        }
+
+        .organizer-item.duplicate {
+            border-color: rgba(245, 158, 11, 0.4);
+            background: rgba(72, 47, 16, 0.3);
+            animation: duplicate-pulse 2s infinite ease-in-out;
+            border-left-color: #f59e0b;
+        }
+
+        .organizer-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .organizer-item-line {
+            font-size: 0.68rem;
+            color: #6366f1;
+            font-weight: 600;
+        }
+
+        .organizer-badge {
+            background: rgba(99, 102, 241, 0.12);
+            color: #a5b4fc;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 0.65rem;
+            white-space: nowrap;
+        }
+
+        .organizer-badge.warn {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fcd34d;
+        }
+
+        .organizer-item-text {
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            color: #e5e7eb;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .organizer-item-text mark {
+            background: rgba(253, 224, 71, 0.3);
+            color: #fff;
+            border-radius: 2px;
+            padding: 0 1px;
+        }
+
+        .organizer-list-tail {
+            text-align: center;
+            font-size: 0.68rem;
+            color: #6b7280;
+            padding: 8px 0 4px;
+            letter-spacing: 0.01em;
+        }
+
+        .organizer-category-sections {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .organizer-category-switcher {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .organizer-category-tab {
+            border: 1px solid rgba(99, 102, 241, 0.18);
+            background: rgba(17, 24, 39, 0.62);
+            color: #a5b4fc;
+            border-radius: 7px;
+            padding: 5px 10px;
+            font-size: 0.69rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            cursor: pointer;
+            transition: all 0.15s;
+            min-width: fit-content;
+            white-space: nowrap;
+        }
+
+        .organizer-category-tab:hover {
+            color: #fff;
+            background: rgba(70, 78, 132, 0.45);
+            border-color: rgba(99, 102, 241, 0.4);
+        }
+
+        .organizer-category-tab.active {
+            color: #fff;
+            background: rgba(99, 102, 241, 0.34);
+            border-color: rgba(129, 140, 248, 0.52);
+            box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.16), 0 2px 10px rgba(79, 70, 229, 0.12);
+        }
+
+        .organizer-category-tab-count {
+            font-size: 0.6rem;
+            color: inherit;
+            opacity: 0.66;
+        }
+
+        .organizer-group-tags-browser {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .organizer-breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .organizer-breadcrumb-sep {
+            color: rgba(156, 163, 175, 0.7);
+            font-size: 0.68rem;
+        }
+
+        .organizer-browser-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .organizer-browser-btn {
+            border: 1px solid rgba(129, 140, 248, 0.18);
+            background: rgba(22, 26, 44, 0.72);
+            color: #c7d2fe;
+            border-radius: 6px;
+            padding: 4px 9px;
+            font-size: 0.68rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .organizer-browser-btn:hover {
+            border-color: rgba(129, 140, 248, 0.45);
+            color: #fff;
+            background: rgba(55, 65, 126, 0.7);
+        }
+
+        .organizer-browser-btn.active {
+            border-color: rgba(129, 140, 248, 0.7);
+            color: #fff;
+            background: rgba(99, 102, 241, 0.3);
+        }
+
+        .organizer-browser-btn-count {
+            font-size: 0.62rem;
+            opacity: 0.8;
+        }
+
+        .organizer-subpanel {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .organizer-category-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .organizer-category-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .organizer-category-title {
+            font-size: 0.72rem;
+            color: #c7d2fe;
+            font-weight: 600;
+        }
+
+        .organizer-category-count {
+            font-size: 0.65rem;
+            color: #a5b4fc;
+            background: rgba(99, 102, 241, 0.14);
+            border: 1px solid rgba(99, 102, 241, 0.24);
+            border-radius: 999px;
+            padding: 1px 7px;
+            white-space: nowrap;
+        }
+
+        .organizer-category-body {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        /* ----- Chip & Grid ----- */
+        .organizer-chip-grid, .organizer-pinned-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .organizer-chip {
+            border: 1px solid rgba(55, 61, 98, 0.7);
+            background: rgba(33, 37, 63, 0.8);
+            color: #dbe4ff;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            display: inline-flex;
+            align-items: flex-start;
+            gap: 6px;
+            transition: all 0.15s;
+        }
+
+        .organizer-chip-main {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            min-width: 0;
+        }
+
+        .organizer-chip-text {
+            color: inherit;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .organizer-chip-translation {
+            color: rgba(191, 219, 254, 0.76);
+            font-size: 0.62rem;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .organizer-chip.counted:hover {
+            border-color: #6366f1;
+            background: #6366f1;
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .organizer-chip.pinned {
+            border-color: rgba(74, 222, 128, 0.55);
+            background: rgba(20, 83, 45, 0.42);
+            color: #f0fdf4;
+            box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.18);
+        }
+
+        .organizer-chip.pinned::before {
+            content: '✓';
+            color: #86efac;
+            font-size: 0.68rem;
+            line-height: 1;
+            margin-top: 1px;
+            flex-shrink: 0;
+        }
+
+        .organizer-chip.pinned:hover {
+            border-color: #4ade80;
+            background: rgba(22, 101, 52, 0.72);
+            color: #fff;
+        }
+
+        .organizer-chip-count {
+            color: rgba(156, 163, 175, 0.8);
+            font-size: 0.65rem;
+            line-height: 1.2;
+            margin-top: 1px;
+        }
+        
+        .organizer-chip.pinned .organizer-chip-count,
+        .organizer-chip.pinned .organizer-chip-translation {
+            color: rgba(220, 252, 231, 0.82);
+        }
+
+        .organizer-chip.counted:hover .organizer-chip-count,
+        .organizer-chip.counted:hover .organizer-chip-translation {
+            color: rgba(255,255,255,0.8);
+        }
+
+        .organizer-rule-empty {
+            font-size: 0.7rem;
+            color: #555;
+            padding: 10px;
+            text-align: center;
+            width: 100%;
         }
 
         /* ===== Bottom Panel ===== */
@@ -1015,6 +2021,23 @@
 
             .editor-panel {
                 min-height: 200px;
+            }
+
+            .editor-workspace {
+                flex-direction: column;
+            }
+
+            .organizer-panel {
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                max-height: 42%;
+                border-left: none;
+                border-top: 1px solid #2a2a44;
+            }
+
+            .organizer-pin-sections {
+                max-height: none;
             }
         }
 
@@ -1570,13 +2593,111 @@
             <div class="editor-header" id="editorHeader" style="display:none;">
                 <span class="file-label">📝</span>
                 <input type="text" id="fileNameInput" placeholder="文件名" data-i18n-placeholder="placeholder_file_name">
+                <button id="toggleOrganizerBtn" class="btn-sm btn-icon">整理视图</button>
+                <button id="discardChangesBtn" class="btn-sm btn-icon btn-danger" disabled>取消修改</button>
                 <button id="saveBtn" class="btn-success btn-sm btn-icon" data-i18n="action_save_with_shortcut">💾 保存 (Ctrl+S)</button>
             </div>
             <!-- Editor Body -->
             <div class="editor-placeholder" id="editorPlaceholder">
                 <span data-i18n="editor_placeholder">← 在左侧选择或新建一个文件开始编辑</span>
             </div>
-            <div class="editor-container" id="editorContainer" style="display:none;"></div>
+            <div class="editor-workspace" id="editorWorkspace" style="display:none;">
+                <div class="editor-container" id="editorContainer"></div>
+                <div class="resize-handle" id="resizeHandleRight"></div>
+                <aside class="organizer-panel" id="organizerPanel">
+                    <!-- 新型单行工具栏 -->
+                    <div class="organizer-toolbar">
+                        <select id="organizerSortMode" class="organizer-select">
+                            <option value="pinnedPriority">置顶顺序优先</option>
+                            <option value="original">原始顺序</option>
+                            <option value="alphaAsc">字母 A-Z</option>
+                            <option value="alphaDesc">字母 Z-A</option>
+                            <option value="tokenAsc">词数少到多</option>
+                            <option value="tokenDesc">词数多到少</option>
+                            <option value="lengthAsc">长度短到长</option>
+                            <option value="lengthDesc">长度长到短</option>
+                            <option value="duplicatesFirst">重复项优先</option>
+                        </select>
+                        <div class="search-container">
+                            <input type="text" id="organizerSearch" class="organizer-search" placeholder="搜索行..." style="width:100%">
+                            <span id="searchBadge" class="search-badge">0</span>
+                        </div>
+                        <div class="organizer-btn-group">
+                            <button id="applyOrganizerSortBtn" class="org-icon-btn" title="应用排序">
+                                <span class="icon">↕</span>
+                                <span class="btn-text">排序</span>
+                            </button>
+                            <button id="dedupeOrganizerBtn" class="org-icon-btn" title="去重并应用">
+                                <span class="icon">♻</span>
+                                <span class="btn-text">去重</span>
+                            </button>
+                            <button id="normalizeOrganizerBtn" class="org-icon-btn" title="规范空格">
+                                <span class="icon">≡</span>
+                                <span class="btn-text">规范</span>
+                            </button>
+                            <button id="togglePinDrawerBtn" class="org-icon-btn" title="置顶配置">
+                                <span class="icon">📌</span>
+                                <span class="btn-text">置顶</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 置顶抽屉 (默认收起) -->
+                    <div class="organizer-pin-drawer" id="pinDrawer">
+                        <div class="pin-drawer-tabs">
+                            <button class="pin-tab active" data-tab="commonTags">常见 Tag</button>
+                            <button class="pin-tab" data-tab="commonCategories">常见分类</button>
+                            <button class="pin-tab" data-tab="pinnedList">置顶列表</button>
+                            <div id="organizerPriorityStatus" class="pin-drawer-tabs-status">已置顶 0</div>
+                        </div>
+                        <div class="pin-drawer-content">
+                            <!-- 常见 Tag 面板 -->
+                            <div id="commonTagsPanel" class="pin-tab-panel active">
+                                <div id="organizerCommonTags" class="organizer-chip-grid">
+                                    <div class="organizer-rule-empty">打开文件后会自动提取常见 tag。</div>
+                                </div>
+                            </div>
+                            <!-- 常见分类面板 -->
+                            <div id="commonCategoriesPanel" class="pin-tab-panel">
+                                <div id="organizerCommonCategories" class="organizer-category-sections">
+                                    <div class="organizer-rule-empty">打开文件后会自动提取当前文件中的画师、角色和 GroupTags 标签。</div>
+                                </div>
+                            </div>
+                            <!-- 置顶列表面板 -->
+                            <div id="pinnedListPanel" class="pin-tab-panel">
+                                <div class="organizer-pinned-list-scroller">
+                                    <div id="organizerPinnedList" class="organizer-pinned-list">
+                                        <div class="organizer-rule-empty">还没有置顶项。</div>
+                                    </div>
+                                </div>
+                                <div class="organizer-pinned-panel-tools">
+                                    <div class="pin-compact-row">
+                                        <input id="organizerPinnedInput" class="organizer-pin-input" type="text" placeholder="置顶项 (如 1girl)">
+                                        <div class="pin-action-icons">
+                                            <button id="addOrganizerPinnedBtn" class="pin-icon-btn action-add" title="加入置顶"><span>+</span></button>
+                                            <button id="applyOrganizerPriorityBtn" class="btn-sm btn-primary pin-inline-btn" title="按目前顺序逐行重排">
+                                                <span>⇅</span>
+                                                <span>重排</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="organizer-pin-resize-handle" id="organizerPinResizeHandle" title="拖拽调整置顶区高度"></div>
+
+                    <!-- 还原统计条至原始位置 (常驻可见) -->
+                    <div class="organizer-stats" id="organizerSummary">
+                        <span>载入中...</span>
+                    </div>
+
+                    <!-- 主列表 -->
+                    <div class="organizer-list" id="organizerList">
+                        <div class="organizer-empty">打开通配符文件后，这里会展示内容。</div>
+                    </div>
+                </aside>
+            </div>
             <!-- Status Bar -->
             <div class="editor-statusbar" id="editorStatusbar" style="display:none;">
                 <span id="lineInfo" data-i18n="line_info_initial">第 1 行 / 共 1 行</span>

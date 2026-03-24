@@ -24,6 +24,7 @@ let currentFile = null;       // key of the file being edited
 let localContent = '';        // last saved content in editor
 let editorView = null;        // CodeMirror EditorView instance
 let autocompleteDict = null;  // parsed dictionary for autocomplete
+let autocompleteMetaMap = new Map();
 const groupTagsDataUtils = window.GroupTagsDataUtils || {};
 let expandedFolders = new Set(); // track expanded folders in tree
 let selectedFolder = null;    // currently selected folder for creation
@@ -33,6 +34,49 @@ let selectedSnapshots = new Set();
 let boundDirHandle = null;
 let currentLang = DEFAULT_LANG;
 let currentTopUiState = 'unbound';
+let organizerVisible = true;
+let organizerRefreshTimer = null;
+let organizerPinnedSaveTimer = null;
+let organizerPinnedItemsCache = [];
+let organizerCommonCategoryKey = 'artists';
+let organizerGroupTagsCategoryKey = '';
+let organizerGroupTagsGroupKey = '';
+let organizerGroupTagsTagSet = new Set();
+let organizerGroupTagsMembershipMap = new Map();
+let organizerGroupTagsTranslationMap = new Map();
+let organizerGroupTagsLoaded = false;
+let organizerGroupTagsLoadError = false;
+let organizerGroupTagsLoadPromise = null;
+let organizerAnalysisCache = {
+    dirty: true,
+    model: null,
+    candidates: null,
+    sortedEntries: new Map()
+};
+let organizerPendingRefresh = {
+    analysis: false,
+    candidates: false,
+    list: false,
+    summary: false
+};
+let organizerListRenderState = {
+    entries: [],
+    renderedCount: 0,
+    highlightRegex: null,
+    version: 0
+};
+let organizerListChunkFrame = 0;
+let organizerPinDrawerHeight = 280;
+let organizerLargeFileState = {
+    active: false,
+    lineCount: 0
+};
+const ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT = 280;
+const ORGANIZER_PIN_DRAWER_MIN_HEIGHT = 150;
+const ORGANIZER_PANEL_BOTTOM_MIN_HEIGHT = 180;
+const ORGANIZER_LIST_CHUNK_SIZE = 240;
+const ORGANIZER_LIST_CHUNK_THRESHOLD = 320;
+const ORGANIZER_LARGE_FILE_THRESHOLD = 5000;
 // 资产状态管理 (用于顶栏看板)
 const assetMetadata = {
     wildcards: { count: 0, lastSync: 0 },
@@ -75,12 +119,31 @@ const newFileBtn = document.getElementById('newFileBtn');
 const newFolderBtn = document.getElementById('newFolderBtn');
 const editorHeader = document.getElementById('editorHeader');
 const editorPlaceholder = document.getElementById('editorPlaceholder');
+const editorWorkspace = document.getElementById('editorWorkspace');
 const editorContainer = document.getElementById('editorContainer');
 const editorStatusbar = document.getElementById('editorStatusbar');
 const fileNameInput = document.getElementById('fileNameInput');
 const saveBtn = document.getElementById('saveBtn');
+const discardChangesBtn = document.getElementById('discardChangesBtn');
+const toggleOrganizerBtn = document.getElementById('toggleOrganizerBtn');
 const lineInfo = document.getElementById('lineInfo');
 const saveStatus = document.getElementById('saveStatus');
+const organizerPanel = document.getElementById('organizerPanel');
+const organizerSortMode = document.getElementById('organizerSortMode');
+const organizerSearch = document.getElementById('organizerSearch');
+const organizerSummary = document.getElementById('organizerSummary');
+const organizerList = document.getElementById('organizerList');
+const applyOrganizerSortBtn = document.getElementById('applyOrganizerSortBtn');
+const dedupeOrganizerBtn = document.getElementById('dedupeOrganizerBtn');
+const normalizeOrganizerBtn = document.getElementById('normalizeOrganizerBtn');
+const organizerPinnedInput = document.getElementById('organizerPinnedInput');
+const addOrganizerPinnedBtn = document.getElementById('addOrganizerPinnedBtn');
+const organizerCommonTags = document.getElementById('organizerCommonTags');
+const organizerCommonCategories = document.getElementById('organizerCommonCategories');
+const organizerPinnedList = document.getElementById('organizerPinnedList');
+const organizerPriorityStatus = document.getElementById('organizerPriorityStatus');
+const applyOrganizerPriorityBtn = document.getElementById('applyOrganizerPriorityBtn');
+const organizerPinResizeHandle = document.getElementById('organizerPinResizeHandle');
 const logPanel = document.getElementById('logPanel');
 const snapshotList = document.getElementById('snapshotList');
 const noSnapshots = document.getElementById('noSnapshots');
@@ -989,6 +1052,1727 @@ function attachDeleteHandlers() {
 
 
 // ============================
+// Section 8: Wildcard Organizer
+// ============================
+function escapeHtml(value = '') {
+    const el = document.createElement('div');
+    el.textContent = value;
+    return el.innerHTML;
+}
+
+function normalizeOrganizerLine(line = '') {
+    return String(line || '')
+        .trim()
+        .replace(/\s*,\s*/g, ', ')
+        .replace(/[ \t]{2,}/g, ' ');
+}
+
+function createOrganizerPinnedItem(value = '', type = 'exact') {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) return null;
+    const normalizedType = type === 'prefix' ? 'prefix' : 'exact';
+    const normalizedMatchValue = normalizedType === 'exact' && groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(normalizedValue)
+        : normalizedValue.toLocaleLowerCase();
+    return {
+        type: normalizedType,
+        value: normalizedValue,
+        normalizedValue: normalizedMatchValue
+    };
+}
+
+function inferPinnedItemType(value = '') {
+    const normalized = String(value || '').trim();
+    if (!normalized) return null;
+    if (normalized.endsWith(':') || normalized.endsWith('_')) return 'prefix';
+    return 'exact';
+}
+
+function serializePinnedItems(items = []) {
+    return JSON.stringify((items || []).map(item => ({
+        type: item.type === 'prefix' ? 'prefix' : 'exact',
+        value: String(item.value || '').trim()
+    })));
+}
+
+function parsePinnedItems(raw = '[]') {
+    try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .map(item => createOrganizerPinnedItem(item?.value, item?.type))
+            .filter(Boolean);
+    } catch (error) {
+        console.warn('parsePinnedItems failed:', error);
+        return [];
+    }
+}
+
+function scheduleSaveOrganizerPinnedItems() {
+    if (organizerPinnedSaveTimer) clearTimeout(organizerPinnedSaveTimer);
+    organizerPinnedSaveTimer = setTimeout(async () => {
+        organizerPinnedSaveTimer = null;
+        try {
+            await new Promise(resolve => chrome.storage.local.set({
+                organizerPinnedItems: serializePinnedItems(organizerPinnedItemsCache)
+            }, resolve));
+        } catch (error) {
+            console.warn('saveOrganizerPinnedItems failed:', error);
+        }
+    }, 200);
+}
+
+async function loadOrganizerPriorityRules() {
+    try {
+        const data = await new Promise(resolve => chrome.storage.local.get('organizerPinnedItems', resolve));
+        if (typeof data.organizerPinnedItems === 'string') {
+            organizerPinnedItemsCache = parsePinnedItems(data.organizerPinnedItems);
+        }
+    } catch (error) {
+        console.warn('loadOrganizerPinnedItems failed:', error);
+    }
+    renderOrganizerPinnedList();
+    updateOrganizerPriorityStatus();
+}
+
+function updateOrganizerPriorityStatus() {
+    if (!organizerPriorityStatus) return;
+    if (!organizerPinnedItemsCache.length) {
+        organizerPriorityStatus.textContent = '已置顶 0';
+        return;
+    }
+    organizerPriorityStatus.textContent = `已置顶 ${organizerPinnedItemsCache.length}`;
+}
+
+function renderOrganizerPinnedList() {
+    if (!organizerPinnedList) return;
+
+    if (!organizerPinnedItemsCache.length) {
+        organizerPinnedList.innerHTML = '<div class="organizer-rule-empty">还没有置顶项。点击上方候选，或手动输入后加入。</div>';
+        return;
+    }
+
+    organizerPinnedList.innerHTML = organizerPinnedItemsCache.map((item, index) => `
+        <div class="organizer-pinned-card" data-index="${index}" draggable="true">
+            <div class="organizer-pinned-content">
+                <span class="organizer-pinned-kind">${item.type === 'prefix' ? '前缀' : 'Tag'}</span>
+                <span class="organizer-pinned-label">${escapeHtml(item.value)}</span>
+            </div>
+            <button type="button" class="pin-remove-btn" data-action="remove" title="删除">✕</button>
+        </div>
+    `).join('');
+}
+
+function findOrganizerPinnedItemIndex(value = '', type = inferPinnedItemType(value)) {
+    const item = createOrganizerPinnedItem(value, type);
+    if (!item) return -1;
+
+    return organizerPinnedItemsCache.findIndex(existing =>
+        existing.type === item.type && existing.normalizedValue === item.normalizedValue
+    );
+}
+
+function addOrganizerPinnedItem(value = '', type = inferPinnedItemType(value)) {
+    const item = createOrganizerPinnedItem(value, type);
+    if (!item) return false;
+
+    if (findOrganizerPinnedItemIndex(item.value, item.type) !== -1) return false;
+
+    organizerPinnedItemsCache.push(item);
+    renderOrganizerPinnedList();
+    updateOrganizerPriorityStatus();
+    scheduleSaveOrganizerPinnedItems();
+    return true;
+}
+
+function removeOrganizerPinnedItem(value = '', type = inferPinnedItemType(value)) {
+    const index = findOrganizerPinnedItemIndex(value, type);
+    if (index === -1) return false;
+
+    organizerPinnedItemsCache.splice(index, 1);
+    renderOrganizerPinnedList();
+    updateOrganizerPriorityStatus();
+    scheduleSaveOrganizerPinnedItems();
+    return true;
+}
+
+function toggleOrganizerPinnedItem(value = '', type = inferPinnedItemType(value)) {
+    if (findOrganizerPinnedItemIndex(value, type) !== -1) {
+        removeOrganizerPinnedItem(value, type);
+        return 'removed';
+    }
+
+    return addOrganizerPinnedItem(value, type) ? 'added' : 'noop';
+}
+
+function isOrganizerWrappedToken(text = '', left = '(', right = ')') {
+    if (!text.startsWith(left) || !text.endsWith(right)) return false;
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (char === left) depth++;
+        if (char === right) {
+            depth--;
+            if (depth === 0 && i < text.length - 1) return false;
+        }
+    }
+    return depth === 0;
+}
+
+function splitOrganizerTags(line = '') {
+    const parts = [];
+    let current = '';
+    let roundDepth = 0;
+    let squareDepth = 0;
+    let braceDepth = 0;
+
+    for (const char of String(line || '')) {
+        if (char === ',' && roundDepth === 0 && squareDepth === 0 && braceDepth === 0) {
+            if (current.trim()) parts.push(current.trim());
+            current = '';
+            continue;
+        }
+
+        current += char;
+        if (char === '(') roundDepth++;
+        else if (char === ')') roundDepth = Math.max(0, roundDepth - 1);
+        else if (char === '[') squareDepth++;
+        else if (char === ']') squareDepth = Math.max(0, squareDepth - 1);
+        else if (char === '{') braceDepth++;
+        else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    }
+
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+}
+
+function stripNovelAiWeightWrapper(token = '') {
+    let current = String(token || '').trim();
+    let extractedWeight = 1;
+    let hasExplicitWeight = false;
+    let changed = true;
+
+    while (changed) {
+        changed = false;
+
+        const weightedMatch = current.match(/^([+-]?\d+(?:\.\d+)?)::([\s\S]*?)::$/);
+        if (weightedMatch) {
+            current = weightedMatch[2].trim();
+            if (!hasExplicitWeight) {
+                extractedWeight = parseFloat(weightedMatch[1]);
+                hasExplicitWeight = Number.isFinite(extractedWeight);
+                if (!hasExplicitWeight) extractedWeight = 1;
+            }
+            changed = true;
+        }
+    }
+
+    return {
+        text: current,
+        weight: extractedWeight,
+        hasExplicitWeight
+    };
+}
+
+function getOrganizerWrapperWeight(wrapperType = '') {
+    switch (wrapperType) {
+        case 'curly':
+            return 1.1;
+        case 'paren':
+            return 1.05;
+        case 'square':
+            return 0.9;
+        default:
+            return 1;
+    }
+}
+
+function getOrganizerDictionaryMetaByTag(tag = '') {
+    const normalized = String(tag || '').trim().toLocaleLowerCase();
+    if (!normalized) return null;
+
+    const directMeta = autocompleteMetaMap.get(normalized) || null;
+    if (directMeta) return directMeta;
+
+    const canonicalKey = groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(normalized)
+        : normalized;
+    if (canonicalKey && canonicalKey !== normalized) {
+        return autocompleteMetaMap.get(canonicalKey) || null;
+    }
+
+    return null;
+}
+
+function canonicalizeOrganizerTagByDictionary(tag = '') {
+    const normalized = String(tag || '').trim().toLocaleLowerCase();
+    if (!normalized) return '';
+
+    const prefixedMatchers = [
+        { pattern: /^artist:(.+)$/, colorCode: '1' },
+        { pattern: /^character:(.+)$/, colorCode: '4' }
+    ];
+
+    for (const matcher of prefixedMatchers) {
+        const match = normalized.match(matcher.pattern);
+        if (!match) continue;
+        const bareTag = match[1].trim();
+        const bareMeta = getOrganizerDictionaryMetaByTag(bareTag);
+        if (bareMeta?.colorCode === matcher.colorCode) return bareTag;
+    }
+
+    const canonicalKey = groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(normalized)
+        : normalized;
+    if (canonicalKey) return canonicalKey;
+
+    return normalized;
+}
+
+function parseOrganizerToken(token = '') {
+    let current = String(token || '').trim();
+    if (!current) return null;
+    let extractedWeight = 1;
+    let wrapperWeight = 1;
+    const wrappers = [];
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const strippedWeight = stripNovelAiWeightWrapper(current);
+        current = strippedWeight.text;
+        if (strippedWeight.hasExplicitWeight) extractedWeight = strippedWeight.weight;
+        if (isOrganizerWrappedToken(current, '{', '}')) {
+            current = current.slice(1, -1).trim();
+            wrapperWeight *= getOrganizerWrapperWeight('curly');
+            wrappers.push('curly');
+            changed = true;
+        } else if (isOrganizerWrappedToken(current, '(', ')')) {
+            current = current.slice(1, -1).trim();
+            wrapperWeight *= getOrganizerWrapperWeight('paren');
+            wrappers.push('paren');
+            changed = true;
+        } else if (isOrganizerWrappedToken(current, '[', ']')) {
+            current = current.slice(1, -1).trim();
+            wrapperWeight *= getOrganizerWrapperWeight('square');
+            wrappers.push('square');
+            changed = true;
+        }
+    }
+
+    const strippedWeight = stripNovelAiWeightWrapper(current);
+    current = strippedWeight.text;
+    if (strippedWeight.hasExplicitWeight) extractedWeight = strippedWeight.weight;
+
+    const weightedMatch = current.match(/^(.*):([0-9]+(?:\.[0-9]+)?)$/);
+    if (weightedMatch) {
+        current = weightedMatch[1].trim();
+        const fallbackWeight = parseFloat(weightedMatch[2]);
+        if (Number.isFinite(fallbackWeight)) extractedWeight = fallbackWeight;
+    }
+
+    const rawCoreTag = current.toLocaleLowerCase();
+    const canonicalTag = canonicalizeOrganizerTagByDictionary(rawCoreTag);
+    return {
+        rawToken: String(token || '').trim(),
+        rawCoreTag,
+        canonicalTag,
+        explicitWeight: extractedWeight,
+        wrapperWeight,
+        weight: extractedWeight * wrapperWeight,
+        wrappers,
+        explicitPrefixGroup: getExplicitPrefixGroup(rawCoreTag)
+    };
+}
+
+function extractOrganizerCoreTag(token = '') {
+    return parseOrganizerToken(token)?.canonicalTag || '';
+}
+
+function getExplicitPrefixGroup(tag = '') {
+    const normalized = String(tag || '').trim().toLocaleLowerCase();
+    const match = normalized.match(/^([a-z0-9_]+:)[^:\s].*$/i);
+    return match ? match[1] : '';
+}
+
+function getOrganizerParsedDictionaryMeta(parsedToken = null) {
+    if (!parsedToken) return null;
+
+    const candidateKeys = [];
+    const pushKey = (value) => {
+        const normalized = String(value || '').trim().toLocaleLowerCase();
+        if (!normalized || candidateKeys.includes(normalized)) return;
+        candidateKeys.push(normalized);
+    };
+
+    pushKey(parsedToken.canonicalTag);
+    pushKey(parsedToken.rawCoreTag);
+
+    const rawCoreTag = String(parsedToken.rawCoreTag || '').trim().toLocaleLowerCase();
+    const artistMatch = rawCoreTag.match(/^artist:(.+)$/);
+    if (artistMatch) pushKey(artistMatch[1].trim());
+    const characterMatch = rawCoreTag.match(/^character:(.+)$/);
+    if (characterMatch) pushKey(characterMatch[1].trim());
+
+    for (const key of candidateKeys) {
+        const meta = getOrganizerDictionaryMetaByTag(key);
+        if (meta) return { key, ...meta };
+    }
+
+    return null;
+}
+
+function buildOrganizerGroupTagsTagSet(groupTagsData = null) {
+    const tagSet = new Set();
+    const membershipMap = new Map();
+    const translationMap = new Map();
+    const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
+
+    categories.forEach(category => {
+        const categoryId = String(category?.id || category?.name || '').trim();
+        const categoryName = String(category?.name || category?.id || '未命名分类').trim() || '未命名分类';
+        const groups = Array.isArray(category?.groups) ? category.groups : [];
+        groups.forEach(group => {
+            const groupId = String(group?.id || group?.name || '').trim();
+            const groupName = String(group?.name || group?.id || '未命名分组').trim() || '未命名分组';
+            const categoryKey = categoryId || categoryName;
+            const groupKey = `${categoryKey}::${groupId || groupName}`;
+            const tags = Array.isArray(group?.tags) ? group.tags : [];
+            tags.forEach(item => {
+                if (groupTagsDataUtils.isTagGroupItem && !groupTagsDataUtils.isTagGroupItem(item)) return;
+                const promptText = groupTagsDataUtils.getGroupItemPromptText
+                    ? groupTagsDataUtils.getGroupItemPromptText(item)
+                    : (item?.en || '');
+                const normalizedKey = groupTagsDataUtils.normalizeTagKey
+                    ? groupTagsDataUtils.normalizeTagKey(promptText)
+                    : String(promptText || '').trim().toLocaleLowerCase();
+                if (!normalizedKey) return;
+                tagSet.add(normalizedKey);
+                const translationText = groupTagsDataUtils.getGroupItemTranslationText
+                    ? groupTagsDataUtils.getGroupItemTranslationText(item)
+                    : (item?.zh || '');
+                if (translationText && !translationMap.has(normalizedKey)) {
+                    translationMap.set(normalizedKey, String(translationText).trim());
+                }
+                if (!membershipMap.has(normalizedKey)) membershipMap.set(normalizedKey, []);
+                membershipMap.get(normalizedKey).push({
+                    categoryKey,
+                    categoryTitle: categoryName,
+                    groupKey,
+                    groupTitle: groupName
+                });
+            });
+        });
+    });
+
+    return { tagSet, membershipMap, translationMap };
+}
+
+async function loadOrganizerGroupTagsIndex({ force = false } = {}) {
+    if (organizerGroupTagsLoadPromise && !force) return organizerGroupTagsLoadPromise;
+
+    organizerGroupTagsLoadPromise = (async () => {
+        organizerGroupTagsLoaded = false;
+        organizerGroupTagsLoadError = false;
+
+        try {
+            let storedGroupTagsData = (await chrome.storage.local.get('groupTagsUserData')).groupTagsUserData;
+            if (storedGroupTagsData?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
+                try {
+                    const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
+                    storedGroupTagsData = migrated.data || storedGroupTagsData;
+                } catch (migrationError) {
+                    console.warn('loadOrganizerGroupTagsIndex migrate failed:', migrationError);
+                }
+            }
+
+            let defaultGroupTagsData = groupTagsDataUtils.createEmptyGroupTagsData
+                ? groupTagsDataUtils.createEmptyGroupTagsData()
+                : { categories: [] };
+            try {
+                const response = await fetch(chrome.runtime.getURL('data/default_group_tags.json'));
+                if (response.ok) {
+                    defaultGroupTagsData = await response.json();
+                }
+            } catch (fetchError) {
+                console.warn('loadOrganizerGroupTagsIndex default data failed:', fetchError);
+            }
+
+            const effectiveGroupTagsData = groupTagsDataUtils.resolveEffectiveGroupTagsData
+                ? groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultGroupTagsData, storedGroupTagsData)
+                : (storedGroupTagsData?.categories ? storedGroupTagsData : defaultGroupTagsData);
+
+            const groupTagsIndex = buildOrganizerGroupTagsTagSet(effectiveGroupTagsData);
+            organizerGroupTagsTagSet = groupTagsIndex.tagSet;
+            organizerGroupTagsMembershipMap = groupTagsIndex.membershipMap;
+            organizerGroupTagsTranslationMap = groupTagsIndex.translationMap;
+            organizerGroupTagsLoaded = true;
+            organizerGroupTagsLoadError = false;
+        } catch (error) {
+            console.warn('loadOrganizerGroupTagsIndex failed:', error);
+            organizerGroupTagsTagSet = new Set();
+            organizerGroupTagsMembershipMap = new Map();
+            organizerGroupTagsTranslationMap = new Map();
+            organizerGroupTagsLoaded = true;
+            organizerGroupTagsLoadError = true;
+        } finally {
+            organizerGroupTagsLoadPromise = null;
+            invalidateOrganizerAnalysisCache();
+            scheduleOrganizerRefresh();
+        }
+    })();
+
+    return organizerGroupTagsLoadPromise;
+}
+
+function extractOrganizerCandidates(text = '') {
+    const tagCounts = new Map();
+    const artistLineCounts = new Map();
+    const characterLineCounts = new Map();
+    const groupTagLineCounts = new Map();
+    const groupCategoryMap = new Map();
+
+    String(text || '')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .forEach(line => {
+            const lineArtists = new Set();
+            const lineCharacters = new Set();
+            const lineGroupTags = new Set();
+            const lineGroupHits = new Map();
+
+            splitOrganizerTags(line).forEach(token => {
+                const parsedToken = parseOrganizerToken(token);
+                if (!parsedToken?.canonicalTag) return;
+
+                tagCounts.set(parsedToken.canonicalTag, (tagCounts.get(parsedToken.canonicalTag) || 0) + 1);
+
+                const dictionaryMeta = getOrganizerParsedDictionaryMeta(parsedToken);
+                if (dictionaryMeta?.colorCode === '1') lineArtists.add(parsedToken.canonicalTag);
+                if (dictionaryMeta?.colorCode === '4') lineCharacters.add(parsedToken.canonicalTag);
+                if (organizerGroupTagsTagSet.has(parsedToken.canonicalTag)) {
+                    lineGroupTags.add(parsedToken.canonicalTag);
+                    const memberships = organizerGroupTagsMembershipMap.get(parsedToken.canonicalTag) || [];
+                    memberships.forEach(membership => {
+                        if (!groupCategoryMap.has(membership.categoryKey)) {
+                            groupCategoryMap.set(membership.categoryKey, {
+                                key: membership.categoryKey,
+                                title: membership.categoryTitle,
+                                groups: new Map()
+                            });
+                        }
+                        const category = groupCategoryMap.get(membership.categoryKey);
+                        if (!category.groups.has(membership.groupKey)) {
+                            category.groups.set(membership.groupKey, {
+                                key: membership.groupKey,
+                                title: membership.groupTitle,
+                                items: new Map()
+                            });
+                        }
+                        if (!lineGroupHits.has(membership.groupKey)) lineGroupHits.set(membership.groupKey, new Set());
+                        lineGroupHits.get(membership.groupKey).add(parsedToken.canonicalTag);
+                    });
+                }
+            });
+
+            lineArtists.forEach(tag => artistLineCounts.set(tag, (artistLineCounts.get(tag) || 0) + 1));
+            lineCharacters.forEach(tag => characterLineCounts.set(tag, (characterLineCounts.get(tag) || 0) + 1));
+            lineGroupTags.forEach(tag => groupTagLineCounts.set(tag, (groupTagLineCounts.get(tag) || 0) + 1));
+            lineGroupHits.forEach((tagSet, groupKey) => {
+                for (const category of groupCategoryMap.values()) {
+                    if (!category.groups.has(groupKey)) continue;
+                    const group = category.groups.get(groupKey);
+                    tagSet.forEach(tag => group.items.set(tag, (group.items.get(tag) || 0) + 1));
+                    break;
+                }
+            });
+        });
+
+    const sortEntries = (entries) => Array.from(entries.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: 'base' }));
+
+    const sortSemanticEntries = (entries) => Array.from(entries.entries())
+        .sort((a, b) => {
+            const aMeta = getOrganizerDictionaryMetaByTag(a[0]);
+            const bMeta = getOrganizerDictionaryMetaByTag(b[0]);
+            const aPopCount = aMeta?.popCount ?? 0;
+            const bPopCount = bMeta?.popCount ?? 0;
+            return b[1] - a[1]
+                || bPopCount - aPopCount
+                || a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+    const groupTagsEmptyText = organizerGroupTagsLoadError
+        ? '暂时无法读取 GroupTags 数据。'
+        : organizerGroupTagsLoaded
+            ? '当前文件中没有命中 GroupTags 已保存的 tag。'
+            : '正在载入 GroupTags 数据。';
+
+    const sortedGroupTagCategories = Array.from(groupCategoryMap.values())
+        .map(category => ({
+            key: category.key,
+            title: category.title,
+            groups: Array.from(category.groups.values())
+                .map(group => ({
+                    key: group.key,
+                    title: group.title,
+                    items: sortEntries(group.items)
+                }))
+                .filter(group => group.items.length > 0)
+                .sort((a, b) => {
+                    const aCount = a.items.reduce((sum, [, count]) => sum + count, 0);
+                    const bCount = b.items.reduce((sum, [, count]) => sum + count, 0);
+                    return bCount - aCount
+                        || a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+                })
+        }))
+        .filter(category => category.groups.length > 0)
+        .sort((a, b) => {
+            const aCount = a.groups.reduce((sum, group) => sum + group.items.reduce((inner, [, count]) => inner + count, 0), 0);
+            const bCount = b.groups.reduce((sum, group) => sum + group.items.reduce((inner, [, count]) => inner + count, 0), 0);
+            return bCount - aCount
+                || a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+    return {
+        commonTags: sortEntries(tagCounts).filter(([tag, count]) => count > 1),
+        commonCategories: [
+            {
+                key: 'artists',
+                title: '画师',
+                type: 'exact',
+                items: sortSemanticEntries(artistLineCounts),
+                emptyText: '当前文件中没有识别到画师 tag。'
+            },
+            {
+                key: 'characters',
+                title: '角色',
+                type: 'exact',
+                items: sortSemanticEntries(characterLineCounts),
+                emptyText: '当前文件中没有识别到角色 tag。'
+            },
+            {
+                key: 'groupTags',
+                title: 'GroupTags',
+                type: 'exact',
+                items: sortEntries(groupTagLineCounts),
+                categories: sortedGroupTagCategories,
+                emptyText: groupTagsEmptyText
+            }
+        ]
+    };
+}
+
+function renderOrganizerCandidateChips(container, items = [], type = 'exact', emptyText = '') {
+    if (!container) return;
+    if (!items.length) {
+        container.innerHTML = `<div class="organizer-rule-empty">${emptyText}</div>`;
+        return;
+    }
+
+    container.innerHTML = items.map(([value, count]) => renderOrganizerChipMarkup(value, count, type)).join('');
+}
+
+function resolveActiveOrganizerCategoryKey(groups = []) {
+    const availableKeys = (groups || []).map(group => group?.key).filter(Boolean);
+    if (availableKeys.includes(organizerCommonCategoryKey)) return organizerCommonCategoryKey;
+    organizerCommonCategoryKey = availableKeys[0] || 'artists';
+    return organizerCommonCategoryKey;
+}
+
+function getOrganizerTagTranslation(tag = '') {
+    const normalized = String(tag || '').trim().toLocaleLowerCase();
+    if (!normalized) return '';
+
+    const canonicalKey = groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(normalized)
+        : normalized;
+
+    const dictTranslation = String(getOrganizerDictionaryMetaByTag(canonicalKey)?.zhCN || '').trim();
+    if (dictTranslation) return dictTranslation;
+
+    return String(organizerGroupTagsTranslationMap.get(canonicalKey) || '').trim();
+}
+
+function getOrganizerDisplayTag(tag = '') {
+    const normalized = String(tag || '').trim();
+    if (!normalized) return '';
+
+    return groupTagsDataUtils.canonicalToDisplayTag
+        ? groupTagsDataUtils.canonicalToDisplayTag(normalized)
+        : normalized.replace(/_/g, ' ');
+}
+
+function getOrganizerChipSearchTexts(tag = '') {
+    const normalized = String(tag || '').trim().toLocaleLowerCase();
+    if (!normalized) return [];
+
+    const displayTag = getOrganizerDisplayTag(normalized).toLocaleLowerCase();
+    const translation = getOrganizerTagTranslation(normalized).toLocaleLowerCase();
+    const canonicalKey = groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(normalized)
+        : normalized;
+
+    return [normalized, canonicalKey, displayTag, translation].filter(Boolean);
+}
+
+function isOrganizerChipPinned(value = '', type = 'exact') {
+    return findOrganizerPinnedItemIndex(value, type) !== -1;
+}
+
+function renderOrganizerChipMarkup(value = '', count = 0, type = 'exact') {
+    const displayTag = getOrganizerDisplayTag(value);
+    const translation = getOrganizerTagTranslation(value);
+    const isPinned = isOrganizerChipPinned(value, type);
+    return `
+        <button
+            type="button"
+            class="organizer-chip counted${isPinned ? ' pinned' : ''}"
+            data-type="${type}"
+            data-value="${escapeHtml(value)}"
+            title="${escapeHtml((translation || displayTag || value) + (isPinned ? ' · 已置顶' : ''))}">
+            <span class="organizer-chip-main">
+                <span class="organizer-chip-text">${escapeHtml(displayTag || value)}</span>
+                ${translation ? `<span class="organizer-chip-translation">${escapeHtml(translation)}</span>` : ''}
+            </span>
+            <span class="organizer-chip-count">${count}</span>
+        </button>
+    `;
+}
+
+function resolveOrganizerGroupTagsSelection(categories = []) {
+    const availableCategoryKeys = (categories || []).map(category => category?.key).filter(Boolean);
+    if (!availableCategoryKeys.length) {
+        organizerGroupTagsCategoryKey = '';
+        organizerGroupTagsGroupKey = '';
+        return { activeCategory: null, activeGroup: null };
+    }
+
+    if (organizerGroupTagsCategoryKey && !availableCategoryKeys.includes(organizerGroupTagsCategoryKey)) {
+        organizerGroupTagsCategoryKey = '';
+        organizerGroupTagsGroupKey = '';
+    }
+
+    if (!organizerGroupTagsCategoryKey) {
+        organizerGroupTagsGroupKey = '';
+        return { activeCategory: null, activeGroup: null };
+    }
+
+    const activeCategory = categories.find(category => category.key === organizerGroupTagsCategoryKey) || categories[0];
+    const availableGroupKeys = (activeCategory?.groups || []).map(group => group?.key).filter(Boolean);
+    if (!availableGroupKeys.length) {
+        organizerGroupTagsGroupKey = '';
+        return { activeCategory, activeGroup: null };
+    }
+
+    if (organizerGroupTagsGroupKey && !availableGroupKeys.includes(organizerGroupTagsGroupKey)) {
+        organizerGroupTagsGroupKey = '';
+    }
+
+    if (!organizerGroupTagsGroupKey) {
+        return { activeCategory, activeGroup: null };
+    }
+
+    const activeGroup = activeCategory.groups.find(group => group.key === organizerGroupTagsGroupKey) || activeCategory.groups[0];
+    return { activeCategory, activeGroup };
+}
+
+function renderOrganizerCategorySections(container, groups = [], emptyText = '') {
+    if (!container) return;
+    if (!groups.length) {
+        container.innerHTML = `<div class="organizer-rule-empty">${emptyText}</div>`;
+        return;
+    }
+
+    const activeKey = resolveActiveOrganizerCategoryKey(groups);
+    const activeGroup = groups.find(group => group.key === activeKey) || groups[0];
+
+    if (activeGroup?.key === 'groupTags') {
+        const { activeCategory, activeGroup: activeGroupTagsGroup } = resolveOrganizerGroupTagsSelection(activeGroup.categories || []);
+        container.innerHTML = `
+            <div class="organizer-category-switcher">
+                ${groups.map(group => `
+                    <button
+                        type="button"
+                        class="organizer-category-tab${group.key === activeKey ? ' active' : ''}"
+                        data-category-switch="${escapeHtml(group.key || '')}">
+                        <span>${escapeHtml(group.title || '')}</span>
+                        <span class="organizer-category-tab-count">${(group.items || []).length}</span>
+                    </button>
+                `).join('')}
+            </div>
+            <section class="organizer-category-group" data-category="${escapeHtml(activeGroup.key || '')}">
+                ${(activeGroup.categories || []).length
+                    ? `
+                        <div class="organizer-group-tags-browser">
+                            <div class="organizer-breadcrumb">
+                                <button type="button" class="organizer-browser-btn${!activeCategory ? ' active' : ''}" data-group-tags-root="1">
+                                    <span>分类</span>
+                                </button>
+                                ${activeCategory ? `
+                                    <span class="organizer-breadcrumb-sep">/</span>
+                                    <button type="button" class="organizer-browser-btn${activeCategory && !activeGroupTagsGroup ? ' active' : ''}" data-group-tags-category="${escapeHtml(activeCategory.key || '')}">
+                                        <span>${escapeHtml(activeCategory.title || '')}</span>
+                                    </button>
+                                ` : ''}
+                                ${activeGroupTagsGroup ? `
+                                    <span class="organizer-breadcrumb-sep">/</span>
+                                    <button type="button" class="organizer-browser-btn active" data-group-tags-group="${escapeHtml(activeGroupTagsGroup.key || '')}">
+                                        <span>${escapeHtml(activeGroupTagsGroup.title || '')}</span>
+                                    </button>
+                                ` : ''}
+                            </div>
+                            <div class="organizer-subpanel">
+                                <div class="organizer-category-body">
+                                    ${!activeCategory
+                                        ? `
+                                            <div class="organizer-browser-grid">
+                                                ${(activeGroup.categories || []).map(category => `
+                                                    <button
+                                                        type="button"
+                                                        class="organizer-browser-btn"
+                                                        data-group-tags-category="${escapeHtml(category.key || '')}">
+                                                        <span>${escapeHtml(category.title || '')}</span>
+                                                        <span class="organizer-browser-btn-count">${(category.groups || []).length}</span>
+                                                    </button>
+                                                `).join('')}
+                                            </div>
+                                        `
+                                        : !activeGroupTagsGroup
+                                            ? (activeCategory.groups || []).length
+                                                ? `
+                                                    <div class="organizer-browser-grid">
+                                                        ${(activeCategory.groups || []).map(group => `
+                                                            <button
+                                                                type="button"
+                                                                class="organizer-browser-btn"
+                                                                data-group-tags-group="${escapeHtml(group.key || '')}">
+                                                                <span>${escapeHtml(group.title || '')}</span>
+                                                                <span class="organizer-browser-btn-count">${(group.items || []).length}</span>
+                                                            </button>
+                                                        `).join('')}
+                                                    </div>
+                                                `
+                                                : `<div class="organizer-rule-empty">${escapeHtml(activeGroup.emptyText || '当前分类下没有命中的分组。')}</div>`
+                                            : (activeGroupTagsGroup.items || []).length
+                                                ? (activeGroupTagsGroup.items || []).map(([value, count]) => renderOrganizerChipMarkup(value, count, activeGroup.type || 'exact')).join('')
+                                                : `<div class="organizer-rule-empty">${escapeHtml(activeGroup.emptyText || '当前分组没有命中的 tag。')}</div>`
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    `
+                    : `<div class="organizer-rule-empty">${escapeHtml(activeGroup.emptyText || '当前文件中没有命中 GroupTags 已保存的 tag。')}</div>`
+                }
+            </section>
+        `;
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="organizer-category-switcher">
+            ${groups.map(group => `
+                <button
+                    type="button"
+                    class="organizer-category-tab${group.key === activeKey ? ' active' : ''}"
+                    data-category-switch="${escapeHtml(group.key || '')}">
+                    <span>${escapeHtml(group.title || '')}</span>
+                    <span class="organizer-category-tab-count">${(group.items || []).length}</span>
+                </button>
+            `).join('')}
+        </div>
+        <section class="organizer-category-group" data-category="${escapeHtml(activeGroup.key || '')}">
+            <div class="organizer-category-body">
+                ${(activeGroup.items || []).length
+                    ? (activeGroup.items || []).map(([value, count]) => renderOrganizerChipMarkup(value, count, activeGroup.type || 'exact')).join('')
+                    : `<div class="organizer-rule-empty">${escapeHtml(activeGroup.emptyText || '暂无结果。')}</div>`
+                }
+            </div>
+        </section>
+    `;
+}
+
+function getPinnedMatchIndex(coreTag = '', pinnedItems = organizerPinnedItemsCache) {
+    const normalizedTag = String(coreTag || '').trim().toLocaleLowerCase();
+    if (!normalizedTag || !pinnedItems.length) return Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < pinnedItems.length; i++) {
+        const item = pinnedItems[i];
+        if (item.type === 'exact' && normalizedTag === item.normalizedValue) return i;
+        if (item.type === 'prefix' && normalizedTag.startsWith(item.normalizedValue)) return i;
+    }
+    return Number.POSITIVE_INFINITY;
+}
+
+function reorderLineTagsByPriority(line = '', pinnedItems = organizerPinnedItemsCache) {
+    const tokens = splitOrganizerTags(line);
+    if (tokens.length <= 1 || !pinnedItems.length) return normalizeOrganizerLine(line);
+
+    const enrichedTokens = tokens.map((token, index) => ({
+        token: token.trim(),
+        index,
+        matchIndex: getPinnedMatchIndex(parseOrganizerToken(token)?.canonicalTag, pinnedItems)
+    }));
+
+    enrichedTokens.sort((a, b) => {
+        const aMatched = Number.isFinite(a.matchIndex);
+        const bMatched = Number.isFinite(b.matchIndex);
+        if (aMatched && bMatched) return a.matchIndex - b.matchIndex || a.index - b.index;
+        if (aMatched) return -1;
+        if (bMatched) return 1;
+        return a.index - b.index;
+    });
+
+    return enrichedTokens.map(item => item.token).join(', ');
+}
+
+function buildLinePinnedPriorityMeta(line = '', pinnedItems = organizerPinnedItemsCache) {
+    const matchedIndices = [];
+    const seen = new Set();
+    const weightMap = new Map();
+
+    splitOrganizerTags(line).forEach(token => {
+        const parsedToken = parseOrganizerToken(token);
+        const matchIndex = getPinnedMatchIndex(parsedToken?.canonicalTag, pinnedItems);
+        if (!Number.isFinite(matchIndex) || seen.has(matchIndex)) return;
+        seen.add(matchIndex);
+        matchedIndices.push(matchIndex);
+        weightMap.set(matchIndex, Math.max(weightMap.get(matchIndex) || Number.NEGATIVE_INFINITY, parsedToken?.weight ?? 1));
+    });
+
+    splitOrganizerTags(line).forEach(token => {
+        const parsedToken = parseOrganizerToken(token);
+        const matchIndex = getPinnedMatchIndex(parsedToken?.canonicalTag, pinnedItems);
+        if (!Number.isFinite(matchIndex)) return;
+        weightMap.set(matchIndex, Math.max(weightMap.get(matchIndex) || Number.NEGATIVE_INFINITY, parsedToken?.weight ?? 1));
+    });
+
+    matchedIndices.sort((a, b) => a - b);
+
+    return {
+        matchedIndices,
+        matchedWeights: matchedIndices.map(index => weightMap.get(index) ?? 1),
+        firstMatchIndex: matchedIndices.length ? matchedIndices[0] : Number.POSITIVE_INFINITY,
+        matchedCount: matchedIndices.length
+    };
+}
+
+function comparePinnedPriorityMeta(aMeta, bMeta) {
+    const aMatched = Number.isFinite(aMeta.firstMatchIndex);
+    const bMatched = Number.isFinite(bMeta.firstMatchIndex);
+    if (aMatched && !bMatched) return -1;
+    if (!aMatched && bMatched) return 1;
+    if (!aMatched && !bMatched) return 0;
+
+    const maxLen = Math.max(aMeta.matchedIndices.length, bMeta.matchedIndices.length);
+    for (let i = 0; i < maxLen; i++) {
+        const aVal = aMeta.matchedIndices[i];
+        const bVal = bMeta.matchedIndices[i];
+        if (aVal === undefined && bVal === undefined) break;
+        if (aVal === undefined) return 1;
+        if (bVal === undefined) return -1;
+        if (aVal !== bVal) return aVal - bVal;
+
+        const aWeight = aMeta.matchedWeights[i] ?? 1;
+        const bWeight = bMeta.matchedWeights[i] ?? 1;
+        if (aWeight !== bWeight) return bWeight - aWeight;
+    }
+
+    if (aMeta.matchedCount !== bMeta.matchedCount) return bMeta.matchedCount - aMeta.matchedCount;
+    return 0;
+}
+
+function buildOrganizerModel(text = '') {
+    const source = String(text || '').replace(/\r\n/g, '\n');
+    const rawLines = source.split('\n');
+    const nonEmptyEntries = [];
+    let blankLines = 0;
+
+    rawLines.forEach((rawLine, index) => {
+        const trimmed = rawLine.trim();
+        if (!trimmed) {
+            blankLines++;
+            return;
+        }
+
+        const normalized = normalizeOrganizerLine(trimmed);
+        const tokenCount = splitOrganizerTags(trimmed).length;
+        nonEmptyEntries.push({
+            lineNumber: index + 1,
+            raw: rawLine,
+            text: trimmed,
+            normalized,
+            tokenCount,
+            charCount: normalized.length
+        });
+    });
+
+    const duplicateMap = new Map();
+    nonEmptyEntries.forEach(entry => {
+        const key = entry.normalized.toLocaleLowerCase();
+        duplicateMap.set(key, (duplicateMap.get(key) || 0) + 1);
+    });
+
+    nonEmptyEntries.forEach(entry => {
+        entry.duplicateCount = duplicateMap.get(entry.normalized.toLocaleLowerCase()) || 1;
+    });
+
+    const duplicateGroups = Array.from(duplicateMap.values()).filter(count => count > 1).length;
+    return {
+        entries: nonEmptyEntries,
+        stats: {
+            totalLines: rawLines.length,
+            nonEmptyLines: nonEmptyEntries.length,
+            blankLines,
+            uniqueLines: duplicateMap.size,
+            duplicateLines: Math.max(0, nonEmptyEntries.length - duplicateMap.size),
+            duplicateGroups
+        }
+    };
+}
+
+function getSortedOrganizerEntries(entries = [], mode = 'original') {
+    const list = [...entries];
+    const compareText = (a, b) => a.normalized.localeCompare(b.normalized, undefined, { numeric: true, sensitivity: 'base' });
+
+    switch (mode) {
+        case 'alphaAsc':
+            list.sort((a, b) => compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'alphaDesc':
+            list.sort((a, b) => compareText(b, a) || a.lineNumber - b.lineNumber);
+            break;
+        case 'tokenAsc':
+            list.sort((a, b) => a.tokenCount - b.tokenCount || compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'tokenDesc':
+            list.sort((a, b) => b.tokenCount - a.tokenCount || compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'lengthAsc':
+            list.sort((a, b) => a.charCount - b.charCount || compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'lengthDesc':
+            list.sort((a, b) => b.charCount - a.charCount || compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'duplicatesFirst':
+            list.sort((a, b) => b.duplicateCount - a.duplicateCount || compareText(a, b) || a.lineNumber - b.lineNumber);
+            break;
+        case 'pinnedPriority':
+            const pinnedPriorityMetaCache = new Map();
+            list.forEach(entry => {
+                pinnedPriorityMetaCache.set(entry.lineNumber, buildLinePinnedPriorityMeta(entry.text, organizerPinnedItemsCache));
+            });
+            list.sort((a, b) => {
+                const aMeta = pinnedPriorityMetaCache.get(a.lineNumber);
+                const bMeta = pinnedPriorityMetaCache.get(b.lineNumber);
+                return comparePinnedPriorityMeta(aMeta, bMeta) || a.lineNumber - b.lineNumber;
+            });
+            break;
+        default:
+            list.sort((a, b) => a.lineNumber - b.lineNumber);
+            break;
+    }
+
+    return list;
+}
+
+function updateOrganizerToggleText() {
+    toggleOrganizerBtn.textContent = organizerVisible ? '隐藏整理' : '整理视图';
+}
+
+function setOrganizerVisibility(nextVisible) {
+    organizerVisible = !!nextVisible;
+    organizerPanel.classList.toggle('collapsed', !organizerVisible);
+    toggleOrganizerBtn.classList.toggle('active', organizerVisible); // 同步方案 2 的激活状态类
+    updateOrganizerToggleText();
+    saveOrganizerLayoutState();
+}
+
+function getOrganizerPinDrawerHeightBounds() {
+    const safeFallbackMax = Math.max(
+        ORGANIZER_PIN_DRAWER_MIN_HEIGHT,
+        organizerPinDrawerHeight,
+        ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT
+    );
+
+    if (!organizerPanel) {
+        return {
+            min: ORGANIZER_PIN_DRAWER_MIN_HEIGHT,
+            max: safeFallbackMax
+        };
+    }
+
+    const panelHeight = organizerPanel.clientHeight || 0;
+    const toolbarHeight = organizerPanel.querySelector('.organizer-toolbar')?.offsetHeight || 0;
+    const summaryHeight = organizerSummary?.offsetHeight || 32;
+    const handleHeight = organizerPinResizeHandle?.offsetHeight || 6;
+
+    if (!panelHeight) {
+        return {
+            min: ORGANIZER_PIN_DRAWER_MIN_HEIGHT,
+            max: safeFallbackMax
+        };
+    }
+
+    const maxHeight = Math.max(
+        ORGANIZER_PIN_DRAWER_MIN_HEIGHT,
+        panelHeight - toolbarHeight - summaryHeight - handleHeight - ORGANIZER_PANEL_BOTTOM_MIN_HEIGHT
+    );
+
+    return {
+        min: ORGANIZER_PIN_DRAWER_MIN_HEIGHT,
+        max: maxHeight
+    };
+}
+
+function applyOrganizerPinDrawerHeight(nextHeight, { save = false } = {}) {
+    const { min, max } = getOrganizerPinDrawerHeightBounds();
+    const numericHeight = Number.isFinite(nextHeight) ? nextHeight : parseFloat(nextHeight);
+    const fallbackHeight = Number.isFinite(numericHeight) ? numericHeight : organizerPinDrawerHeight;
+    organizerPinDrawerHeight = Math.round(Math.min(Math.max(fallbackHeight, min), max));
+
+    if (organizerPanel) {
+        organizerPanel.style.setProperty('--organizer-pin-drawer-height', `${organizerPinDrawerHeight}px`);
+    }
+
+    if (save) saveOrganizerLayoutState();
+}
+
+/**
+ * 持久化保存整理面板布局状态
+ */
+function saveOrganizerLayoutState() {
+    const pinDrawer = document.getElementById('pinDrawer');
+    if (!organizerPanel) return;
+    
+    // 获取当前有效宽度
+    let currentWidth = organizerPanel.style.width;
+    if (!currentWidth && organizerVisible) {
+        currentWidth = organizerPanel.offsetWidth + 'px';
+    }
+
+    // 获取当前激活的视图 (通配符 vs 字典)
+    const activeViewBtn = viewSwitcher?.querySelector('button.active');
+    const currentView = activeViewBtn ? activeViewBtn.dataset.view : 'sync';
+
+    const state = {
+        visible: organizerVisible,
+        width: currentWidth,
+        flexBasis: currentWidth,
+        drawerOpen: pinDrawer ? pinDrawer.classList.contains('open') : false,
+        drawerHeight: pinDrawer && pinDrawer.classList.contains('open')
+            ? pinDrawer.offsetHeight || organizerPinDrawerHeight
+            : organizerPinDrawerHeight,
+        lastOpenedFile: currentFile,
+        currentView: currentView,
+        dictShowChanges: typeof dictShowChanges !== 'undefined' ? dictShowChanges : false
+    };
+    chrome.storage.local.set({ organizerLayoutState: state });
+}
+
+function scrollEditorToLine(lineNumber) {
+    if (!editorView || !lineNumber) return;
+    try {
+        const line = editorView.state.doc.line(lineNumber);
+        editorView.dispatch({
+            selection: { anchor: line.from },
+            effects: CM.EditorView.scrollIntoView(line.from, { y: 'center' })
+        });
+        editorView.focus();
+    } catch (error) {
+        console.warn('scrollEditorToLine failed:', error);
+    }
+}
+
+function invalidateOrganizerAnalysisCache() {
+    organizerAnalysisCache.dirty = true;
+    organizerAnalysisCache.model = null;
+    organizerAnalysisCache.candidates = null;
+    organizerAnalysisCache.sortedEntries = new Map();
+}
+
+function normalizeOrganizerRefreshRequest(options = {}) {
+    if (!options || !Object.keys(options).length) {
+        return {
+            analysis: true,
+            candidates: true,
+            list: true,
+            summary: true
+        };
+    }
+
+    return {
+        analysis: false,
+        candidates: false,
+        list: false,
+        summary: false,
+        ...options
+    };
+}
+
+function scheduleOrganizerRefresh(options = {}) {
+    const request = normalizeOrganizerRefreshRequest(options);
+    organizerPendingRefresh.analysis = organizerPendingRefresh.analysis || request.analysis;
+    organizerPendingRefresh.candidates = organizerPendingRefresh.candidates || request.candidates;
+    organizerPendingRefresh.list = organizerPendingRefresh.list || request.list;
+    organizerPendingRefresh.summary = organizerPendingRefresh.summary || request.summary;
+
+    if (organizerRefreshTimer) clearTimeout(organizerRefreshTimer);
+    organizerRefreshTimer = setTimeout(() => {
+        organizerRefreshTimer = null;
+        const nextRefresh = { ...organizerPendingRefresh };
+        organizerPendingRefresh = {
+            analysis: false,
+            candidates: false,
+            list: false,
+            summary: false
+        };
+        renderOrganizerPreview(nextRefresh);
+    }, 120);
+}
+
+function getOrganizerPinnedItemsSignature() {
+    if (!organizerPinnedItemsCache.length) return '';
+    return organizerPinnedItemsCache
+        .map(item => `${item.type}:${item.normalizedValue}`)
+        .join('|');
+}
+
+function ensureOrganizerAnalysisCache() {
+    if (!currentFile || !editorView) return null;
+    if (!organizerAnalysisCache.dirty && organizerAnalysisCache.model && organizerAnalysisCache.candidates) {
+        return organizerAnalysisCache;
+    }
+
+    const editorText = editorView.state.doc.toString();
+    const isLargeFileMode = isOrganizerLargeFileMode();
+    organizerAnalysisCache = {
+        dirty: false,
+        model: isLargeFileMode ? buildOrganizerLightweightModel(editorText) : buildOrganizerModel(editorText),
+        candidates: isLargeFileMode
+            ? { commonTags: [], commonCategories: [] }
+            : extractOrganizerCandidates(editorText),
+        sortedEntries: new Map()
+    };
+    return organizerAnalysisCache;
+}
+
+function getCachedOrganizerSortedEntries(mode = 'original') {
+    const analysis = ensureOrganizerAnalysisCache();
+    if (!analysis?.model?.entries) return [];
+
+    const effectiveMode = isOrganizerLargeFileMode()
+        ? syncOrganizerLargeFileSortMode({ notify: false, fallbackMode: mode })
+        : mode;
+
+    const cacheKey = effectiveMode === 'pinnedPriority'
+        ? `${effectiveMode}::${getOrganizerPinnedItemsSignature()}`
+        : effectiveMode;
+
+    if (!analysis.sortedEntries.has(cacheKey)) {
+        analysis.sortedEntries.set(cacheKey, getSortedOrganizerEntries(analysis.model.entries, effectiveMode));
+    }
+
+    return analysis.sortedEntries.get(cacheKey) || [];
+}
+
+function buildOrganizerHighlightRegex(highlightTerms = []) {
+    const normalizedTerms = Array.from(new Set(
+        (highlightTerms || [])
+            .map(term => String(term || '').trim())
+            .filter(Boolean)
+    ));
+
+    if (!normalizedTerms.length) return null;
+
+    const pattern = normalizedTerms
+        .map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+
+    return new RegExp(`(${pattern})`, 'gi');
+}
+
+function buildOrganizerListItemMarkup(entry, highlightRegex = null) {
+    let contentHtml = escapeHtml(entry.normalized);
+    if (highlightRegex) {
+        contentHtml = contentHtml.replace(highlightRegex, '<mark>$1</mark>');
+    }
+
+    return `
+        <div class="organizer-item${entry.duplicateCount > 1 ? ' duplicate' : ''}" data-line-number="${entry.lineNumber}">
+            <div class="organizer-item-header">
+                <span class="organizer-item-line">L${entry.lineNumber}</span>
+                <span class="organizer-badge">${entry.tokenCount} tags</span>
+                ${entry.duplicateCount > 1 ? `<span class="organizer-badge warn">重复 ${entry.duplicateCount}</span>` : ''}
+            </div>
+            <div class="organizer-item-text">${contentHtml}</div>
+        </div>
+    `;
+}
+
+function removeOrganizerListTail() {
+    organizerList?.querySelector('.organizer-list-tail')?.remove();
+}
+
+function updateOrganizerListTail() {
+    if (!organizerList) return;
+    removeOrganizerListTail();
+
+    const total = organizerListRenderState.entries.length;
+    if (!total || organizerListRenderState.renderedCount >= total) return;
+
+    const tail = document.createElement('div');
+    tail.className = 'organizer-list-tail';
+    tail.textContent = `已显示 ${organizerListRenderState.renderedCount} / ${total}，继续滚动加载更多`;
+    organizerList.appendChild(tail);
+}
+
+function scheduleOrganizerListChunkAppend() {
+    if (!organizerList || organizerListChunkFrame) return;
+
+    const renderVersion = organizerListRenderState.version;
+    organizerListChunkFrame = requestAnimationFrame(() => {
+        organizerListChunkFrame = 0;
+        if (renderVersion !== organizerListRenderState.version) return;
+
+        if (organizerListRenderState.renderedCount >= organizerListRenderState.entries.length) {
+            removeOrganizerListTail();
+            return;
+        }
+
+        removeOrganizerListTail();
+
+        const nextEntries = organizerListRenderState.entries.slice(
+            organizerListRenderState.renderedCount,
+            organizerListRenderState.renderedCount + ORGANIZER_LIST_CHUNK_SIZE
+        );
+
+        if (nextEntries.length) {
+            organizerList.insertAdjacentHTML(
+                'beforeend',
+                nextEntries.map(entry => buildOrganizerListItemMarkup(entry, organizerListRenderState.highlightRegex)).join('')
+            );
+            organizerListRenderState.renderedCount += nextEntries.length;
+        }
+
+        updateOrganizerListTail();
+
+        if (
+            organizerListRenderState.renderedCount < organizerListRenderState.entries.length
+            && organizerList.scrollHeight <= organizerList.clientHeight + 48
+        ) {
+            scheduleOrganizerListChunkAppend();
+        }
+    });
+}
+
+function renderOrganizerCandidatePanels(candidates, searchQuery = '', pinQuery = '') {
+    const queries = [searchQuery, pinQuery].filter(q => q.length > 0);
+    const filterByQuery = (items) => {
+        if (!queries.length) return items;
+        return items.filter(([value]) => {
+            const searchTexts = getOrganizerChipSearchTexts(value);
+            return queries.some(q => searchTexts.some(text => text.includes(q)));
+        });
+    };
+
+    const filterGroupTagCategories = (categories = []) => {
+        return (categories || [])
+            .map(category => ({
+                ...category,
+                groups: (category.groups || [])
+                    .map(group => ({
+                        ...group,
+                        items: filterByQuery(group.items || [])
+                    }))
+                    .filter(group => group.items.length > 0)
+            }))
+            .filter(category => category.groups.length > 0);
+    };
+
+    const filteredCommonTags = filterByQuery(candidates.commonTags);
+    const commonTagsEmptyText = candidates.commonTags.length
+        ? '当前筛选条件下没有匹配的常见 tag。'
+        : '当前文件中没有重复出现的常见 tag';
+
+    renderOrganizerCandidateChips(organizerCommonTags, filteredCommonTags, 'exact', commonTagsEmptyText);
+    renderOrganizerCategorySections(organizerCommonCategories, candidates.commonCategories.map(group => ({
+        ...group,
+        items: filterByQuery(group.items),
+        categories: group.key === 'groupTags' ? filterGroupTagCategories(group.categories || []) : group.categories
+    })), '当前文件里还没有识别到可用的分类标签。');
+}
+
+function renderOrganizerSummarySection(model) {
+    if (!organizerSummary) return;
+    organizerSummary.innerHTML = `
+        <span><b>${model.stats.nonEmptyLines}</b> 条有效 · <b>${model.stats.uniqueLines}</b> 唯一 · <b>${model.stats.duplicateLines}</b> 重复</span>
+    `;
+}
+
+function buildOrganizerLightweightModel(text = '') {
+    const source = String(text || '').replace(/\r\n/g, '\n');
+    const rawLines = source.split('\n');
+    const entries = [];
+    let blankLines = 0;
+
+    rawLines.forEach((rawLine, index) => {
+        const trimmed = rawLine.trim();
+        if (!trimmed) {
+            blankLines++;
+            return;
+        }
+
+        const normalized = normalizeOrganizerLine(trimmed);
+        entries.push({
+            lineNumber: index + 1,
+            raw: rawLine,
+            text: trimmed,
+            normalized,
+            tokenCount: 1,
+            charCount: normalized.length
+        });
+    });
+
+    const duplicateMap = new Map();
+    entries.forEach(entry => {
+        const key = entry.normalized.toLocaleLowerCase();
+        duplicateMap.set(key, (duplicateMap.get(key) || 0) + 1);
+    });
+
+    entries.forEach(entry => {
+        entry.duplicateCount = duplicateMap.get(entry.normalized.toLocaleLowerCase()) || 1;
+    });
+
+    return {
+        entries,
+        stats: {
+            totalLines: rawLines.length,
+            nonEmptyLines: entries.length,
+            blankLines,
+            uniqueLines: duplicateMap.size,
+            duplicateLines: Math.max(0, entries.length - duplicateMap.size),
+            duplicateGroups: Array.from(duplicateMap.values()).filter(count => count > 1).length
+        }
+    };
+}
+
+function syncOrganizerLargeFileState() {
+    const lineCount = currentFile && editorView ? (editorView.state.doc.lines || 0) : 0;
+    const isLargeFile = !!currentFile && lineCount >= ORGANIZER_LARGE_FILE_THRESHOLD;
+
+    organizerLargeFileState.active = isLargeFile;
+    organizerLargeFileState.lineCount = lineCount;
+    return organizerLargeFileState;
+}
+
+function resetOrganizerLargeFileState() {
+    organizerLargeFileState = {
+        active: false,
+        lineCount: 0
+    };
+}
+
+function isOrganizerLargeFileMode() {
+    return organizerLargeFileState.active;
+}
+
+function isOrganizerLargeFileUnsupportedSort(mode = organizerSortMode?.value || 'original') {
+    return mode === 'pinnedPriority' || mode === 'tokenAsc' || mode === 'tokenDesc';
+}
+
+function getOrganizerLargeFileAllowedSortLabel() {
+    return '大文件模式仅支持原始顺序、字母顺序、长度顺序和重复项优先';
+}
+
+function syncOrganizerLargeFileSortMode({ notify = false, fallbackMode } = {}) {
+    const currentMode = fallbackMode || organizerSortMode?.value || 'original';
+    if (!isOrganizerLargeFileMode()) return currentMode;
+    if (!isOrganizerLargeFileUnsupportedSort(currentMode)) {
+        return currentMode;
+    }
+
+    if (organizerSortMode) organizerSortMode.value = 'original';
+    if (notify) showToast(getOrganizerLargeFileAllowedSortLabel(), 'info');
+    return 'original';
+}
+
+function getOrganizerLargeFileDisabledMessage() {
+    return `当前文件较大（${organizerLargeFileState.lineCount.toLocaleString()} 行），已关闭常见 Tag / 分类分析，仅保留简单排序、去重和规范功能。`;
+}
+
+function renderOrganizerListSection(entries = [], searchQuery = '', pinQuery = '') {
+    if (!organizerList) return;
+
+    const visibleEntries = searchQuery
+        ? entries.filter(entry => entry.normalized.toLocaleLowerCase().includes(searchQuery))
+        : entries;
+
+    const searchBadge = document.getElementById('searchBadge');
+    if (searchBadge) {
+        if (searchQuery) {
+            searchBadge.textContent = visibleEntries.length;
+            searchBadge.style.display = 'block';
+        } else {
+            searchBadge.style.display = 'none';
+        }
+    }
+
+    organizerListRenderState.version += 1;
+    organizerListRenderState.entries = visibleEntries;
+    organizerListRenderState.renderedCount = 0;
+    organizerListRenderState.highlightRegex = buildOrganizerHighlightRegex([searchQuery, pinQuery].filter(Boolean));
+
+    if (organizerListChunkFrame) {
+        cancelAnimationFrame(organizerListChunkFrame);
+        organizerListChunkFrame = 0;
+    }
+
+    if (!visibleEntries.length) {
+        organizerList.innerHTML = '<div class="organizer-empty">没有匹配条件的行。</div>';
+        return;
+    }
+
+    organizerList.innerHTML = '';
+    organizerList.scrollTop = 0;
+    scheduleOrganizerListChunkAppend();
+}
+
+// ----- 改进版整理面板交互逻辑 -----
+function togglePinDrawer(forceState) {
+    const pinDrawer = document.getElementById('pinDrawer');
+    const toggleBtn = document.getElementById('togglePinDrawerBtn');
+    if (!pinDrawer || !toggleBtn) return;
+
+    const isOpen = forceState !== undefined ? forceState : !pinDrawer.classList.contains('open');
+    pinDrawer.classList.toggle('open', isOpen);
+    toggleBtn.classList.toggle('active', isOpen);
+    if (isOpen) applyOrganizerPinDrawerHeight(organizerPinDrawerHeight);
+    saveOrganizerLayoutState();
+}
+
+function switchPinTab(tabId) {
+    const tabs = document.querySelectorAll('.pin-tab');
+    const panels = document.querySelectorAll('.pin-tab-panel');
+    
+    tabs.forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabId);
+    });
+    
+    panels.forEach(panel => {
+        panel.classList.toggle('active', panel.id === (tabId + 'Panel'));
+    });
+}
+
+function renderOrganizerPreview(refreshRequest = {}) {
+    if (!organizerList || !organizerSummary) return;
+
+    const request = normalizeOrganizerRefreshRequest(refreshRequest);
+    if (applyOrganizerPriorityBtn) {
+        applyOrganizerPriorityBtn.disabled = false;
+        applyOrganizerPriorityBtn.title = '';
+    }
+
+    if (!currentFile || !editorView) {
+        organizerListRenderState.version += 1;
+        organizerListRenderState.entries = [];
+        organizerListRenderState.renderedCount = 0;
+        organizerListRenderState.highlightRegex = null;
+        if (organizerListChunkFrame) {
+            cancelAnimationFrame(organizerListChunkFrame);
+            organizerListChunkFrame = 0;
+        }
+        organizerSummary.innerHTML = '<span>尚未载入文件内容。</span>';
+        organizerList.innerHTML = '<div class="organizer-empty">打开通配符文件后，这里会展示内容。</div>';
+        renderOrganizerCandidateChips(organizerCommonTags, [], 'exact', '打开文件后会自动提取常见 tag。');
+        renderOrganizerCategorySections(organizerCommonCategories, [], '打开文件后会自动提取当前文件中的画师、角色和 GroupTags 标签。');
+        return;
+    }
+
+    if (isOrganizerLargeFileMode() && applyOrganizerPriorityBtn) {
+        applyOrganizerPriorityBtn.disabled = true;
+        applyOrganizerPriorityBtn.title = '大文件模式下已关闭 Tag 重排功能';
+    }
+
+    const analysis = ensureOrganizerAnalysisCache();
+    if (!analysis) return;
+
+    const searchQuery = organizerSearch.value.trim().toLocaleLowerCase();
+    const pinQuery = organizerPinnedInput.value.trim().toLocaleLowerCase();
+
+    if (request.candidates) {
+        if (isOrganizerLargeFileMode()) {
+            const disabledMessage = getOrganizerLargeFileDisabledMessage();
+            renderOrganizerCandidateChips(organizerCommonTags, [], 'exact', disabledMessage);
+            renderOrganizerCategorySections(organizerCommonCategories, [], disabledMessage);
+        } else {
+            renderOrganizerCandidatePanels(analysis.candidates, searchQuery, pinQuery);
+        }
+    }
+
+    if (request.summary) {
+        renderOrganizerSummarySection(analysis.model);
+        if (isOrganizerLargeFileMode() && organizerSummary) {
+            organizerSummary.insertAdjacentHTML('beforeend', '<span class="organizer-summary-note">大文件轻量模式</span>');
+        }
+    }
+
+    if (request.list) {
+        renderOrganizerListSection(
+            getCachedOrganizerSortedEntries(syncOrganizerLargeFileSortMode({ notify: false })),
+            searchQuery,
+            pinQuery
+        );
+    }
+}
+
+function replaceEditorContent(text) {
+    if (!editorView) return;
+    editorView.dispatch({
+        changes: {
+            from: 0,
+            to: editorView.state.doc.length,
+            insert: text
+        }
+    });
+}
+
+function getOrganizerTransformationPreview({ dedupe = false, normalizeOnly = false, priorityTagReorder = false } = {}) {
+    if (!editorView) return null;
+    if (isOrganizerLargeFileMode() && priorityTagReorder) {
+        return { error: '当前文件较大，已关闭 Tag 重排功能' };
+    }
+
+    const currentSortMode = syncOrganizerLargeFileSortMode({ notify: false });
+    const model = isOrganizerLargeFileMode()
+        ? buildOrganizerLightweightModel(editorView.state.doc.toString())
+        : buildOrganizerModel(editorView.state.doc.toString());
+    if (priorityTagReorder && !organizerPinnedItemsCache.length) {
+        return { error: '请先添加至少一个置顶项' };
+    }
+    if (!priorityTagReorder && currentSortMode === 'pinnedPriority' && !organizerPinnedItemsCache.length) {
+        return { error: '请先添加至少一个置顶项，再使用置顶顺序优先排序' };
+    }
+
+    const preview = {
+        model,
+        affectedLineCount: 0,
+        removedCount: 0
+    };
+
+    if (normalizeOnly) {
+        preview.affectedLineCount = model.entries.reduce((count, entry) => {
+            return count + (normalizeOrganizerLine(entry.text) !== entry.normalized ? 1 : 0);
+        }, 0);
+        return preview;
+    }
+
+    if (priorityTagReorder) {
+        preview.affectedLineCount = model.entries.reduce((count, entry) => {
+            const reordered = reorderLineTagsByPriority(entry.text, organizerPinnedItemsCache);
+            return count + (reordered !== entry.normalized ? 1 : 0);
+        }, 0);
+        return preview;
+    }
+
+    if (dedupe) {
+        const entries = getSortedOrganizerEntries(model.entries, currentSortMode);
+        const seen = new Set();
+        let removedCount = 0;
+        entries.forEach(entry => {
+            const key = entry.normalized.toLocaleLowerCase();
+            if (seen.has(key)) {
+                removedCount++;
+                return;
+            }
+            seen.add(key);
+        });
+        preview.removedCount = removedCount;
+    }
+
+    return preview;
+}
+
+async function confirmOrganizerTransformation(options = {}) {
+    const preview = getOrganizerTransformationPreview(options);
+    if (!preview) return;
+    if (preview.error) {
+        showToast(preview.error, 'error');
+        return;
+    }
+
+    if (options.dedupe) {
+        if (!preview.removedCount) {
+            showToast('当前没有可删除的重复内容', 'info');
+            return;
+        }
+        const confirmed = await customConfirm(`将删除 ${preview.removedCount} 条重复内容，确认继续？`);
+        if (!confirmed) return;
+    }
+
+    applyOrganizerTransformation(options);
+}
+
+function applyOrganizerTransformation({ dedupe = false, normalizeOnly = false, priorityTagReorder = false } = {}) {
+    if (!editorView) return;
+    if (isOrganizerLargeFileMode() && priorityTagReorder) {
+        showToast('当前文件较大，已关闭 Tag 重排功能', 'info');
+        return;
+    }
+
+    const currentSortMode = syncOrganizerLargeFileSortMode({ notify: true });
+    const model = isOrganizerLargeFileMode()
+        ? buildOrganizerLightweightModel(editorView.state.doc.toString())
+        : buildOrganizerModel(editorView.state.doc.toString());
+    if (priorityTagReorder && !organizerPinnedItemsCache.length) {
+        showToast('请先添加至少一个置顶项', 'error');
+        return;
+    }
+    if (!priorityTagReorder && currentSortMode === 'pinnedPriority' && !organizerPinnedItemsCache.length) {
+        showToast('请先添加至少一个置顶项，再使用置顶顺序优先排序', 'error');
+        return;
+    }
+
+    let entries;
+    if (normalizeOnly) {
+        entries = model.entries.map(entry => ({ ...entry, normalized: normalizeOrganizerLine(entry.text) }));
+    } else if (priorityTagReorder) {
+        entries = model.entries.map(entry => ({
+            ...entry,
+            normalized: reorderLineTagsByPriority(entry.text, organizerPinnedItemsCache)
+        }));
+    } else {
+        entries = getSortedOrganizerEntries(model.entries, currentSortMode);
+    }
+
+    if (dedupe) {
+        const seen = new Set();
+        entries = entries.filter(entry => {
+            const key = entry.normalized.toLocaleLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    const nextText = entries.map(entry => normalizeOnly ? entry.normalized : entry.normalized).join('\n');
+    replaceEditorContent(nextText);
+
+    const actionLabel = normalizeOnly
+        ? '已按统一格式规范当前文件'
+        : priorityTagReorder
+            ? dedupe
+                ? '已按置顶项重排 Tag 并去重'
+                : '已按置顶项重排当前文件中的 Tag'
+            : dedupe
+                ? '已按当前规则排序并去重'
+                : '已按当前规则排序';
+    showToast(actionLabel, 'success');
+    log(actionLabel + `：${currentFile}`, 'success');
+    scheduleOrganizerRefresh();
+}
+
+// ============================
 // Section 8: CodeMirror Editor & Web Worker
 // ============================
 let searchWorker = null;
@@ -1083,7 +2867,12 @@ function initEditor() {
         oneDark,
         EditorView.updateListener.of(update => {
             if (update.docChanged || update.selectionSet) updateLineInfo(update.state);
-            if (update.docChanged) markModified();
+            if (update.docChanged) {
+                markModified();
+                syncOrganizerLargeFileState();
+                invalidateOrganizerAnalysisCache();
+                scheduleOrganizerRefresh({ analysis: true, candidates: true, list: true, summary: true });
+            }
         }),
         EditorView.theme({
             '&': { height: '100%', fontSize: '13px' },
@@ -1108,19 +2897,33 @@ function updateLineInfo(state) {
     lineInfo.textContent = tf('line_info', { line: line.number, total: totalLines });
 }
 
+function normalizeEditorContent(text = '') {
+    return String(text || '').replace(/\r\n/g, '\n');
+}
+
+function hasUnsavedEditorChanges() {
+    if (!currentFile || !editorView) return false;
+    return normalizeEditorContent(editorView.state.doc.toString()) !== normalizeEditorContent(localContent);
+}
+
 function markModified() {
-    if (currentFile) {
-        const current = editorView.state.doc.toString();
-        if (current !== localContent) {
-            saveStatus.textContent = t('save_status_unsaved');
-            saveStatus.className = 'modified';
-        }
+    if (!currentFile || !editorView) return;
+
+    if (hasUnsavedEditorChanges()) {
+        saveStatus.textContent = t('save_status_unsaved');
+        saveStatus.className = 'modified';
+        if (discardChangesBtn) discardChangesBtn.disabled = false;
+    } else {
+        saveStatus.textContent = '';
+        saveStatus.className = '';
+        if (discardChangesBtn) discardChangesBtn.disabled = true;
     }
 }
 
 function markSaved() {
     saveStatus.textContent = t('save_status_saved');
     saveStatus.className = 'saved';
+    if (discardChangesBtn) discardChangesBtn.disabled = true;
     setTimeout(() => {
         if (saveStatus.className === 'saved') {
             saveStatus.textContent = '';
@@ -1129,15 +2932,13 @@ function markSaved() {
     }, 2000);
 }
 
-function openFile(key) {
+async function openFile(key) {
     if (currentFile && editorView) {
         try {
-            const current = editorView.state.doc.toString().replace(/\r\n/g, '\n');
-            const local = (localContent || '').replace(/\r\n/g, '\n');
-            if (current !== local && !confirm(t('confirm_discard_unsaved'))) return;
+            if (hasUnsavedEditorChanges() && !await customConfirm(t('confirm_discard_unsaved'))) return;
         } catch (e) {
             console.error('Check unsaved failed:', e);
-            if (!confirm(t('confirm_force_switch'))) return;
+            if (!await customConfirm(t('confirm_force_switch'))) return;
         }
     }
     chrome.storage.local.get('wildcards', data => {
@@ -1155,7 +2956,7 @@ function openFile(key) {
 
             editorHeader.style.display = 'flex';
             editorPlaceholder.style.display = 'none';
-            editorContainer.style.display = 'block';
+            editorWorkspace.style.display = 'flex';
             editorStatusbar.style.display = 'flex';
             extChangeBanner.classList.remove('show');
 
@@ -1166,7 +2967,12 @@ function openFile(key) {
 
             saveStatus.textContent = '';
             saveStatus.className = '';
+            if (discardChangesBtn) discardChangesBtn.disabled = true;
             updateLineInfo(editorView.state);
+            syncOrganizerLargeFileState();
+            syncOrganizerLargeFileSortMode({ notify: false });
+            invalidateOrganizerAnalysisCache();
+            scheduleOrganizerRefresh({ analysis: true, candidates: true, list: true, summary: true });
         } catch (e) {
             log(tf('log_open_file_failed', { message: e.message }), 'error');
             showToast(t('toast_open_file_error'), 'error');
@@ -1178,6 +2984,7 @@ function openFile(key) {
             }
         } finally {
             refreshFileTree(); // Always refresh to ensure UI state is consistent
+            saveOrganizerLayoutState(); // 持久化记录当前打开的文件
         }
     });
 }
@@ -1185,11 +2992,15 @@ function openFile(key) {
 function closeEditor() {
     currentFile = null;
     localContent = '';
+    resetOrganizerLargeFileState();
+    invalidateOrganizerAnalysisCache();
     editorHeader.style.display = 'none';
     editorPlaceholder.style.display = 'flex';
-    editorContainer.style.display = 'none';
+    editorWorkspace.style.display = 'none';
     editorStatusbar.style.display = 'none';
     extChangeBanner.classList.remove('show');
+    if (discardChangesBtn) discardChangesBtn.disabled = true;
+    renderOrganizerPreview();
     refreshFileTree();
 }
 
@@ -1261,6 +3072,17 @@ async function loadDictionary() {
                 };
             });
         }
+        autocompleteMetaMap = new Map(
+            (autocompleteDict || []).map(entry => [
+                String(entry.tag || '').trim().toLocaleLowerCase(),
+                {
+                    colorCode: String(entry.colorCode || ''),
+                    aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+                    popCount: parseInt(entry.popCount, 10) || 0,
+                    zhCN: String(entry.zhCN || '').trim()
+                }
+            ])
+        );
         log(tf('log_dictionary_loaded', { count: autocompleteDict.length }), 'success');
 
         // Send to worker
@@ -1271,6 +3093,7 @@ async function loadDictionary() {
     } catch (e) {
         log(tf('log_dictionary_failed', { message: e.message }), 'error');
         autocompleteDict = [];
+        autocompleteMetaMap = new Map();
     }
 }
 
@@ -1409,6 +3232,14 @@ toggleBottom.addEventListener('click', () => {
 });
 
 let isResizing = false;
+let isResizingBottom = false;
+let isResizingRight = false;
+let isResizingPinDrawer = false;
+let startXForRight = 0;
+let startWidthForRight = 0;
+let startYForPinDrawer = 0;
+let startHeightForPinDrawer = 0;
+
 resizeHandle.addEventListener('mousedown', (e) => {
     isResizing = true;
     resizeHandle.classList.add('dragging');
@@ -1420,6 +3251,16 @@ document.addEventListener('mousemove', (e) => {
     if (isResizing) {
         const newWidth = Math.min(Math.max(e.clientX, 180), window.innerWidth * 0.5);
         sidebar.style.width = newWidth + 'px';
+    } else if (isResizingRight) {
+        const deltaX = startXForRight - e.clientX;
+        const newWidthPx = Math.min(Math.max(startWidthForRight + deltaX, 360), window.innerWidth * 0.60) + 'px';
+        organizerPanel.style.width = newWidthPx;
+        organizerPanel.style.flexBasis = newWidthPx; // 同步更新以应对持久化后的覆盖
+        organizerPanel.style.maxWidth = '80vw';
+        organizerPanel.style.flexShrink = '0';
+    } else if (isResizingPinDrawer) {
+        const nextHeight = startHeightForPinDrawer + (e.clientY - startYForPinDrawer);
+        applyOrganizerPinDrawerHeight(nextHeight);
     } else if (isResizingBottom) {
         if (!bottomExpanded) {
             bottomExpanded = true;
@@ -1433,9 +3274,23 @@ document.addEventListener('mousemove', (e) => {
     }
 });
 document.addEventListener('mouseup', () => {
+    // 先快照「是否正在拖拽」，再清零标记，最后根据快照决定是否保存
+    const wasDragging = isResizing || isResizingRight || isResizingPinDrawer || isResizingBottom;
+
     if (isResizing) {
         isResizing = false;
         resizeHandle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    } else if (isResizingRight) {
+        isResizingRight = false;
+        resizeHandleRight.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    } else if (isResizingPinDrawer) {
+        isResizingPinDrawer = false;
+        organizerPinResizeHandle?.classList.remove('dragging');
+        document.getElementById('pinDrawer')?.classList.remove('dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
     } else if (isResizingBottom) {
@@ -1444,16 +3299,53 @@ document.addEventListener('mouseup', () => {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
     }
+    // 拖拽结束时保存状态（使用之前的快照值，而非已被清零的标记）
+    if (wasDragging) {
+        saveOrganizerLayoutState();
+        console.log('[Layout] Drag ended, state saved. Width:', organizerPanel.style.width);
+    }
 });
 
-let isResizingBottom = false;
-resizeHandleBottom.addEventListener('mousedown', (e) => {
-    isResizingBottom = true;
-    resizeHandleBottom.classList.add('dragging');
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-});
+// Removed redundant declarations that were moved up
+
+const resizeHandleRight = document.getElementById('resizeHandleRight');
+if (resizeHandleRight) {
+    resizeHandleRight.addEventListener('mousedown', (e) => {
+        isResizingRight = true;
+        startXForRight = e.clientX;
+        startWidthForRight = organizerPanel.offsetWidth;
+        resizeHandleRight.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+}
+
+if (organizerPinResizeHandle) {
+    organizerPinResizeHandle.addEventListener('mousedown', (e) => {
+        const pinDrawer = document.getElementById('pinDrawer');
+        if (!pinDrawer?.classList.contains('open')) return;
+
+        isResizingPinDrawer = true;
+        startYForPinDrawer = e.clientY;
+        startHeightForPinDrawer = pinDrawer.offsetHeight || organizerPinDrawerHeight;
+        organizerPinResizeHandle.classList.add('dragging');
+        pinDrawer.classList.add('dragging');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+}
+
+if (resizeHandleBottom) {
+    resizeHandleBottom.addEventListener('mousedown', (e) => {
+        isResizingBottom = true;
+        resizeHandleBottom.classList.add('dragging');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+}
 
 newFileBtn.addEventListener('click', () => {
     let raw = newItemName.value.trim();
@@ -1603,6 +3495,273 @@ snapshotBtn.addEventListener('click', async () => {
     showToast(t('toast_manual_snapshot_created'), 'success');
 });
 
+toggleOrganizerBtn.addEventListener('click', () => {
+    setOrganizerVisibility(!organizerVisible);
+});
+
+organizerSortMode.addEventListener('change', () => {
+    syncOrganizerLargeFileSortMode({ notify: true });
+    scheduleOrganizerRefresh({ list: true });
+});
+organizerSearch.addEventListener('input', () => {
+    scheduleOrganizerRefresh({ candidates: !isOrganizerLargeFileMode(), list: true });
+});
+
+function handleAddPinnedInput() {
+    const value = organizerPinnedInput.value.trim();
+    if (!value) return;
+    const added = addOrganizerPinnedItem(value);
+    if (!added) {
+        showToast('该置顶项已存在，或内容为空', 'error');
+        return;
+    }
+    organizerPinnedInput.value = '';
+    scheduleOrganizerRefresh({
+        candidates: true,
+        list: organizerSortMode.value === 'pinnedPriority'
+    });
+}
+
+addOrganizerPinnedBtn.addEventListener('click', handleAddPinnedInput);
+organizerPinnedInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        handleAddPinnedInput();
+    }
+});
+
+organizerCommonTags.addEventListener('click', (event) => {
+    const chip = event.target.closest('.organizer-chip.counted');
+    if (!chip) return;
+    const value = chip.dataset.value || '';
+    const type = chip.dataset.type || inferPinnedItemType(value);
+    toggleOrganizerPinnedItem(value, type);
+    scheduleOrganizerRefresh({
+        candidates: true,
+        list: organizerSortMode.value === 'pinnedPriority'
+    });
+});
+
+organizerCommonCategories.addEventListener('click', (event) => {
+    const switchButton = event.target.closest('[data-category-switch]');
+    if (switchButton) {
+        const nextKey = switchButton.dataset.categorySwitch || '';
+        if (nextKey && organizerCommonCategoryKey !== nextKey) {
+            organizerCommonCategoryKey = nextKey;
+            if (nextKey !== 'groupTags') {
+                organizerGroupTagsCategoryKey = '';
+                organizerGroupTagsGroupKey = '';
+            }
+            renderOrganizerPreview({ candidates: true });
+        }
+        return;
+    }
+
+    const groupRootButton = event.target.closest('[data-group-tags-root]');
+    if (groupRootButton) {
+        organizerGroupTagsCategoryKey = '';
+        organizerGroupTagsGroupKey = '';
+        renderOrganizerPreview({ candidates: true });
+        return;
+    }
+
+    const groupCategoryButton = event.target.closest('[data-group-tags-category]');
+    if (groupCategoryButton) {
+        const nextCategoryKey = groupCategoryButton.dataset.groupTagsCategory || '';
+        if (nextCategoryKey) {
+            organizerGroupTagsCategoryKey = nextCategoryKey;
+            organizerGroupTagsGroupKey = '';
+            renderOrganizerPreview({ candidates: true });
+        }
+        return;
+    }
+
+    const groupButton = event.target.closest('[data-group-tags-group]');
+    if (groupButton) {
+        const nextGroupKey = groupButton.dataset.groupTagsGroup || '';
+        if (nextGroupKey && organizerGroupTagsGroupKey !== nextGroupKey) {
+            organizerGroupTagsGroupKey = nextGroupKey;
+            renderOrganizerPreview({ candidates: true });
+        }
+        return;
+    }
+
+    const chip = event.target.closest('.organizer-chip.counted');
+    if (!chip) return;
+    const value = chip.dataset.value || '';
+    const type = chip.dataset.type || inferPinnedItemType(value);
+    toggleOrganizerPinnedItem(value, type);
+    scheduleOrganizerRefresh({
+        candidates: true,
+        list: organizerSortMode.value === 'pinnedPriority'
+    });
+});
+
+organizerPinnedList.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+
+    const card = button.closest('.organizer-pinned-card');
+    if (!card) return;
+
+    const index = parseInt(card.dataset.index, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= organizerPinnedItemsCache.length) return;
+
+    if (button.dataset.action === 'remove') {
+        organizerPinnedItemsCache.splice(index, 1);
+    } else if (button.dataset.action === 'move-up' && index > 0) {
+        [organizerPinnedItemsCache[index - 1], organizerPinnedItemsCache[index]] = [organizerPinnedItemsCache[index], organizerPinnedItemsCache[index - 1]];
+    } else if (button.dataset.action === 'move-down' && index < organizerPinnedItemsCache.length - 1) {
+        [organizerPinnedItemsCache[index + 1], organizerPinnedItemsCache[index]] = [organizerPinnedItemsCache[index], organizerPinnedItemsCache[index + 1]];
+    }
+
+    renderOrganizerPinnedList();
+    updateOrganizerPriorityStatus();
+    scheduleSaveOrganizerPinnedItems();
+    scheduleOrganizerRefresh({
+        candidates: button.dataset.action === 'remove',
+        list: organizerSortMode.value === 'pinnedPriority'
+    });
+});
+
+// --- 置顶列表拖拽排序实现 ---
+let pinnedDragSourceIndex = null;
+
+organizerPinnedList.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.organizer-pinned-card');
+    if (!card) return;
+    pinnedDragSourceIndex = parseInt(card.dataset.index, 10);
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', card.dataset.index);
+});
+
+organizerPinnedList.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const card = e.target.closest('.organizer-pinned-card');
+    if (card && parseInt(card.dataset.index, 10) !== pinnedDragSourceIndex) {
+        card.classList.add('drag-over');
+    }
+});
+
+organizerPinnedList.addEventListener('dragleave', (e) => {
+    const card = e.target.closest('.organizer-pinned-card');
+    if (card) card.classList.remove('drag-over');
+});
+
+organizerPinnedList.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const card = e.target.closest('.organizer-pinned-card');
+    if (!card) return;
+    
+    const targetIndex = parseInt(card.dataset.index, 10);
+    if (pinnedDragSourceIndex !== null && pinnedDragSourceIndex !== targetIndex) {
+        const item = organizerPinnedItemsCache.splice(pinnedDragSourceIndex, 1)[0];
+        organizerPinnedItemsCache.splice(targetIndex, 0, item);
+        
+        renderOrganizerPinnedList();
+        updateOrganizerPriorityStatus();
+        scheduleSaveOrganizerPinnedItems();
+        scheduleOrganizerRefresh({
+            candidates: false,
+            list: organizerSortMode.value === 'pinnedPriority'
+        });
+    }
+});
+
+organizerPinnedList.addEventListener('dragend', (e) => {
+    const cards = organizerPinnedList.querySelectorAll('.organizer-pinned-card');
+    cards.forEach(c => {
+        c.classList.remove('dragging');
+        c.classList.remove('drag-over');
+    });
+    pinnedDragSourceIndex = null;
+});
+
+    // Organizer Events
+    organizerSortMode.oninput = () => {
+        syncOrganizerLargeFileSortMode({ notify: true });
+        scheduleOrganizerRefresh({ list: true });
+    };
+    organizerSearch.oninput = () => scheduleOrganizerRefresh({ candidates: !isOrganizerLargeFileMode(), list: true });
+
+    // 新增置顶抽屉与标签页事件
+    const togglePinDrawerBtn = document.getElementById('togglePinDrawerBtn');
+    if (togglePinDrawerBtn) {
+        togglePinDrawerBtn.onclick = () => togglePinDrawer();
+    }
+
+    document.querySelectorAll('.pin-tab').forEach(tab => {
+        tab.onclick = () => switchPinTab(tab.dataset.tab);
+    });
+
+    // 列表项点击跳转与悬停高亮
+    let lastHighlightedLine = null;
+    const setLineHighlight = (window.CM && CM.StateEffect) ? CM.StateEffect.define() : null;
+
+    const highlightLine = (line) => {
+        if (!editorView || !setLineHighlight) return;
+        if (lastHighlightedLine !== null) {
+            editorView.dispatch({ effects: setLineHighlight.of({ line: lastHighlightedLine, active: false }) });
+        }
+        if (line !== null) {
+            editorView.dispatch({ effects: setLineHighlight.of({ line, active: true }) });
+        }
+        lastHighlightedLine = line;
+    };
+
+    organizerList.addEventListener('scroll', () => {
+        if (
+            organizerList.scrollTop + organizerList.clientHeight
+            >= organizerList.scrollHeight - ORGANIZER_LIST_CHUNK_THRESHOLD
+        ) {
+            scheduleOrganizerListChunkAppend();
+        }
+    });
+
+    organizerList.onclick = (event) => {
+        const item = event.target.closest('.organizer-item');
+        if (!item) return;
+        const lineNumber = parseInt(item.dataset.lineNumber, 10);
+        if (Number.isFinite(lineNumber)) scrollEditorToLine(lineNumber);
+    };
+
+    organizerList.onmouseover = (event) => {
+        const item = event.target.closest('.organizer-item');
+        if (!item) return;
+        const lineNumber = parseInt(item.dataset.lineNumber, 10);
+        if (Number.isFinite(lineNumber)) highlightLine(lineNumber);
+    };
+
+    organizerList.onmouseout = (event) => {
+        if (!event.relatedTarget || !organizerList.contains(event.relatedTarget)) {
+            highlightLine(null);
+        }
+    };
+
+    applyOrganizerSortBtn.onclick = () => applyOrganizerTransformation();
+    dedupeOrganizerBtn.onclick = () => confirmOrganizerTransformation({ dedupe: true });
+    normalizeOrganizerBtn.onclick = () => applyOrganizerTransformation({ normalizeOnly: true });
+    applyOrganizerPriorityBtn.onclick = () => applyOrganizerTransformation({ priorityTagReorder: true });
+discardChangesBtn.addEventListener('click', async () => {
+    if (!currentFile || !editorView) return;
+    if (!hasUnsavedEditorChanges()) {
+        showToast('当前没有未保存修改', 'info');
+        return;
+    }
+
+    const confirmed = await customConfirm('确定要放弃当前未保存修改并恢复到上次保存状态吗？');
+    if (!confirmed) return;
+
+    replaceEditorContent(localContent || '');
+    saveStatus.textContent = '';
+    saveStatus.className = '';
+    discardChangesBtn.disabled = true;
+    scheduleOrganizerRefresh();
+    showToast('已取消当前未保存修改', 'success');
+});
+
 saveBtn.addEventListener('click', saveCurrentFile);
 reloadFileBtn.addEventListener('click', () => { if (currentFile) openFile(currentFile); });
 dismissBannerBtn.addEventListener('click', () => { extChangeBanner.classList.remove('show'); });
@@ -1639,6 +3798,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
             }
         }
     }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (!changes.groupTagsUserData) return;
+    loadOrganizerGroupTagsIndex({ force: true });
 });
 
 // JSON 资源智能节流回推（3秒防抖）
@@ -1755,6 +3920,7 @@ settingSyncDebounceInput.addEventListener('change', async () => {
 
 // Window and Layout Events for Popover Tracking
 window.addEventListener('resize', repositionQuickPopover);
+window.addEventListener('resize', () => applyOrganizerPinDrawerHeight(organizerPinDrawerHeight));
 document.querySelector('.topbar').addEventListener('scroll', repositionQuickPopover);
 
 // Diff Modal Events
@@ -2289,6 +4455,7 @@ dictToggleChangesBtn.addEventListener('click', () => {
         dictToggleChangesBtn.classList.remove('btn-primary');
     }
     filterDict(dictSearch.value);
+    saveOrganizerLayoutState(); // 保存筛选状态
 });
 
 
@@ -2366,6 +4533,7 @@ viewSwitcher.addEventListener('click', async (e) => {
         syncActions.style.display = '';
         dictView.classList.remove('active');
     }
+    saveOrganizerLayoutState(); // 切换视图后保存状态
 });
 
 // ============================
@@ -2374,6 +4542,63 @@ viewSwitcher.addEventListener('click', async (e) => {
 async function init() {
     await initI18n();
     log(t('log_initializing'), 'info');
+    
+    // 恢复布局持久化状态 (通过延迟确保 DOM 变量已载入)
+    chrome.storage.local.get('organizerLayoutState', (data) => {
+        const layoutState = data.organizerLayoutState;
+        if (layoutState && organizerPanel) {
+            // 强力恢复宽度：设置 width 后再设置 flex-basis 以覆盖 CSS clamp
+            if (layoutState.width) {
+                organizerPanel.style.width = layoutState.width;
+                organizerPanel.style.flexBasis = layoutState.flexBasis || layoutState.width;
+            }
+
+            applyOrganizerPinDrawerHeight(layoutState.drawerHeight ?? ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT);
+            setOrganizerVisibility(layoutState.visible !== false);
+            if (layoutState.drawerOpen) togglePinDrawer(true);
+            
+            // 恢复最后一次打开的文件
+            if (layoutState.lastOpenedFile) {
+                console.log('[Layout] Restoring file:', layoutState.lastOpenedFile);
+                openFile(layoutState.lastOpenedFile);
+            }
+            console.log('[Layout] Memory Loaded:', {
+                "上次文件": layoutState.lastOpenedFile,
+                "面板宽度": layoutState.width,
+                "是否显示": layoutState.visible,
+                "抽屉状态": layoutState.drawerOpen ? '展开' : '收起',
+                "抽屉高度": layoutState.drawerHeight ?? ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT,
+                "当前视图": layoutState.currentView === 'dict' ? '字典编辑' : '通配符管理'
+            });
+
+            // 恢复视图状态 (通配符 vs 字典)
+            if (layoutState.currentView === 'dict') {
+                const dictBtn = viewSwitcher.querySelector('button[data-view="dict"]');
+                if (dictBtn) dictBtn.click();
+
+                // 恢复「只看变更」筛选状态
+                if (layoutState.dictShowChanges && dictToggleChangesBtn) {
+                    // 等待字典加载完成后再触发
+                    const waitForDict = setInterval(() => {
+                        if (dictLoaded) {
+                            clearInterval(waitForDict);
+                            if (!dictShowChanges) {
+                                dictToggleChangesBtn.click();
+                            }
+                        }
+                    }, 100);
+                    // 安全超时，5秒后放弃
+                    setTimeout(() => clearInterval(waitForDict), 5000);
+                }
+            }
+        } else {
+            applyOrganizerPinDrawerHeight(ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT);
+            updateOrganizerToggleText();
+            setOrganizerVisibility(true);
+        }
+    });
+
+    renderOrganizerPreview();
 
     // 挂载同步看板交互反馈
     localSyncService.onSyncSuccess = (fileName, count) => {
@@ -2411,6 +4636,7 @@ async function init() {
     }
 
     await loadSnapshotSettings();
+    await loadOrganizerPriorityRules();
 
     // Restore bound directory
     try {
@@ -2440,6 +4666,7 @@ async function init() {
     }
     refreshFileTree();
     await loadDictionary();
+    await loadOrganizerGroupTagsIndex();
     await renderSnapshotList();
     log(t('log_init_complete'), 'success');
 }
@@ -2452,4 +4679,36 @@ window.addEventListener('focus', async () => {
         const res = await localSyncService.scanAndPullChanges({ silent: true });
         await handleSyncResult(res);
     }
+});
+
+// 核心增强：置顶项输入监听与占位符动态缩减
+if (organizerPinnedInput) {
+    organizerPinnedInput.addEventListener('input', () => {
+        scheduleOrganizerRefresh({ candidates: true, list: true });
+    });
+
+    // 智能占位符策略：空间不足时缩减文字
+    const updatePlaceholder = (width) => {
+        if (width < 400) {
+            organizerPinnedInput.setAttribute('placeholder', '添加项...');
+        } else {
+            organizerPinnedInput.setAttribute('placeholder', '添加置顶 (如 1girl)');
+        }
+    };
+
+    // 监听面板宽度变化
+    const panelResizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+            updatePlaceholder(entry.contentRect.width);
+        }
+    });
+    if (document.getElementById('organizerPanel')) {
+        panelResizeObserver.observe(document.getElementById('organizerPanel'));
+    }
+}
+
+window.addEventListener('beforeunload', (event) => {
+    if (!hasUnsavedEditorChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
 });
