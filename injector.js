@@ -546,6 +546,89 @@
     window.postMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' }, '*');
   }
 
+  function parseGenerateRequestJsonText(text) {
+    if (typeof text !== 'string') return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    return JSON.parse(trimmed);
+  }
+
+  async function extractGenerateRequestBody(body, request = null) {
+    if (!body && request instanceof Request) {
+      const clone = request.clone();
+      const contentType = clone.headers.get('content-type') || '';
+      body = contentType.includes('multipart/form-data')
+        ? await clone.formData()
+        : await clone.text();
+    }
+
+    if (!body) return null;
+
+    if (typeof body === 'string') {
+      const json = parseGenerateRequestJsonText(body);
+      if (!json) return null;
+      return {
+        json,
+        rebuild(nextJson) {
+          return JSON.stringify(nextJson);
+        }
+      };
+    }
+
+    if (body instanceof FormData) {
+      const requestPart = body.get('request');
+      if (requestPart == null) return null;
+
+      const requestText = typeof requestPart === 'string'
+        ? requestPart
+        : await requestPart.text();
+      const json = parseGenerateRequestJsonText(requestText);
+      if (!json) return null;
+
+      return {
+        json,
+        rebuild(nextJson) {
+          const nextBody = new FormData();
+          for (const [key, value] of body.entries()) {
+            if (key === 'request') continue;
+            nextBody.append(key, value);
+          }
+
+          const nextJsonText = JSON.stringify(nextJson);
+          if (requestPart instanceof Blob) {
+            const fileName = (typeof File !== 'undefined' && requestPart instanceof File && requestPart.name)
+              ? requestPart.name
+              : 'blob';
+            nextBody.append(
+              'request',
+              new Blob([nextJsonText], { type: requestPart.type || 'application/json' }),
+              fileName
+            );
+          } else {
+            nextBody.append('request', nextJsonText);
+          }
+
+          return nextBody;
+        }
+      };
+    }
+
+    if (body instanceof Blob) {
+      const json = parseGenerateRequestJsonText(await body.text());
+      if (!json) return null;
+      return {
+        json,
+        rebuild(nextJson) {
+          return new Blob([JSON.stringify(nextJson)], {
+            type: body.type || 'application/json'
+          });
+        }
+      };
+    }
+
+    return null;
+  }
+
   /* 2‑A. fetch 패치 (fetch 补丁) */
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
@@ -553,11 +636,12 @@
       const url = typeof input === 'string' ? input : input.url;
       const m = (init.method || input.method || 'GET').toUpperCase();
       if (m === 'POST' && url.startsWith(TARGET)) {
-        let body = init.body || (input instanceof Request ? input.body : null);
-        if (body) {
-          const txt = typeof body === 'string' ? body
-            : await new Response(body).text();
-          let json = JSON.parse(txt);
+        const patchedBody = await extractGenerateRequestBody(
+          init.body,
+          input instanceof Request ? input : null
+        );
+        if (patchedBody?.json) {
+          let json = patchedBody.json;
 
           const seed32 = getSeed32(json);
           const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
@@ -603,11 +687,22 @@
             json.parameters.v4_prompt.caption.base_caption = json.input;
           }
 
-          const newBody = JSON.stringify(json);
+          const newBody = patchedBody.rebuild(json);
           if (typeof input === 'string') {
             init = { ...init, body: newBody };
+            if (newBody instanceof FormData) {
+              const headers = new Headers(init.headers || {});
+              headers.delete('content-type');
+              init.headers = headers;
+            }
           } else {
-            input = new Request(input, { body: newBody });
+            const nextInit = { ...init, body: newBody };
+            if (newBody instanceof FormData) {
+              const headers = new Headers(init.headers || input.headers);
+              headers.delete('content-type');
+              nextInit.headers = headers;
+            }
+            input = new Request(input, nextInit);
           }
         }
       }
