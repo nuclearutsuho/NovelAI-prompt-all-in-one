@@ -243,17 +243,34 @@
 
     // 密度控制逻辑 (Density Slider)
     const densitySlider = container.querySelector('#te-density-slider');
+    const iframe = container.querySelector('#wildcard-manager-iframe');
+
+    const setResizing = (isResizing) => {
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: '__UPDATE_TE_RESIZING__', isResizing }, '*');
+      }
+    };
+
+    let densityRAF = null;
     densitySlider.addEventListener('input', (e) => {
       const val = e.target.value;
-      chrome.storage.local.set({ tagEditorDensity: val });
-      // 如果 iframe 已经加载完，可以选择主动 postMessage，
-      // 但其实 popup.js 如果自己监听 chrome.storage.onChanged 也能接收到。
-      // 为了稳定起见且遵守架构，依靠 background/popup 自己监听 storage 变化或直接广播
-      const iframe = container.querySelector('#wildcard-manager-iframe');
-      if (iframe && iframe.contentWindow) {
-         iframe.contentWindow.postMessage({ type: '__UPDATE_TE_DENSITY__', value: val }, '*');
-      }
+      if (densityRAF) cancelAnimationFrame(densityRAF);
+      densityRAF = requestAnimationFrame(() => {
+        // During drag, ONLY notify iframe directly
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: '__UPDATE_TE_DENSITY__', value: val }, '*');
+        }
+      });
     });
+
+    densitySlider.addEventListener('change', (e) => {
+      const val = e.target.value;
+      chrome.storage.local.set({ tagEditorDensity: val });
+    });
+
+    densitySlider.addEventListener('mousedown', () => setResizing(true));
+    densitySlider.addEventListener('mouseup', () => setResizing(false));
+    densitySlider.addEventListener('mouseleave', () => setResizing(false));
 
     // 防止在滑块上按下由于 header 拖拽导致滑块无法正常滑动
     densitySlider.addEventListener('mousedown', (e) => {

@@ -20,7 +20,7 @@
 
 .tag-list {
     list-style: none;
-    padding: 8px 44px 8px 8px;
+    padding: 10px 40px 16px 8px;
     margin: 0;
     display: flex;
     flex-wrap: wrap;
@@ -240,18 +240,24 @@
     top: 50%;
     left: calc(100% - 4px);
     /* Slightly overlap to prevent losing hover */
-    transform: translateY(-50%) translateX(5px) scale(0.95);
-    background: rgba(26, 26, 46, 0.95);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(129, 140, 248, 0.4);
-    border-radius: 8px;
-    padding: 3px 5px;
-    gap: 4px;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    transform: translateY(-50%) translateX(6px) scale(0.92);
+    background: rgba(30, 30, 56, 0.98);
+    backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid rgba(129, 140, 248, 0.35);
+    border-top: 1px solid rgba(255, 255, 255, 0.12); /* Inner Glow */
+    border-radius: 12px;
+    padding: 4px 6px;
+    gap: 5px;
+    box-shadow: 
+        0 12px 36px rgba(0, 0, 0, 0.55),
+        0 4px 10px rgba(0, 0, 0, 0.3),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.05);
     z-index: 1000;
     pointer-events: none;
     opacity: 0;
-    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+    transition: 
+        opacity 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.1),
+        transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.1);
     white-space: nowrap;
 }
 
@@ -259,7 +265,7 @@
 .tag-controls.pos-left {
     left: auto;
     right: calc(100% - 4px);
-    transform: translateY(-50%) translateX(-5px) scale(0.95);
+    transform: translateY(-50%) translateX(-6px) scale(0.92);
 }
 
 /* Top variant when both sides overflow */
@@ -292,14 +298,14 @@
     transform: translateY(-50%);
     border-width: 5px;
     border-style: solid;
-    border-color: transparent rgba(26, 26, 46, 0.95) transparent transparent;
+    border-color: transparent rgba(30, 30, 56, 0.98) transparent transparent;
 }
 
 /* Arrow for the left side variant */
 .tag-controls.pos-left::after {
     right: auto;
     left: 100%;
-    border-color: transparent transparent transparent rgba(26, 26, 46, 0.95);
+    border-color: transparent transparent transparent rgba(30, 30, 56, 0.98);
 }
 
 /* Arrow for top variant (pointing down) */
@@ -308,7 +314,7 @@
     right: auto;
     left: 50%;
     transform: translateX(-50%);
-    border-color: rgba(26, 26, 46, 0.95) transparent transparent transparent;
+    border-color: rgba(30, 30, 56, 0.98) transparent transparent transparent;
 }
 
 /* Arrow for bottom variant (pointing up) */
@@ -318,7 +324,7 @@
     right: auto;
     left: 50%;
     transform: translateX(-50%);
-    border-color: transparent transparent rgba(26, 26, 46, 0.95) transparent;
+    border-color: transparent transparent rgba(30, 30, 56, 0.98) transparent;
 }
 
 .tag-capsule:hover .tag-controls {
@@ -369,53 +375,63 @@
 .tbtn {
     background: transparent;
     border: none;
-    color: #eee;
+    color: #cbd5e1;
     cursor: pointer;
     width: var(--te-density-btn-size);
     height: var(--te-density-btn-size);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: 7px;
     font-size: 14px;
     line-height: 1;
     padding: 0;
-    transition: background 0.2s;
+    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
 }
 
 .tbtn:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.12);
     color: #fff;
-    transform: scale(1.1);
+    transform: scale(1.12);
+}
+
+.tbtn:active {
+    transform: scale(0.92);
+    background: rgba(255, 255, 255, 0.2);
+    transition: all 0.1s;
 }
 
 .tbtn-bracket:hover {
     color: #818cf8;
 }
 
+.tbtn-copy {
+    color: #7dd3fc;
+}
 .tbtn-copy:hover {
-    color: #3498db;
+    color: #fff;
+    background: rgba(125, 211, 252, 0.2) !important;
 }
 
 .tbtn-fav {
-    color: #a5b4fc;
-    background: rgba(129, 140, 248, 0.1);
-    border: 1px dashed rgba(129, 140, 248, 0.5) !important;
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px dashed rgba(251, 191, 36, 0.4) !important;
     box-sizing: border-box;
     transition: all 0.2s ease;
 }
 
 .tbtn-fav:hover {
     color: #fff;
-    background: rgba(129, 140, 248, 0.25);
-    border: 1px solid #818cf8 !important;
-    filter: drop-shadow(0 0 4px rgba(129, 140, 248, 0.6));
+    background: rgba(251, 191, 36, 0.25) !important;
+    border: 1px solid #fbbf24 !important;
+    filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.4));
 }
 
 .tbtn-fav.active {
-    color: #6366f1;
-    border: 1px solid #6366f1 !important;
-    text-shadow: 0 0 5px rgba(99, 102, 241, 0.5);
+    color: #f59e0b;
+    border: 1px solid #f59e0b !important;
+    text-shadow: 0 0 5px rgba(245, 158, 11, 0.5);
 }
 
 .tbtn-retranslate {
@@ -423,26 +439,24 @@
 }
 
 .tbtn-retranslate:hover {
-    color: #dbeafe;
-    background: rgba(59, 130, 246, 0.2);
+    color: #fff;
+    background: rgba(59, 130, 246, 0.2) !important;
 }
 
 .tbtn-ai-annotate,
 .tbtn-ai-annotate-batch {
-    color: #f5d0fe;
+    color: #d8b4fe;
     background: rgba(168, 85, 247, 0.12);
-    border: 1px solid rgba(216, 180, 254, 0.25);
+    border: 1px solid rgba(216, 180, 254, 0.2) !important;
     box-sizing: border-box;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
 }
 
 .tbtn-ai-annotate:hover,
 .tbtn-ai-annotate-batch:hover {
     color: #fff;
-    background: rgba(168, 85, 247, 0.28);
-    border-color: rgba(233, 213, 255, 0.45);
+    background: rgba(168, 85, 247, 0.25) !important;
+    border-color: rgba(216, 180, 254, 0.5) !important;
+    filter: drop-shadow(0 0 4px rgba(168, 85, 247, 0.3));
 }
 
 .tbtn-ai-annotate.is-loading,
@@ -471,17 +485,46 @@
     font-size: 0.9em;
 }
 
-.tbtn-sub:hover {
-    color: #f39c12;
+.tbtn-split, .tbtn-merge {
+    color: #a5b4fc;
 }
 
-.tbtn-add:hover {
+.tbtn-split:hover, .tbtn-merge:hover {
+    color: #fff;
+    background: rgba(129, 140, 248, 0.2) !important;
+}
+
+.tbtn-toggle {
+    color: #6ee7b7;
+}
+
+.tbtn-toggle:hover {
+    background: rgba(110, 231, 183, 0.15) !important;
+    color: #fff;
+}
+
+.tag-capsule.disabled .tbtn-toggle {
+    color: #94a3b8;
+}
+
+.tbtn-sub:hover, .tbtn-dyn-sub:hover {
+    color: #f39c12;
+    background: rgba(243, 156, 18, 0.15) !important;
+}
+
+.tbtn-add:hover, .tbtn-dyn-add:hover {
     color: #2ecc71;
+    background: rgba(46, 204, 113, 0.15) !important;
+}
+
+.tbtn-del {
+    color: #f87171;
 }
 
 .tbtn-del:hover {
-    background: rgba(231, 76, 60, 0.2);
-    color: #e74c3c;
+    background: rgba(248, 113, 113, 0.2) !important;
+    color: #fff;
+    filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.4));
 }
 
 /* Weight Control Group */
@@ -814,6 +857,36 @@
     z-index: 3;
 }
 
+/* 极速方案：缩放过程中保留基础边框，但卸载所有重负载属性 */
+.tag-list.is-resizing .tag-group-box-overlay {
+    display: block !important;
+    box-shadow: none !important;
+    transition: none !important;
+    border: 1px solid rgba(129, 140, 248, 0.4) !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+}
+
+.tag-list.is-resizing .tag-group-box-badge {
+    display: none !important; /* 核心优化：缩放时绝对不显示徽章，因为徽章的排版最耗性能 */
+}
+
+/* 核心性能开关：强制禁用缩放过程中的所有过渡、动画与滤镜 */
+.tag-list.is-resizing *, 
+.tag-list.is-resizing *::before, 
+.tag-list.is-resizing *::after {
+    transition: none !important;
+    animation: none !important;
+    backdrop-filter: none !important;
+    mask: none !important;
+    box-shadow: none !important; /* 缩放时移除所有阴影，极大提升绘制速度 */
+    will-change: auto !important;
+}
+
+.tag-list.is-resizing .tag-capsule {
+    border-style: solid !important; /* 实线边框渲染远快于虚线 */
+}
+
 /* ===== 换行符工具栏内的分组命名输入框 ===== */
 .divider-name-input {
     background: rgba(99, 102, 241, 0.08);
@@ -889,7 +962,7 @@
 /* 换行符占位：撑满整行 + 提供方框间距 */
 .tag-newline-separator { 
     flex-basis: 100%; 
-    height: 18px; 
+    height: 14px; /* 从 18px 减小到 4px，允许分组边框靠得更近 */
     margin: 0; 
     padding: 0; 
 }
