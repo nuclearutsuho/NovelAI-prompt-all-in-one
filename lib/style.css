@@ -1266,3 +1266,46 @@
     margin-left: 0;
     text-align: right;
 }
+
+/* Duplicate Tag Badge */
+.tag-duplicate-badge {
+    position: absolute;
+    top: -0.65em;
+    right: -0.65em;
+    background: #f59e0b;
+    color: #fff;
+    font-size: 0.72em;
+    font-weight: 900;
+    width: 1.55em;
+    height: 1.55em;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+    z-index: 100;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    border: 1.5px solid #1e1e2e;
+    pointer-events: auto;
+    font-family: Arial, sans-serif;
+    line-height: 1;
+}
+
+.tag-duplicate-badge:hover {
+    background: #ef4444;
+    transform: scale(1.2);
+    box-shadow: 0 3px 8px rgba(239, 68, 68, 0.5);
+}
+
+.tag-item.duplicate-highlight .tag-capsule {
+    box-shadow: 0 0 0 2px #f59e0b, 0 0 15px rgba(245, 158, 11, 0.5) !important;
+    animation: duplicate-pulse 2s infinite;
+}
+
+@keyframes duplicate-pulse {
+    0% { box-shadow: 0 0 0 0px rgba(245, 158, 11, 0.7); }
+    70% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+    100% { box-shadow: 0 0 0 0px rgba(245, 158, 11, 0); }
+}

@@ -163,6 +163,22 @@ const MODAL_ID = 'nai-history-modal';
       }
       .nhm-clear-btn:hover { background: #3a3a5c; color: #fff; }
 
+      /* Duplicate Tag Badge in History Modal */
+      .nhm-tag-item { position: relative; }
+      .nhm-tag-duplicate-badge {
+        position: absolute;
+        top: -0.6em; right: -0.6em;
+        background: #f59e0b; color: #fff;
+        font-size: 0.72em; font-weight: 800;
+        width: 1.55em; height: 1.55em;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        z-index: 10;
+        border: 1px solid #1a1a2e;
+        pointer-events: none;
+      }
+
       /* ── 右侧详情 ── */
       .nhm-detail {
         flex: 1; display: flex; flex-direction: column; overflow: hidden;
@@ -948,11 +964,27 @@ const MODAL_ID = 'nai-history-modal';
         return;
       }
 
-      // ── 按换行符分组 ──────────────────────────────────────────
-      const hasNewline = tags.some(t => t.value === '\n');
+      // Calculate frequencies
+      const tagFreq = {};
+      tags.forEach(t => {
+        const val = t.value;
+        if (val === '\n' || val === ' ::' || val === '||' || val.match(/^([-?\d\.]+)::$/)) return;
+        let clean = val;
+        let m = val.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+        if (m) clean = m[2];
+        else if (val.startsWith('{') || val.startsWith('[')) {
+          let str = val;
+          while ((str.startsWith('{') && str.endsWith('}')) || (str.startsWith('[') && str.endsWith(']'))) {
+            str = str.slice(1, -1);
+          }
+          clean = str;
+        }
+        const key = (typeof toCanonicalHistoryTagKey === 'function') ? toCanonicalHistoryTagKey(clean) : clean.trim().toLowerCase();
+        if (key) tagFreq[key] = (tagFreq[key] || 0) + 1;
+      });
 
       // 内部渲染单个 tag DOM 节点的工厂函数（不含外层容器）
-      function renderOneTag(tag, index, allTags, inDynGroupRef) {
+      function renderOneTag(tag, index, allTags, inDynGroupRef, freq = 0) {
         const text = tag.value;
         if (!text && text !== '\n') return null;
 
@@ -1070,6 +1102,14 @@ const MODAL_ID = 'nai-history-modal';
         if (dynWeightBadge) primary.innerHTML += dynWeightBadge;
 
         capsule.appendChild(primary);
+
+        if (freq > 1 && !isNewline && !isCompHeader && !isCompFooter && !isDynHeader && !isDynFooter) {
+          const dup = document.createElement('span');
+          dup.className = 'nhm-tag-duplicate-badge';
+          dup.textContent = `x${freq}`;
+          itemNode.appendChild(dup);
+        }
+
         itemNode.appendChild(capsule);
 
         if (!isNewline) {
@@ -1108,6 +1148,7 @@ const MODAL_ID = 'nai-history-modal';
       }
 
       const inDynGroupRef = { val: false };
+      let currentOffset = 0;
       segments.forEach(seg => {
         if (seg.isGroup && globalEnableGrouping) {
           // 渲染为分组框
@@ -1122,8 +1163,25 @@ const MODAL_ID = 'nai-history-modal';
             box.style.background = `rgba(${r},${g},${b},0.05)`;
           }
 
-          displayTags.forEach(t => {
-            const node = renderOneTag(t, tags.indexOf(t), tags, inDynGroupRef);
+          seg.tags.forEach(t => {
+            if (t.value === '\n') {
+                currentOffset++;
+                return;
+            }
+            const val = t.value;
+            let clean = val;
+            let m = val.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+            if (m) clean = m[2];
+            else if (val.startsWith('{') || val.startsWith('[')) {
+              let str = val;
+              while ((str.startsWith('{') && str.endsWith('}')) || (str.startsWith('[') && str.endsWith(']'))) {
+                str = str.slice(1, -1);
+              }
+              clean = str;
+            }
+            const key = (typeof toCanonicalHistoryTagKey === 'function') ? toCanonicalHistoryTagKey(clean) : clean.trim().toLowerCase();
+            const freq = (key && tagFreq[key]) || 0;
+            const node = renderOneTag(t, currentOffset++, tags, inDynGroupRef, freq);
             if (node) box.appendChild(node);
           });
 
@@ -1138,7 +1196,20 @@ const MODAL_ID = 'nai-history-modal';
         } else {
           // 渲染为散拍标签
           seg.tags.forEach(t => {
-            const node = renderOneTag(t, tags.indexOf(t), tags, inDynGroupRef);
+            const val = t.value;
+            let clean = val;
+            let m = val.match(/^([-?\d\.]+)::(.*?)\s*::$/);
+            if (m) clean = m[2];
+            else if (val.startsWith('{') || val.startsWith('[')) {
+              let str = val;
+              while ((str.startsWith('{') && str.endsWith('}')) || (str.startsWith('[') && str.endsWith(']'))) {
+                str = str.slice(1, -1);
+              }
+              clean = str;
+            }
+            const key = (typeof toCanonicalHistoryTagKey === 'function') ? toCanonicalHistoryTagKey(clean) : clean.trim().toLowerCase();
+            const freq = (key && tagFreq[key]) || 0;
+            const node = renderOneTag(t, currentOffset++, tags, inDynGroupRef, freq);
             if (node) container.appendChild(node);
           });
         }
