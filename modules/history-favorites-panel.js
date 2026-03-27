@@ -557,6 +557,45 @@ const MODAL_ID = 'nai-history-modal';
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
       .nhm-batch-dropdown-item:hover { background: #3a3a5c; color: #fff; }
+
+      /* ── 分组框（按换行符分组）── */
+      .nhm-tag-list { position: relative; }
+      .nhm-group-box {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        align-content: flex-start;
+        position: relative;
+        border: 1.5px dashed rgba(129, 140, 248, 0.4);
+        border-radius: 8px;
+        padding: 8px 10px 10px 10px;
+        margin-bottom: 8px;
+        background: rgba(99, 102, 241, 0.03);
+        width: 100%;
+        box-sizing: border-box;
+      }
+      /* 分组名称徽章：右下角矩形卡片 + 左侧色条 */
+      .nhm-group-badge {
+        position: absolute;
+        bottom: -1px;
+        right: 8px;
+        transform: translateY(50%);
+        background: #1e1e2e;
+        color: #e0e7ff;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        padding: 0px 2px 1px 4px;
+        border-radius: 0;
+        border-top: 2px solid rgba(255, 255, 255, 0.1);
+        border-right: 2px solid rgba(255, 255, 255, 0.1);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        border-left: 3px solid #818cf8;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+        white-space: nowrap;
+        z-index: 3;
+        pointer-events: none;
+      }
     `;
 
     function injectStyle() {
@@ -909,11 +948,13 @@ const MODAL_ID = 'nai-history-modal';
         return;
       }
 
-      let inDynGroup = false;
+      // ── 按换行符分组 ──────────────────────────────────────────
+      const hasNewline = tags.some(t => t.value === '\n');
 
-      tags.forEach((tag, index) => {
+      // 内部渲染单个 tag DOM 节点的工厂函数（不含外层容器）
+      function renderOneTag(tag, index, allTags, inDynGroupRef) {
         const text = tag.value;
-        if (!text && text !== '\n') return;
+        if (!text && text !== '\n') return null;
 
         let weightVal = 1.0;
         let cleanText = text;
@@ -922,11 +963,10 @@ const MODAL_ID = 'nai-history-modal';
         let isCompHeader = false;
         let isCompFooter = text === ' ::';
         const isNewline = text === '\n';
-        const isDynMember = inDynGroup && !isDynHeader && !isDynFooter;
+        const isDynMember = inDynGroupRef.val && !isDynHeader && !isDynFooter;
 
-        if (isDynHeader) inDynGroup = true;
+        if (isDynHeader) inDynGroupRef.val = true;
 
-        // 解析权重
         const blockMatch = text.match(/^([-?\d\.]+)::(.*?)\s*::$/);
         const headerMatch = text.match(/^([-?\d\.]+)::$/);
 
@@ -939,13 +979,11 @@ const MODAL_ID = 'nai-history-modal';
           isCompHeader = true;
         } else if (isCompFooter) {
           cleanText = ')';
-          // 回溯查找组头的权重
           for (let j = index - 1; j >= 0; j--) {
-            const m = tags[j].value.match(/^([-?\d\.]+)::$/);
+            const m = allTags[j].value.match(/^([-?\d\.]+)::$/);
             if (m) { weightVal = parseFloat(m[1]); break; }
           }
         } else if (!isNewline && !isDynHeader && !isDynFooter) {
-          // 旧式括号语法
           let inc = 0, dec = 0, str = text;
           if (text.startsWith('{') || text.startsWith('[')) {
             while (str.startsWith('{') && str.endsWith('}')) { inc++; str = str.slice(1, -1); }
@@ -956,59 +994,41 @@ const MODAL_ID = 'nai-history-modal';
           }
         }
 
-        // 动态选择徽章
         let pickBadge = '';
         if (isDynHeader) {
           let config = text.slice(2);
           if (config.endsWith('$$')) config = config.slice(0, -2);
-          if (config) {
-            let displayCount = config.replace('-', '~');
-            pickBadge = `<span class="nhm-tag-dyn-badge">x${displayCount}</span>`;
-          }
+          if (config) pickBadge = `<span class="nhm-tag-dyn-badge">x${config.replace('-', '~')}</span>`;
         }
-
-        // 动态选择权重徽章
         let dynWeightBadge = '';
         if (isDynMember && tag.dynWeight && tag.dynWeight !== 1) {
-          const formatted = (tag.dynWeight % 1 === 0) ? tag.dynWeight : tag.dynWeight.toFixed(1);
-          dynWeightBadge = `<span class="nhm-tag-dyn-weight">${formatted}</span>`;
+          const f = (tag.dynWeight % 1 === 0) ? tag.dynWeight : tag.dynWeight.toFixed(1);
+          dynWeightBadge = `<span class="nhm-tag-dyn-weight">${f}</span>`;
         }
 
-        // 显示文本
         let displayTagName = isNewline ? '↵' : cleanText;
         if (isCompHeader || isCompFooter || isDynHeader || isDynFooter) displayTagName = '';
-        const lookupTagKey = toCanonicalHistoryTagKey(cleanText);
 
-        // 查找标签信息（翻译+颜色）
+        const lookupTagKey = toCanonicalHistoryTagKey(cleanText);
         let info = null;
         if (!isCompHeader && !isCompFooter && !isDynHeader && !isDynFooter && !isNewline) {
           if (blockMatch) {
-            // 复合 tag：分割子标签并聚合翻译
             const parts = cleanText.split(',').map(s => s.trim()).filter(Boolean);
-            const translationParts = [];
-            let firstColor = null;
+            const tParts = []; let firstColor = null;
             parts.forEach(part => {
-              const partInfo = getTagInfo(part);
-              if (partInfo) {
-                if (partInfo.zhCN) translationParts.push(partInfo.zhCN);
-                if (!firstColor && partInfo.color) firstColor = partInfo.color;
-              }
+              const pi = getTagInfo(part);
+              if (pi) { if (pi.zhCN) tParts.push(pi.zhCN); if (!firstColor && pi.color) firstColor = pi.color; }
             });
-            if (translationParts.length > 0 || firstColor) {
-              info = { zhCN: translationParts.join(', '), color: firstColor };
-            }
+            if (tParts.length > 0 || firstColor) info = { zhCN: tParts.join(', '), color: firstColor };
           } else {
             info = getTagInfo(cleanText);
           }
         }
-
-        // GroupTags 翻译优先于字典翻译，和 popup 的 TagEditor 保持一致。
         if (currentGroupTranslationMap && currentGroupTranslationMap[lookupTagKey]) {
           if (!info) info = {};
           info.zhCN = currentGroupTranslationMap[lookupTagKey];
         }
 
-        // === 构建 DOM ===
         const itemNode = document.createElement('div');
         itemNode.className = 'nhm-tag-item';
         if (isNewline) itemNode.classList.add('nhm-tag-newline');
@@ -1024,22 +1044,17 @@ const MODAL_ID = 'nai-history-modal';
         const capsule = document.createElement('div');
         capsule.className = capClasses.join(' ');
 
-        // 应用字典颜色
         if (info && info.color) {
           capsule.style.borderColor = info.color;
           capsule.style.borderWidth = '1.5px';
           capsule.style.background = `linear-gradient(135deg, #3b3b4f 0%, ${info.color}15 100%)`;
         }
-
-        // GroupTags 颜色只覆盖胶囊背景，保留字典给出的边框提示色。
         if (currentGroupColorMap && currentGroupColorMap[lookupTagKey]) {
           capsule.style.background = currentGroupColorMap[lookupTagKey];
         }
 
         const primary = document.createElement('div');
         primary.className = 'nhm-tag-primary';
-
-        // 权重/选择徽章
         if (isDynHeader) {
           primary.innerHTML = pickBadge;
         } else if ((Math.abs(weightVal - 1.0) > 0.001 || isCompHeader || isCompFooter) && !isNewline) {
@@ -1048,24 +1063,18 @@ const MODAL_ID = 'nai-history-modal';
           badge.textContent = weightVal.toFixed(1);
           primary.appendChild(badge);
         }
-
         const textSpan = document.createElement('span');
         textSpan.className = 'nhm-tag-text';
         textSpan.textContent = displayTagName;
         primary.appendChild(textSpan);
-
-        if (dynWeightBadge) {
-          primary.innerHTML += dynWeightBadge;
-        }
+        if (dynWeightBadge) primary.innerHTML += dynWeightBadge;
 
         capsule.appendChild(primary);
         itemNode.appendChild(capsule);
 
-        // 翻译行
         if (!isNewline) {
           const zhRow = document.createElement('div');
           zhRow.className = 'nhm-tag-zh-row';
-          // AI 翻译 tag 在历史详情里优先显示原始输入，其余 tag 继续回退到字典翻译。
           const secondaryText = (typeof tag.aiZhTranslation === 'string' && tag.aiZhTranslation.trim())
             ? tag.aiZhTranslation.trim()
             : (typeof tag.aiOriginal === 'string' && tag.aiOriginal.trim())
@@ -1075,18 +1084,74 @@ const MODAL_ID = 'nai-history-modal';
           itemNode.appendChild(zhRow);
         }
 
-        container.appendChild(itemNode);
+        if (isDynFooter) inDynGroupRef.val = false;
+        return itemNode;
+      }
 
-        // 如果是换行标签，向其后追加一个不可见的换行分隔元素强制换行
-        if (isNewline) {
-          const separatorDiv = document.createElement('div');
-          separatorDiv.className = 'nhm-tag-newline-separator';
-          container.appendChild(separatorDiv);
-        }
+      // ── 有换行符：按分组块渲染 ───────────────────────────────
+      if (hasNewline) {
+        // 切分为 groups：[{ tags: [...], dividerName: '', groupColor: '' }]
+        const groups = [];
+        let cur = { tags: [], dividerName: '', groupColor: '' };
+        tags.forEach(t => {
+          if (t.value === '\n') {
+            cur.tags.push(t); // 换行符纳入当前组
+            cur.dividerName = t.dividerName || '';
+            cur.groupColor = t.groupColor || '';
+            groups.push(cur);
+            cur = { tags: [], dividerName: '', groupColor: '' };
+          } else {
+            cur.tags.push(t);
+          }
+        });
+        if (cur.tags.length > 0) groups.push(cur);
 
-        if (isDynFooter) inDynGroup = false;
-      });
+        const inDynGroupRef = { val: false };
+        groups.forEach((group, gi) => {
+          const allGroupTags = group.tags;
+          // 过滤掉纯换行符 tag（展示时不需要胶囊）
+          const displayTags = allGroupTags.filter(t => t.value !== '\n');
+
+          if (displayTags.length === 0 && !group.dividerName) return;
+
+          const box = document.createElement('div');
+          box.className = 'nhm-group-box';
+          const color = group.groupColor;
+          if (color) {
+            box.style.borderColor = color;
+            const r = parseInt(color.slice(1,3),16), g2 = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
+            box.style.background = `rgba(${r},${g2},${b},0.05)`;
+          }
+
+          // 渲染该组的 tags
+          displayTags.forEach((t, i) => {
+            const allIdx = tags.indexOf(t);
+            const node = renderOneTag(t, allIdx, tags, inDynGroupRef);
+            if (node) box.appendChild(node);
+          });
+
+          // 分组名称徽章
+          if (group.dividerName) {
+            const badge = document.createElement('span');
+            badge.className = 'nhm-group-badge';
+            badge.textContent = group.dividerName;
+            if (color) badge.style.borderLeftColor = color;
+            box.appendChild(badge);
+          }
+
+          container.appendChild(box);
+        });
+      } else {
+        // ── 无换行符：原有平铺渲染逻辑 ──────────────────────────
+        const inDynGroupRef = { val: false };
+        tags.forEach((tag, index) => {
+          const node = renderOneTag(tag, index, tags, inDynGroupRef);
+          if (node) container.appendChild(node);
+        });
+      }
     }
+
+
 
     // ───── 从 chrome.storage 读写 ────────────────────────────────
     // injector 运行在页面脚本上下文，不能直接访问 chrome.storage

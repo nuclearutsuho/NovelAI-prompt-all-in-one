@@ -777,7 +777,97 @@
     pointer-events: none;
 }
 
-/* Newline tag specific styles */
+/* ===== 分组框 Overlay（方案A：虚线边框 + 悬浮徽章，响应式） ===== */
+.tag-group-box-overlay {
+    position: absolute;
+    border: 1.5px dashed rgba(129, 140, 248, 0.35);
+    border-radius: 10px;
+    pointer-events: none; /* 鼠标穿透：Sortable.js 完全无感知 */
+    z-index: 2;
+    transition: border-color 0.25s ease, opacity 0.2s ease;
+}
+
+.tag-list:hover .tag-group-box-overlay {
+    border-color: rgba(129, 140, 248, 0.55);
+}
+
+/* 分组名称悬浮徽章：贴在方框右边框上，垂直居中 */
+.tag-group-box-badge {
+    position: absolute;
+    top: 95%;
+    right: -1px;
+    transform: translateY(-50%) translateX(50%);
+    background: #1e1e2e;
+    color: #e0e7ff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    padding: 0px 2px 1px 4px;
+    border-radius: 0;
+    border-top: 2px solid rgba(255, 255, 255, 0.1);
+    border-right: 2px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid #818cf8;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 3;
+}
+
+/* ===== 换行符工具栏内的分组命名输入框 ===== */
+.divider-name-input {
+    background: rgba(99, 102, 241, 0.08);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-size: 11px;
+    padding: 0 6px;
+    width: 90px;
+    outline: none;
+    transition: border-color 0.2s, width 0.2s;
+}
+.divider-name-input:focus {
+    border-color: rgba(129, 140, 248, 0.55);
+    background: rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.15);
+    width: 120px;
+}
+
+/* 分组颜色选择器：圆形色块，点击弹出系统拾色器 */
+.divider-color-input {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    cursor: pointer;
+    background: none;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+.divider-color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+    border-radius: 50%;
+}
+.divider-color-input::-webkit-color-swatch {
+    border-radius: 50%;
+    border: none;
+}
+.divider-color-input:hover {
+    border-color: rgba(255, 255, 255, 0.35);
+    transform: scale(1.1);
+}
+
+/* 拖拽时换行符的视觉反馈 */
+.tag-item.sortable-ghost.tag-newline {
+    opacity: 0.4;
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 8px;
+}
+
+/* 旧的换行符胶囊样式（用于尚未走 divider 分支的回退场景） */
 .tag-item.tag-newline .tag-capsule {
     background: rgba(255, 255, 255, 0.05) !important;
     border-style: dashed;
@@ -786,8 +876,6 @@
     justify-content: center;
 }
 
-
-/* 换行符标签的基础视觉样式 */
 .tag-item.tag-newline .tag-text {
     opacity: 0.6;
     font-size: 16px;
@@ -795,13 +883,13 @@
 }
 
 .tag-item.tag-newline .tag-zh-row {
-    visibility: hidden; /* 换行符无需翻译行 */
+    visibility: hidden;
 }
 
-/* 不可见换行占位符：flex-basis: 100% 使其撑满整行，从而强制后续标签另起一行 */
+/* 换行符占位：撑满整行 + 提供方框间距 */
 .tag-newline-separator { 
     flex-basis: 100%; 
-    height: 0; 
+    height: 18px; 
     margin: 0; 
     padding: 0; 
 }

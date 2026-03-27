@@ -198,13 +198,24 @@ function cloneDeep(value) {
 
 // 将 tag 统一序列化为可安全存储/传输的纯对象。
 function normalizeTagObject(tag = {}) {
-  const value = String(tag.value || '').trim();
+  // 关键保护：换行符不可被 trim() 消灭
+  const raw = String(tag.value || '');
+  const value = raw === '\n' ? '\n' : raw.trim();
   if (!value) return null;
 
   const normalized = {
     value,
     disabled: !!tag.disabled
   };
+
+  // 透传分组命名（仅存在于换行符对象上）
+  if (typeof tag.dividerName === 'string' && tag.dividerName) {
+    normalized.dividerName = tag.dividerName;
+  }
+  // 透传分组颜色（仅存在于换行符对象上）
+  if (typeof tag.groupColor === 'string' && tag.groupColor) {
+    normalized.groupColor = tag.groupColor;
+  }
 
   if (tag.isStart) normalized.isStart = true;
 
@@ -2547,6 +2558,10 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
   for (let i = 0; i < oldTags.length; i++) {
     const old = oldTags[i];
     if (old.disabled) {
+      merged.push(old);
+    } else if (old.value === '\n') {
+      // 换行符是纯插件内部的可视化分组标记，NAI 网页侧永远不会传回来。
+      // 像 disabled 标签一样无条件保留，确保用户的分组结构不被同步覆盖。
       merged.push(old);
     } else {
       let foundIdx = -1;

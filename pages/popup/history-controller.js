@@ -46,46 +46,28 @@ export default function createHistoryController(deps = {}) {
   }
 
   function computeStateFingerprint(posTags, negTags, characters) {
+    const tagFingerprint = (tag) => [
+      tag.value,
+      !!tag.disabled,
+      !!tag.isStart,
+      tag.dynWeight || 1,
+      tag.aiOriginal || '',
+      tag.aiZhTranslation || '',
+      tag.dividerName || '',   // 分组名称纳入指纹
+      tag.groupColor || ''     // 分组颜色纳入指纹
+    ];
     const posFingerprint = JSON.stringify(
-      serializeTagList(posTags || []).map((tag) => [
-        tag.value,
-        !!tag.disabled,
-        !!tag.isStart,
-        tag.dynWeight || 1,
-        tag.aiOriginal || '',
-        tag.aiZhTranslation || ''
-      ])
+      serializeTagList(posTags || []).map(tagFingerprint)
     );
     const negFingerprint = JSON.stringify(
-      serializeTagList(negTags || []).map((tag) => [
-        tag.value,
-        !!tag.disabled,
-        !!tag.isStart,
-        tag.dynWeight || 1,
-        tag.aiOriginal || '',
-        tag.aiZhTranslation || ''
-      ])
+      serializeTagList(negTags || []).map(tagFingerprint)
     );
     const charactersFingerprint = JSON.stringify(
       getMeaningfulCharacterHistoryData(characters).map((character) => ({
         p: character.posPrompt || '',
         n: character.negPrompt || '',
-        pd: serializeTagList(character.posTags || []).map((tag) => [
-          tag.value,
-          !!tag.disabled,
-          !!tag.isStart,
-          tag.dynWeight || 1,
-          tag.aiOriginal || '',
-          tag.aiZhTranslation || ''
-        ]),
-        nd: serializeTagList(character.negTags || []).map((tag) => [
-          tag.value,
-          !!tag.disabled,
-          !!tag.isStart,
-          tag.dynWeight || 1,
-          tag.aiOriginal || '',
-          tag.aiZhTranslation || ''
-        ])
+        pd: serializeTagList(character.posTags || []).map(tagFingerprint),
+        nd: serializeTagList(character.negTags || []).map(tagFingerprint)
       }))
     );
     return posFingerprint + negFingerprint + charactersFingerprint;
