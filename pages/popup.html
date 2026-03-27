@@ -1805,7 +1805,7 @@
     <div id="input-area">
       <div class="quick-input-wrapper">
         <input id="quick-input" type="text" placeholder="Enter tags here..." data-i18n-placeholder="input_placeholder">
-        <button id="btn-add" class="primary-add-btn" title="Add" data-i18n-title="btn_add">
+        <button id="btn-add" class="primary-add-btn" title="Add" data-i18n-title="btn_add_group">
            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"></polyline><path d="M20 4v7a4 4 0 0 1-4 4H4"></path></svg>
         </button>
       </div>
@@ -1817,7 +1817,7 @@
           <div class="split-dropdown-item" data-action="wildcard" data-i18n="btn_quick_wildcard">随机抽取</div>
           <div class="split-dropdown-item" data-action="seq-wildcard" data-i18n="btn_quick_seq_wildcard">顺序抽取</div>
           <div class="split-dropdown-item" data-action="random" data-i18n="btn_quick_random">动态抽取</div>
-          <div class="split-dropdown-item" data-action="newline" data-i18n="btn_insert_newline">插入换行</div>
+          
         </div>
       </div>
     </div>
@@ -1908,10 +1908,17 @@
         <div class="setting-desc" data-i18n="setting_alt_autocomplete_desc">a1111 WebUI style Danbooru Autocomplete.
         </div>
       </div>
+      <!-- Interface Display -->
       <div class="setting-group">
-        <label><input type="checkbox" class="toggle-switch" id="hideAutoClicker"> <span data-i18n="setting_hide_autoclicker">Hide Count Bar</span></label>
+        <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_group_ui">Interface Display</strong>
+        
+        <label><input type="checkbox" class="toggle-switch" id="enableGrouping" checked> <span data-i18n="setting_enable_grouping">Enable Tag Grouping</span></label>
+        <div class="setting-desc" data-i18n="setting_enable_grouping_desc">Draw dashed boxes around tag groups ending with a newline.</div>
+
+        <label style="margin-top: 10px; display: block;"><input type="checkbox" class="toggle-switch" id="hideAutoClicker"> <span data-i18n="setting_hide_autoclicker">Hide Count Bar</span></label>
         <div class="setting-desc" data-i18n="setting_hide_autoclicker_desc">Hide the auto-clicker toolbar at the bottom of the page.</div>
-        <label><input type="checkbox" class="toggle-switch" id="settingSyncPulse" checked> <span data-i18n="setting_sync_pulse">Breathing Light</span></label>
+        
+        <label style="margin-top: 10px; display: block;"><input type="checkbox" class="toggle-switch" id="settingSyncPulse" checked> <span data-i18n="setting_sync_pulse">Breathing Light</span></label>
       </div>
       <div class="setting-group">
         <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>

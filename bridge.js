@@ -1256,7 +1256,7 @@
     // ── 历史数据代理（injector 在页面上下文无法访问 chrome.storage，通过此处中转） ──
     if (e.data?.type === '__REQUEST_HISTORY_DATA__') {
       const reqId = e.data.reqId;
-      chrome.storage.local.get(['promptHistory', 'historyLimit', 'groupColorMap', 'groupTranslationMap'], (data) => {
+      chrome.storage.local.get(['promptHistory', 'historyLimit', 'groupColorMap', 'groupTranslationMap', 'enableGrouping'], (data) => {
         window.postMessage({
           type: '__HISTORY_DATA__',
           reqId,
@@ -1264,7 +1264,8 @@
             history: data.promptHistory || [],
             limit: data.historyLimit || 100,
             groupColorMap: data.groupColorMap || {},
-            groupTranslationMap: data.groupTranslationMap || {}
+            groupTranslationMap: data.groupTranslationMap || {},
+            enableGrouping: data.enableGrouping !== undefined ? data.enableGrouping : true
           }
         }, '*');
       });

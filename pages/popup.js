@@ -1565,12 +1565,6 @@ function initUI() {
         inputEl.value += '__';
       } else if (action === 'seq-wildcard') {
         inputEl.value += 's__';
-      } else if (action === 'newline') {
-        const _editor = getEditorFn ? getEditorFn() : null;
-        if (_editor) {
-          _editor.addTag('\n');
-          return;
-        }
       } else if (action === 'random') {
         const _editor = getEditorFn ? getEditorFn() : null;
         if (_editor) {
@@ -1698,7 +1692,12 @@ function initUI() {
     if (autocomplete) autocomplete.hide();
   };
 
-  btnAdd.addEventListener('click', addTag);
+  btnAdd.addEventListener('click', () => {
+    if (editor) editor.addTag('\n');
+    if (autocomplete) autocomplete.hide();
+    const container = document.getElementById('tag-editor-container');
+    if (container) container.scrollTop = container.scrollHeight;
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -1868,7 +1867,8 @@ function initUI() {
     'tagEditorDensity',
     'triggerSpace',
     'triggerTab',
-    'autoOpenSync'
+    'autoOpenSync',
+    'enableGrouping'
   ];
 
   // Load Settings
@@ -1882,7 +1882,8 @@ function initUI() {
           if (key === 'alternativeDanbooruAutocomplete' || 
               key === 'settingSyncPulse' || 
               key === 'autoOpenSync' || 
-              key === 'triggerTab') {
+              key === 'triggerTab' ||
+              key === 'enableGrouping') {
             val = true;
           } else {
             val = false;
@@ -1914,7 +1915,19 @@ function initUI() {
         el.addEventListener('change', () => {
           chrome.storage.local.set({ [key]: el.checked });
           if (key === 'settingSyncPulse') {
-              document.body.classList.toggle('disable-pulse', !el.checked);
+            document.body.classList.toggle('disable-pulse', !el.checked);
+          }
+          if (key === 'enableGrouping') {
+            if (editor) {
+              editor.options.enableGrouping = el.checked;
+              editor.render();
+            }
+            charEditors.forEach(charEdObj => {
+              if (charEdObj.editor) {
+                charEdObj.editor.options.enableGrouping = el.checked;
+                charEdObj.editor.render();
+              }
+            });
           }
         });
       }

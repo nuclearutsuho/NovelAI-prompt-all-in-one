@@ -1088,67 +1088,61 @@ const MODAL_ID = 'nai-history-modal';
         return itemNode;
       }
 
-      // ── 有换行符：按分组块渲染 ───────────────────────────────
-      if (hasNewline) {
-        // 切分为 groups：[{ tags: [...], dividerName: '', groupColor: '' }]
-        const groups = [];
-        let cur = { tags: [], dividerName: '', groupColor: '' };
-        tags.forEach(t => {
-          if (t.value === '\n') {
-            cur.tags.push(t); // 换行符纳入当前组
-            cur.dividerName = t.dividerName || '';
-            cur.groupColor = t.groupColor || '';
-            groups.push(cur);
-            cur = { tags: [], dividerName: '', groupColor: '' };
-          } else {
-            cur.tags.push(t);
-          }
-        });
-        if (cur.tags.length > 0) groups.push(cur);
+      // ── 统一的分段逻辑 ─────────────────────────────────────
+      const segments = [];
+      let currentSeg = { tags: [], dividerName: '', groupColor: '', isGroup: false };
 
-        const inDynGroupRef = { val: false };
-        groups.forEach((group, gi) => {
-          const allGroupTags = group.tags;
-          // 过滤掉纯换行符 tag（展示时不需要胶囊）
-          const displayTags = allGroupTags.filter(t => t.value !== '\n');
+      tags.forEach(t => {
+        currentSeg.tags.push(t);
+        if (t.value === '\n') {
+          currentSeg.dividerName = t.dividerName || '';
+          currentSeg.groupColor = t.groupColor || '';
+          currentSeg.isGroup = true;
+          segments.push(currentSeg);
+          currentSeg = { tags: [], dividerName: '', groupColor: '', isGroup: false };
+        }
+      });
+      // 末尾散拍段
+      if (currentSeg.tags.length > 0) {
+        segments.push(currentSeg);
+      }
 
-          if (displayTags.length === 0 && !group.dividerName) return;
-
+      const inDynGroupRef = { val: false };
+      segments.forEach(seg => {
+        if (seg.isGroup && globalEnableGrouping) {
+          // 渲染为分组框
+          const displayTags = seg.tags.filter(t => t.value !== '\n');
+          // 只要是闭合的分组，即使没有标签（空分组），也渲染方框（此时 box 只有 padding 高度）
           const box = document.createElement('div');
           box.className = 'nhm-group-box';
-          const color = group.groupColor;
+          const color = seg.groupColor;
           if (color) {
             box.style.borderColor = color;
-            const r = parseInt(color.slice(1,3),16), g2 = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
-            box.style.background = `rgba(${r},${g2},${b},0.05)`;
+            const r = parseInt(color.slice(1,3),16), g = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
+            box.style.background = `rgba(${r},${g},${b},0.05)`;
           }
 
-          // 渲染该组的 tags
-          displayTags.forEach((t, i) => {
-            const allIdx = tags.indexOf(t);
-            const node = renderOneTag(t, allIdx, tags, inDynGroupRef);
+          displayTags.forEach(t => {
+            const node = renderOneTag(t, tags.indexOf(t), tags, inDynGroupRef);
             if (node) box.appendChild(node);
           });
 
-          // 分组名称徽章
-          if (group.dividerName) {
+          if (seg.dividerName) {
             const badge = document.createElement('span');
             badge.className = 'nhm-group-badge';
-            badge.textContent = group.dividerName;
+            badge.textContent = seg.dividerName;
             if (color) badge.style.borderLeftColor = color;
             box.appendChild(badge);
           }
-
           container.appendChild(box);
-        });
-      } else {
-        // ── 无换行符：原有平铺渲染逻辑 ──────────────────────────
-        const inDynGroupRef = { val: false };
-        tags.forEach((tag, index) => {
-          const node = renderOneTag(tag, index, tags, inDynGroupRef);
-          if (node) container.appendChild(node);
-        });
-      }
+        } else {
+          // 渲染为散拍标签
+          seg.tags.forEach(t => {
+            const node = renderOneTag(t, tags.indexOf(t), tags, inDynGroupRef);
+            if (node) container.appendChild(node);
+          });
+        }
+      });
     }
 
 
@@ -1163,6 +1157,9 @@ const MODAL_ID = 'nai-history-modal';
       if (e.source !== window) return;
       if (e.data?.type === '__HISTORY_DATA__') {
         const { reqId, data } = e.data;
+        if (data.enableGrouping !== undefined) {
+          globalEnableGrouping = data.enableGrouping;
+        }
         if (pendingStorageReads[reqId]) {
           pendingStorageReads[reqId](data);
           delete pendingStorageReads[reqId];
@@ -1193,6 +1190,7 @@ const MODAL_ID = 'nai-history-modal';
     let historyLimit = 100;
     let currentGroupColorMap = {};
     let currentGroupTranslationMap = {};
+    let globalEnableGrouping = true;
     let currentDictionaryTagMap = null;
     let currentDictionaryLoadPromise = null;
 
