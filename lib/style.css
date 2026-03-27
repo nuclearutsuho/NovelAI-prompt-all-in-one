@@ -63,7 +63,12 @@
     position: relative;
     min-height: var(--te-density-min-height);
     box-sizing: border-box;
-    transition: all 0.2s;
+    transition: 
+        border-color 0.2s, 
+        background-color 0.3s, 
+        transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+        width 0.2s ease-out,
+        padding 0.2s ease-out;
 }
 
 .tag-item:hover {
@@ -259,6 +264,13 @@
         opacity 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.1),
         transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.1);
     white-space: nowrap;
+    display: flex; /* Ensure flex for order to work */
+    align-items: center;
+}
+
+.tag-controls svg {
+    pointer-events: none;
+    vertical-align: middle;
 }
 
 /* Left side variant when hitting boundary */
@@ -266,6 +278,15 @@
     left: auto;
     right: calc(100% - 4px);
     transform: translateY(-50%) translateX(-6px) scale(0.92);
+}
+
+.tbtn-del {
+    order: -1; /* Default: Move to front (closest to tag on right) */
+}
+
+.tag-controls.pos-left .tbtn-del,
+.tag-controls.pos-top .tbtn-del {
+    order: 999; /* Flipped/Top: Move to end (closest to mouse on left/top) */
 }
 
 /* Top variant when both sides overflow */
@@ -887,7 +908,72 @@
     border-style: solid !important; /* 实线边框渲染远快于虚线 */
 }
 
-/* ===== 换行符工具栏内的分组命名输入框 ===== */
+/* ===== Weight Control Stepper (现代化步进器) ===== */
+.weight-control {
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 2px;
+    gap: 2px;
+    height: calc(var(--te-density-btn-size) + 4px);
+    box-sizing: border-box;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.weight-control:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.weight-input, .dyn-weight-input {
+    width: 32px;
+    background: transparent !important;
+    border: none !important;
+    color: #e2e8f0;
+    text-align: center;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 800;
+    outline: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+    appearance: none;
+    transition: color 0.3s;
+}
+
+/* 隐藏步进器自带的 Chrome/Safari 数值箭头 */
+.weight-input::-webkit-outer-spin-button,
+.weight-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* 动态颜色反馈 */
+.weight-input.pos, .dyn-weight-input.pos { 
+    color: #4ade80 !important; 
+    text-shadow: 0 0 8px rgba(74, 222, 128, 0.4); 
+}
+.weight-input.neg, .dyn-weight-input.neg { 
+    color: #fb7185 !important; 
+    text-shadow: 0 0 8px rgba(251, 113, 133, 0.4); 
+}
+
+/* 步进器内的圆形按钮微调 */
+.weight-control .tbtn {
+    width: var(--te-density-btn-size) !important;
+    height: var(--te-density-btn-size) !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: none !important;
+}
+
+.weight-control .tbtn:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    transform: scale(1.05);
+}
 .divider-name-input {
     background: rgba(99, 102, 241, 0.08);
     color: #a5b4fc;
