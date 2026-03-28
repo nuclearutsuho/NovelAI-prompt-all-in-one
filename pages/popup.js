@@ -1,4 +1,5 @@
-import TagEditor from '../lib/TagEditor.js';
+import TagEditor, { BUTTON_DEFS } from '../lib/TagEditor.js';
+import Sortable from '../lib/Sortable.js';
 import common from '../lib/common.js';
 import Autocomplete from '../lib/Autocomplete.js';
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
@@ -189,6 +190,166 @@ const SyncStatusManager = {
       void badge.offsetWidth; // 触发 reflow 重新播放动画
       badge.classList.add('pinging');
     }
+  }
+};
+
+/**
+ * Toolbar Configuration Manager
+ * Handles UI button reordering, visibility, and sticky state.
+ */
+const ToolbarConfigManager = {
+  currentScene: 'standard',
+
+  // Mock data for different simulation scenes
+  SIMULATED_CONTEXTS: {
+    standard: {
+      tag: { text: 'tag' },
+      ctx: { isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, canAnnotate: true, canSplit: true, hasWeight: true, weightVal: 1.0, titles: {} }
+    },
+    ai: {
+      tag: { text: 'tag', aiOriginal: '某个中文原文' },
+      ctx: { isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, canAnnotate: false, canSplit: false, hasWeight: true, weightVal: 1.0, titles: {} }
+    }
+  },
+
+  async init() {
+    this.listEl = document.getElementById('toolbar-sortable-list');
+    if (!this.listEl) return;
+
+    // Bind Scene Switcher Events
+    const switcher = document.getElementById('toolbar-scene-switcher');
+    if (switcher) {
+      switcher.querySelectorAll('.scene-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          switcher.querySelectorAll('.scene-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          this.currentScene = btn.dataset.scene;
+          this.renderList();
+        });
+      });
+    }
+
+    const data = await chrome.storage.local.get(['toolbarConfig']);
+    const defaultConfig = {
+      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'split', 'retranslate', 'toggle', 'link', 'newline', 'del'],
+      stickyIds: ['del'],
+      hiddenIds: [],
+      sceneHiddenIds: { standard: [], ai: [] }
+    };
+    this.config = { ...defaultConfig, ...(data.toolbarConfig || {}) };
+    this.config.order = this.config.order || defaultConfig.order;
+    this.config.stickyIds = this.config.stickyIds || defaultConfig.stickyIds;
+    this.config.sceneHiddenIds = this.config.sceneHiddenIds || defaultConfig.sceneHiddenIds;
+
+    this.renderList();
+    this.initSortable();
+    this.updateEditors();
+  },
+
+  renderList() {
+    if (!this.listEl) return;
+    this.listEl.innerHTML = '';
+    const dict = getPopupDict();
+    
+    // Get mock context for current scene
+    const sceneData = this.SIMULATED_CONTEXTS[this.currentScene] || this.SIMULATED_CONTEXTS.standard;
+
+    this.config.order.forEach(id => {
+      const def = BUTTON_DEFS[id];
+      if (!def) return;
+
+      // 根据当前场景读取显隐状态
+      const currentHiddenList = this.config.sceneHiddenIds[this.currentScene] || [];
+      const isHidden = currentHiddenList.includes(id);
+      const isSticky = (this.config.stickyIds || []).includes(id);
+      const isWeight = id === 'weight'; // 识别权重按键
+      
+      // Determine if it should be dimmed in this scene
+      const isActiveInScene = def.showFor ? def.showFor(sceneData.tag, sceneData.ctx) : true;
+      
+      let titleBase = def.title || (def.titleKey ? (dict[def.titleKey] || id) : id);
+      let fullTitle = titleBase;
+      if (isHidden || !isActiveInScene) {
+        const hiddenPart = isHidden ? ` [${dict[def.status_hidden] || dict.status_hidden || 'Hidden'}]` : '';
+        const inactivePart = !isActiveInScene ? ` (${dict[def.scene_not_applicable] || dict.scene_not_applicable || 'Not applicable'})` : '';
+        fullTitle = `${titleBase}${hiddenPart}${inactivePart}`;
+      }
+
+      const li = document.createElement('li');
+      li.className = `toolbar-sort-item ${def.className || ''} ${isHidden ? 'hidden-btn' : ''} ${isSticky ? 'is-sticky' : ''} ${isActiveInScene ? '' : 'dimmed-btn'} ${isWeight ? 'is-complex-weight' : ''}`;
+      li.dataset.id = id;
+
+      li.innerHTML = `
+        ${def.svg}
+        ${isHidden ? '<div class="hidden-indicator">✕</div>' : ''}
+        <div class="sticky-star">★<div class="star-label">${dict.btn_pin_to_edge || 'Prioritize position (Next to mouse)'}</div></div>
+        <div class="btn-label">${fullTitle}</div>
+      `;
+
+      // Main click toggles hidden
+      li.addEventListener('click', (e) => {
+        if (e.target.closest('.sticky-star')) return;
+        
+        if (!isActiveInScene) {
+          return;
+        }
+
+        if (isHidden) {
+          this.config.sceneHiddenIds[this.currentScene] = this.config.sceneHiddenIds[this.currentScene].filter(hid => hid !== id);
+        } else {
+          this.config.sceneHiddenIds[this.currentScene].push(id);
+        }
+        this.save();
+        this.renderList();
+      });
+
+      // Star click toggles sticky
+      const star = li.querySelector('.sticky-star');
+      star.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isSticky) {
+          this.config.stickyIds = this.config.stickyIds.filter(sid => sid !== id);
+        } else {
+          this.config.stickyIds.push(id);
+        }
+        this.save();
+        this.renderList();
+      });
+
+      this.listEl.appendChild(li);
+    });
+  },
+
+  initSortable() {
+    this.sortable = new Sortable(this.listEl, {
+      animation: 150,
+      ghostClass: 'ghost',
+      direction: 'horizontal',
+      onEnd: () => {
+        const newOrder = Array.from(this.listEl.querySelectorAll('.toolbar-sort-item')).map(el => el.dataset.id);
+        this.config.order = newOrder;
+        this.save();
+      }
+    });
+  },
+
+  save() {
+    chrome.storage.local.set({ toolbarConfig: this.config });
+    this.updateEditors();
+  },
+
+  updateEditors() {
+    // Inject the new config into the global editor and character editors
+    if (editor) {
+      editor.options.toolbarConfig = this.config;
+      editor.render();
+    }
+    charEditors.forEach(ce => {
+      if (ce.editor) {
+        ce.editor.options.toolbarConfig = this.config;
+        ce.editor.render();
+      }
+    });
   }
 };
 
@@ -616,7 +777,7 @@ function removeTagFromGroupTarget(target, tag) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  initUI();
+  await initUI();
   await initData();
   initCommunication();
 });
@@ -840,7 +1001,8 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
 
   // Set up Editor
   const charEditor = new TagEditor(editorContainer, {
-    dict: dict, // Pass localization dict down to TagEditor
+    dict: dict,
+    toolbarConfig: ToolbarConfigManager.config,
     onRemoveTags: handleRemovedPendingAiTags,
     onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
@@ -1070,7 +1232,8 @@ function rebuildCharacterPromptsUI() {
   updateCharAddButton();
 }
 
-function initUI() {
+async function initUI() {
+  await ToolbarConfigManager.init();
   // Autocomplete
   autocomplete = new Autocomplete();
   autocomplete.load();
@@ -1373,8 +1536,10 @@ function initUI() {
   // Editor
   const container = document.getElementById('editor-container');
   const dict = getPopupDict();
+  const toolbarConfig = ToolbarConfigManager.config;
   editor = new TagEditor(container, {
     dict: dict,
+    toolbarConfig: toolbarConfig,
     onRemoveTags: handleRemovedPendingAiTags,
     onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
@@ -1723,6 +1888,24 @@ function initUI() {
     currentLang = lang;
     const dict = getI18nDict(lang, 'popup');
     const fallbackDict = getI18nDict(DEFAULT_LANG, 'popup');
+
+    // Update global editor and character editors
+    if (editor) {
+      editor.options.dict = dict;
+      editor.render();
+    }
+    charEditors.forEach(ce => {
+      if (ce.editor) {
+        ce.editor.options.dict = dict;
+        ce.editor.render();
+      }
+    });
+
+    // Update Toolbar Settings UI
+    if (ToolbarConfigManager && typeof ToolbarConfigManager.renderList === 'function') {
+      ToolbarConfigManager.renderList();
+    }
+
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const baseKey = el.getAttribute('data-i18n');
       const shortKey = `${baseKey}_short`;
@@ -1948,22 +2131,6 @@ function initUI() {
     modal.style.display = 'none';
   };
 
-  btnSettings.addEventListener('click', () => {
-    if (modal.style.display === 'flex') {
-      closeSettingsModal();
-    } else {
-      modal.style.display = 'flex';
-      updateStorageMonitor();
-    }
-  });
-  
-  closeSettings.addEventListener('click', closeSettingsModal);
-  modal.addEventListener('click', (event) => {
-    if (event.target === modal) {
-      closeSettingsModal();
-    }
-  });
-
   // Update Chrome Storage Monitor
   function updateStorageMonitor() {
     const barFill = document.getElementById('storage-bar-fill');
@@ -1999,6 +2166,57 @@ function initUI() {
       }
     });
   }
+
+  // Settings Tabs Logic (Navigation and State Memory)
+  const initSettingsTabs = () => {
+    const tabs = document.querySelectorAll('.settings-nav-btn');
+    const panes = document.querySelectorAll('.settings-pane');
+    if (!tabs.length) return;
+
+    // Load last active tab
+    chrome.storage.local.get(['lastActiveSettingsTab'], (res) => {
+      const activeTabId = res.lastActiveSettingsTab || 'pane-general';
+      
+      const applyTab = (targetId) => {
+        tabs.forEach(t => t.classList.remove('active'));
+        panes.forEach(p => p.classList.remove('active'));
+        const targetBtn = document.querySelector(`.settings-nav-btn[data-target="${targetId}"]`);
+        const targetPane = document.getElementById(targetId);
+        if (targetBtn) targetBtn.classList.add('active');
+        if (targetPane) targetPane.classList.add('active');
+      };
+
+      // Set initial state
+      applyTab(activeTabId);
+
+      // Bind click events
+      tabs.forEach(btn => {
+        btn.onclick = (e) => {
+          const targetId = btn.getAttribute('data-target');
+          if (!targetId) return;
+          applyTab(targetId);
+          chrome.storage.local.set({ lastActiveSettingsTab: targetId });
+        };
+      });
+    });
+  };
+
+  btnSettings.addEventListener('click', () => {
+    if (modal.style.display === 'flex') {
+      closeSettingsModal();
+    } else {
+      modal.style.display = 'flex';
+      updateStorageMonitor();
+      initSettingsTabs();
+    }
+  });
+
+  closeSettings.addEventListener('click', closeSettingsModal);
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeSettingsModal();
+    }
+  });
 
   // History & Favorites Modal trigger
   const btnHistory = document.getElementById('btn-history');

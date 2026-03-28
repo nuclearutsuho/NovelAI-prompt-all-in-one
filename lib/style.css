@@ -280,14 +280,7 @@
     transform: translateY(-50%) translateX(-6px) scale(0.92);
 }
 
-.tbtn-del {
-    order: -1; /* Default: Move to front (closest to tag on right) */
-}
-
-.tag-controls.pos-left .tbtn-del,
-.tag-controls.pos-top .tbtn-del {
-    order: 999; /* Flipped/Top: Move to end (closest to mouse on left/top) */
-}
+/* Dynamic ordering now handled by JS */
 
 /* Top variant when both sides overflow */
 .tag-controls.pos-top {
@@ -379,7 +372,7 @@
 }
 
 /* Simplification for multi-selection: hide non-batch buttons */
-.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls > *:not(.tbtn-del):not(.tbtn-copy):not(.tbtn-toggle):not(.tbtn-ai-annotate-batch) {
+.tag-editor-container.has-multi-selection .tag-item.selected .tag-controls > *:not(.tbtn-del):not(.tbtn-copy):not(.tbtn-toggle):not(.tbtn-ai-annotate-batch):not(.tbtn-ai-annotate) {
     display: none !important;
 }
 
@@ -546,6 +539,64 @@
     background: rgba(248, 113, 113, 0.2) !important;
     color: #fff;
     filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.4));
+}
+
+.tbtn-newline {
+    color: #60a5fa;
+}
+
+.tbtn-newline:hover {
+    background: rgba(96, 165, 250, 0.2) !important;
+    color: #fff;
+    filter: drop-shadow(0 0 4px rgba(96, 165, 250, 0.4));
+}
+
+.tbtn-link:hover {
+    color: #a5b4fc;
+    background: rgba(165, 180, 252, 0.15) !important;
+    border-color: rgba(165, 180, 252, 0.45) !important;
+    filter: drop-shadow(0 0 4px rgba(165, 180, 252, 0.3));
+}
+
+/* External Link Context Menu (Shared by Autocomplete & TagEditor) */
+#autocomplete-link-menu {
+    position: fixed;
+    background: #1e1e2e;
+    border: 1px solid #4a4a6a;
+    border-radius: 8px;
+    padding: 5px;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(12px);
+    animation: menu-pop 0.15s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+}
+
+@keyframes menu-pop {
+    from { opacity: 0; transform: scale(0.95) translateY(5px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.link-option {
+    padding: 8px 14px;
+    cursor: pointer;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 5px;
+    transition: all 0.2s ease;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.link-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
 }
 
 /* Weight Control Group */

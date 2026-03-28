@@ -74,6 +74,48 @@
       border-color: #818cf8;
     }
 
+    /* Toolbar Configuration UI ( Scheme 2: Live Preview ) */
+    .toolbar-settings-group { margin-top: 15px; padding-top: 15px; border-top: 1px solid #4a4a6a; }
+    .toolbar-preview-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; background: #181825; border-radius: 8px; border: 1px solid #4a4a6a; justify-content: center; margin: 10px 0; list-style: none; }
+    .toolbar-sort-item { position: relative; width: 38px; height: 38px; background: #2a2a3e; border: 1px solid #4a4a6a; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: grab; transition: all 0.2s; color: #9399b2; flex-shrink: 0; box-sizing: border-box; }
+    .toolbar-sort-item.is-complex-weight { width: calc(38px * 2 + 8px); }
+    .toolbar-sort-item:hover { border-color: #818cf8; background: #313244; z-index: 10; }
+    
+    /* Persistent Button Colors */
+    .toolbar-sort-item.tbtn-fav { color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.4); }
+    .toolbar-sort-item.tbtn-copy { color: #7dd3fc; }
+    .toolbar-sort-item.tbtn-del { color: #f87171; }
+    .toolbar-sort-item.tbtn-weight, .toolbar-sort-item.tbtn-dyn-weight { color: #818cf8; }
+    .toolbar-sort-item.tbtn-split, .toolbar-sort-item.tbtn-merge { color: #a5b4fc; }
+    .toolbar-sort-item.tbtn-ai-annotate, .toolbar-sort-item.tbtn-ai-annotate-batch { color: #c084fc; }
+    .toolbar-sort-item.tbtn-retranslate, .toolbar-sort-item.tbtn-retry { color: #4ade80; }
+    .toolbar-sort-item.tbtn-toggle { color: #94a3b8; }
+    .toolbar-sort-item.tbtn-link { color: #60a5fa; }
+    .toolbar-sort-item.tbtn-newline { color: #818cf8; }
+    
+    .toolbar-sort-item.hidden-btn { opacity: 0.6; filter: none; background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.4); color: #ef4444 !important; }
+    .toolbar-sort-item.hidden-btn:hover { opacity: 1; background: rgba(239, 68, 68, 0.2); }
+    .hidden-indicator { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: #ef4444; font-size: 20px; font-weight: bold; pointer-events: none; z-index: 5; opacity: 0.8; text-shadow: 0 0 4px rgba(0,0,0,0.5); }
+    .toolbar-sort-item.ghost { opacity: 0.2; background: #818cf8; }
+    .toolbar-sort-item .sticky-star { position: absolute; top: -4px; right: -4px; width: 14px; height: 14px; background: #181825; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 10px; color: #6c7086; border: 1px solid #4a4a6a; transition: all 0.2s; z-index: 2; }
+    .toolbar-sort-item.is-sticky .sticky-star { color: #f9e2af; border-color: #f9e2af; }
+    
+    /* Scene Switcher Styles */
+    .scene-switcher { display: flex; gap: 6px; margin: 10px 0 5px 0; justify-content: center; }
+    .scene-btn { padding: 4px 10px; background: #2a2a3e; border: 1px solid #4a4a6a; border-radius: 20px; font-size: 11px; color: #9399b2; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px; }
+    .scene-btn:hover { border-color: #818cf8; color: #cdd6f4; }
+    .scene-btn.active { background: #818cf8; color: #11111b; border-color: #818cf8; font-weight: bold; }
+    .toolbar-sort-item.dimmed-btn { opacity: 0.45; filter: grayscale(0.6); cursor: not-allowed; }
+    .toolbar-sort-item.dimmed-btn:hover { opacity: 1; filter: grayscale(0.2); }
+    
+    .toolbar-sort-item .btn-label, .toolbar-sort-item .star-label { position: absolute; top: 42px; left: 50%; transform: translateX(-50%); font-size: 10px; white-space: nowrap; color: #bac2de; background: #11111b; border: 1px solid #4a4a6a; padding: 2px 6px; border-radius: 4px; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 11; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    /* 仅当鼠标悬浮在主体上时显示主标签，排除了星星上的干扰 */
+    .toolbar-sort-item:hover > .btn-label { opacity: 1; }
+    /* 当鼠标精准悬浮在星星上时，隐藏掉同级的主按键标签，防止重叠 */
+    .toolbar-sort-item:hover .sticky-star:hover ~ .btn-label { opacity: 0; }
+    /* 仅当鼠标精准悬浮在星星上时显示星星标签 */
+    .sticky-star:hover .star-label { opacity: 1; }
+
     .res-custom-inputs {
       display: flex;
       align-items: center;
@@ -609,6 +651,51 @@
     #btn-add:active, .primary-add-btn:active {
       transform: translateY(-50%) scale(0.92);
     }
+
+    /* ── Settings Tabs ── */
+    .settings-nav-ears {
+      display: flex;
+      margin-bottom: 20px;
+      background: #181825;
+      border-radius: 8px;
+      padding: 4px;
+      gap: 4px;
+      border: 1px solid #3a3a55;
+    }
+    .settings-nav-btn {
+      flex: 1;
+      background: transparent;
+      color: #94a3b8;
+      border: none;
+      padding: 8px 4px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .settings-nav-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #fff;
+    }
+    .settings-nav-btn.active {
+      background: #2a2a3e;
+      color: #818cf8;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .settings-pane {
+      display: none;
+      animation: tab-fade-in 0.2s ease-out;
+    }
+    .settings-pane.active {
+      display: block;
+    }
+    @keyframes tab-fade-in {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     /* Settings Modal */
     #settings-modal {
       position: absolute;
@@ -1323,7 +1410,8 @@
       line-height: 1.4;
     }
 
-    .ai-translate-settings .setting-desc {
+    .ai-translate-settings .setting-desc,
+    .toolbar-settings-group .setting-desc {
       margin-left: 0;
     }
 
@@ -1876,10 +1964,20 @@
 
   <div id="settings-modal">
     <div class="modal-content">
-      <h3 data-i18n="settings_title" style="margin-bottom: 20px;">Settings <button id="close-settings"
+      <h3 data-i18n="settings_title" style="margin-bottom: 15px;">Settings <button id="close-settings"
           style="float:right; background:transparent; border:none; color:#ccc; cursor:pointer;">×</button></h3>
 
-      <!-- Language Setting -->
+      <!-- Tab Navigation -->
+      <div class="settings-nav-ears" id="settings-tabs">
+        <button class="settings-nav-btn active" data-target="pane-general" data-i18n="setting_tab_general">General</button>
+        <button class="settings-nav-btn" data-target="pane-ui" data-i18n="setting_tab_ui">Interface</button>
+        <button class="settings-nav-btn" data-target="pane-ai" data-i18n="setting_tab_ai">AI Settings</button>
+        <button class="settings-nav-btn" data-target="pane-hotkeys" data-i18n="setting_tab_hotkeys">Hotkeys</button>
+      </div>
+
+      <!-- Pane: General -->
+      <div class="settings-pane active" id="pane-general">
+        <!-- Language Setting -->
       <div class="setting-group" style="align-items: center; justify-content: space-between; display: flex; border-bottom: 1px solid #3a3a55; padding-bottom: 20px; margin-bottom: 20px;">
         <div>
           <strong style="display:block; color:#e2e8f0; font-size:14px; margin-bottom: 4px;">Language / 语言</strong>
@@ -1908,7 +2006,25 @@
         <div class="setting-desc" data-i18n="setting_alt_autocomplete_desc">a1111 WebUI style Danbooru Autocomplete.
         </div>
       </div>
-      <!-- Interface Display -->
+
+      <div class="setting-group">
+        <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>
+        <label><input type="checkbox" class="toggle-switch" id="triggerSpace"> <span data-i18n="setting_space">Space</span></label>
+        <label><input type="checkbox" class="toggle-switch" id="triggerTab" checked> <span data-i18n="setting_tab">Tab</span></label>
+      </div>
+
+        <div class="setting-group storage-monitor-group">
+          <strong data-i18n="setting_storage_usage">Storage Usage</strong>
+          <div class="storage-bar-container">
+            <div id="storage-bar-fill" class="storage-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="setting-desc" id="storage-usage-text">Calculating...</div>
+        </div>
+      </div> <!-- End pane-general -->
+
+      <!-- Pane: Interface -->
+      <div class="settings-pane" id="pane-ui">
+        <!-- Interface Display -->
       <div class="setting-group">
         <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_group_ui">Interface Display</strong>
         
@@ -1920,33 +2036,56 @@
         
         <label style="margin-top: 10px; display: block;"><input type="checkbox" class="toggle-switch" id="settingSyncPulse" checked> <span data-i18n="setting_sync_pulse">Breathing Light</span></label>
       </div>
-      <div class="setting-group">
-        <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_trigger_keys">Trigger Keys:</strong>
-        <label><input type="checkbox" class="toggle-switch" id="triggerSpace"> <span data-i18n="setting_space">Space</span></label>
-        <label><input type="checkbox" class="toggle-switch" id="triggerTab" checked> <span data-i18n="setting_tab">Tab</span></label>
+
+      <!-- Toolbar Customization -->
+      <div class="setting-group toolbar-settings-group">
+        <strong style="display:block; margin-bottom:8px; color:#cbd5e1; font-size:13px;" data-i18n="setting_toolbar_custom">Toolbar Configuration</strong>
+        <div class="setting-desc" data-i18n="setting_toolbar_custom_desc">Drag to reorder, toggle visibility, or pin buttons to the edge.</div>
+        
+        <!-- Scene Switcher -->
+        <div class="scene-switcher" id="toolbar-scene-switcher">
+          <button class="scene-btn active" data-scene="standard">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"></path><path d="M7 7h.01"></path></svg>
+            <label data-i18n="scene_standard">Standard Tag</label>
+          </button>
+          <button class="scene-btn" data-scene="ai">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="m5 8 6 6"></path><path d="m4 14 6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="m22 22-5-10-5 10"></path><path d="M14 18h6"></path></svg>
+            <label data-i18n="scene_ai">Annotated Tag</label>
+          </button>
+        </div>
+
+        <ul id="toolbar-sortable-list" class="toolbar-preview-bar">
+          <!-- Dynamically populated -->
+        </ul>
       </div>
 
-      <!-- 全局快捷键设置 -->
-      <div class="setting-group hotkey-settings">
-        <strong data-i18n="setting_hotkeys_title">⌨️ Global Hotkeys</strong>
-        <div class="hotkey-row">
-          <span class="hotkey-label" data-i18n="hotkey_focus_base">Focus Base Prompt</span>
-          <button class="hotkey-capture-btn" id="hotkey-focus-base" data-hotkey="focusBase">Alt+Q</button>
-          <button class="hotkey-clear-btn" id="hotkey-focus-base-clear" title="Clear">×</button>
-        </div>
-        <div class="hotkey-row">
-          <span class="hotkey-label" data-i18n="hotkey_minimize">Minimize Window</span>
-          <button class="hotkey-capture-btn" id="hotkey-minimize" data-hotkey="toggleMinimize">Alt+M</button>
-          <button class="hotkey-clear-btn" id="hotkey-minimize-clear" title="Clear">×</button>
-        </div>
-        <div class="hotkey-row">
-          <span class="hotkey-label" data-i18n="hotkey_generate">Generate Image</span>
-          <button class="hotkey-capture-btn" id="hotkey-generate" data-hotkey="triggerGenerate">Ctrl+Enter</button>
-          <button class="hotkey-clear-btn" id="hotkey-generate-clear" title="Clear">×</button>
-        </div>
-      </div>
+      </div> <!-- End pane-ui -->
 
-      <div id="ai-translate-settings" class="setting-group ai-translate-settings">
+      <!-- Pane: Hotkeys -->
+      <div class="settings-pane" id="pane-hotkeys">
+        <div class="setting-group hotkey-settings">
+          <strong data-i18n="setting_hotkeys_title">⌨️ Global Hotkeys</strong>
+          <div class="hotkey-row">
+            <span class="hotkey-label" data-i18n="hotkey_focus_base">Focus Base Prompt</span>
+            <button class="hotkey-capture-btn" id="hotkey-focus-base" data-hotkey="focusBase">Alt+Q</button>
+            <button class="hotkey-clear-btn" id="hotkey-focus-base-clear" title="Clear">×</button>
+          </div>
+          <div class="hotkey-row">
+            <span class="hotkey-label" data-i18n="hotkey_minimize">Minimize Window</span>
+            <button class="hotkey-capture-btn" id="hotkey-minimize" data-hotkey="toggleMinimize">Alt+M</button>
+            <button class="hotkey-clear-btn" id="hotkey-minimize-clear" title="Clear">×</button>
+          </div>
+          <div class="hotkey-row">
+            <span class="hotkey-label" data-i18n="hotkey_generate">Generate Image</span>
+            <button class="hotkey-capture-btn" id="hotkey-generate" data-hotkey="triggerGenerate">Ctrl+Enter</button>
+            <button class="hotkey-clear-btn" id="hotkey-generate-clear" title="Clear">×</button>
+          </div>
+        </div>
+      </div> <!-- End pane-hotkeys -->
+
+      <!-- Pane: AI Settings -->
+      <div class="settings-pane" id="pane-ai">
+        <div id="ai-translate-settings" class="setting-group ai-translate-settings">
         <strong data-i18n="setting_ai_translate_title">AI Translate</strong>
         <div class="setting-desc" data-i18n="setting_ai_translate_desc">Configure OpenAI-compatible translation APIs and save multiple profiles.</div>
         <div class="ai-template-note" data-i18n="setting_ai_template_note">OpenAI-compatible template</div>
@@ -1989,14 +2128,7 @@
           </label>
         </div>
       </div>
-
-      <div class="setting-group storage-monitor-group">
-        <strong data-i18n="setting_storage_usage">Storage Usage</strong>
-        <div class="storage-bar-container">
-          <div id="storage-bar-fill" class="storage-bar-fill" style="width: 0%;"></div>
-        </div>
-        <div class="setting-desc" id="storage-usage-text">Calculating...</div>
-      </div>
+      </div> <!-- End pane-ai -->
     </div>
   </div>
 
