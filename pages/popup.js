@@ -2818,10 +2818,6 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
     const old = oldTags[i];
     if (old.disabled) {
       merged.push(old);
-    } else if (old.value === '\n') {
-      // 换行符是纯插件内部的可视化分组标记，NAI 网页侧永远不会传回来。
-      // 像 disabled 标签一样无条件保留，确保用户的分组结构不被同步覆盖。
-      merged.push(old);
     } else {
       let foundIdx = -1;
       for (let k = newIdx; k < newTags.length; k++) {
@@ -2838,6 +2834,10 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
         }
         merged.push(mergeTagMetadata(old, newTags[foundIdx]));
         newIdx = foundIdx + 1;
+      } else if (old.value === '\n') {
+        // 换行符如果未在 incoming 匹配（如被网页格式化去掉），像 disabled 一样无条件保留。
+        // 但如果 incoming 里有（网页发送回来的换行），会被上方逻辑正常匹配消耗，从而防止重复生成。
+        merged.push(old);
       }
     }
   }
