@@ -400,7 +400,7 @@
     font-size: 14px;
     line-height: 1;
     padding: 0;
-    transition: all 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+    transition: background 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28), color 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28), transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28), border-color 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28), filter 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28), box-shadow 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
 }
 
 .tbtn:hover {
@@ -412,7 +412,7 @@
 .tbtn:active {
     transform: scale(0.92);
     background: rgba(255, 255, 255, 0.2);
-    transition: all 0.1s;
+    transition: transform 0.1s, background 0.1s;
 }
 
 .tbtn-bracket:hover {
@@ -432,7 +432,7 @@
     background: rgba(251, 191, 36, 0.1);
     border: 1px dashed rgba(251, 191, 36, 0.4) !important;
     box-sizing: border-box;
-    transition: all 0.2s ease;
+    transition: background 0.2s ease, filter 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .tbtn-fav:hover {

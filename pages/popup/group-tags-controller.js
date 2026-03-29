@@ -155,16 +155,27 @@ export default function createGroupTagsController(deps = {}) {
   function applyEditorMapsToTargets(shouldRender = true) {
     const baseEditor = getBaseEditor();
     if (baseEditor) {
+      // 使用值比较（非引用比较）判断映射内容是否真的发生了变化
+      // 每次消息传入时 currentGroupColorMap 都是新对象引用，但内容可能完全相同
+      // 只有内容确实改变时才执行破坏性 render()，避免工具栏被无意义地销毁
+      const oldColor = JSON.stringify(baseEditor.groupColorMap || {});
+      const oldTrans = JSON.stringify(baseEditor.groupTranslationMap || {});
       baseEditor.groupColorMap = currentGroupColorMap;
       baseEditor.groupTranslationMap = currentGroupTranslationMap;
-      if (shouldRender) baseEditor.render();
+      const newColor = JSON.stringify(currentGroupColorMap || {});
+      const newTrans = JSON.stringify(currentGroupTranslationMap || {});
+      if (shouldRender && (oldColor !== newColor || oldTrans !== newTrans)) baseEditor.render();
     }
 
     (getCharacterEditors() || []).forEach((charEditorObj) => {
       if (!charEditorObj?.editor) return;
+      const oldColor = JSON.stringify(charEditorObj.editor.groupColorMap || {});
+      const oldTrans = JSON.stringify(charEditorObj.editor.groupTranslationMap || {});
       charEditorObj.editor.groupColorMap = currentGroupColorMap;
       charEditorObj.editor.groupTranslationMap = currentGroupTranslationMap;
-      if (shouldRender) charEditorObj.editor.render();
+      const newColor = JSON.stringify(currentGroupColorMap || {});
+      const newTrans = JSON.stringify(currentGroupTranslationMap || {});
+      if (shouldRender && (oldColor !== newColor || oldTrans !== newTrans)) charEditorObj.editor.render();
     });
 
     onMapsChanged({
