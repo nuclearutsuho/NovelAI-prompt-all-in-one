@@ -203,12 +203,28 @@ const ToolbarConfigManager = {
   // Mock data for different simulation scenes
   SIMULATED_CONTEXTS: {
     standard: {
-      tag: { text: 'tag' },
-      ctx: { isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, canAnnotate: true, canSplit: true, hasWeight: true, weightVal: 1.0, titles: {} }
+      tag: { value: 'tag' },
+      ctx: { 
+        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, 
+        canAnnotate: true, canSplit: true, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
+        titles: { 
+          decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
+          decDynWeightTitle: '减少选中项权重', editDynWeightTitle: '编辑选中项权重', incDynWeightTitle: '增加选中项权重',
+          toggleTitle: '启用/禁用', splitTitle: '拆分为独立 Tag', mergeTitle: '合并为组合'
+        } 
+      }
     },
     ai: {
-      tag: { text: 'tag', aiOriginal: '某个中文原文' },
-      ctx: { isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, canAnnotate: false, canSplit: false, hasWeight: true, weightVal: 1.0, titles: {} }
+      tag: { value: 'tag', aiOriginal: '某个中文原文' },
+      ctx: { 
+        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, 
+        canAnnotate: false, canSplit: false, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
+        titles: { 
+          decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
+          decDynWeightTitle: '减少选中项权重', editDynWeightTitle: '编辑选中项权重', incDynWeightTitle: '增加选中项权重',
+          toggleTitle: '启用/禁用', splitTitle: '拆分为独立 Tag', mergeTitle: '合并为组合'
+        } 
+      }
     }
   },
 
@@ -231,7 +247,7 @@ const ToolbarConfigManager = {
 
     const data = await chrome.storage.local.get(['toolbarConfig']);
     const defaultConfig = {
-      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'split', 'retranslate', 'toggle', 'link', 'newline', 'del'],
+      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
       stickyIds: ['del'],
       hiddenIds: [],
       sceneHiddenIds: { standard: [], ai: [] }
@@ -240,6 +256,13 @@ const ToolbarConfigManager = {
     this.config.order = this.config.order || defaultConfig.order;
     this.config.stickyIds = this.config.stickyIds || defaultConfig.stickyIds;
     this.config.sceneHiddenIds = this.config.sceneHiddenIds || defaultConfig.sceneHiddenIds;
+
+    // Migrate old 'split' and 'merge' IDs to 'smartGroup' if present in existing storage
+    if (this.config.order) {
+      this.config.order = this.config.order.map(id => (id === 'split' || id === 'merge') ? 'smartGroup' : id);
+      // Remove duplicates after mapping
+      this.config.order = [...new Set(this.config.order)];
+    }
 
     this.renderList();
     this.initSortable();
@@ -2595,21 +2618,26 @@ function tagsToString(tags) {
   let result = '';
   const activeTags = getSyncableTagList(tags).filter(t => !t.disabled);
   let inDynamic = false;
+  let compDepthForComma = 0; // 追踪深度以决定是否省略逗号
 
   activeTags.forEach((t, i) => {
     const val = t.value;
     const isDynStart = val.startsWith('||') && (val !== '||' || t.isStart);
     const isDynEnd = val === '||' && !t.isStart;
-    const isHeader = val.match(/^([-?\d\.]+)::$/);
-    const isFooter = val === ' ::';
+    const isHeader = !!val.match(/^([-?\d\.]+)::$/);
+    const isFooter = val === ' ::' || val === '::';
+    const isTrulyFooter = isFooter && compDepthForComma > 0;
 
     if (val === '\n') {
       result += '\n';
     } else {
       if (isDynStart) inDynamic = true;
+      if (isHeader) compDepthForComma++;
+      if (isTrulyFooter) compDepthForComma--;
       
       // Handle native value
       let outputVal = val;
+      if (isTrulyFooter) outputVal = ' ::'; // Canonicalize during output
       if (inDynamic && !isDynStart && !isDynEnd && t.dynWeight && t.dynWeight !== 1) {
           // Correct Fix: Always append to the very end of the value string.
           // If val is "2::tag ::", output should be "2::tag :: :5"
@@ -2624,7 +2652,7 @@ function tagsToString(tags) {
         const next = activeTags[i + 1];
         const nextVal = next.value;
         const nextIsNL = nextVal === '\n';
-        const nextIsFooter = nextVal === ' ::';
+        const nextIsTrulyFooter = (nextVal === ' ::' || nextVal === '::') && compDepthForComma > 0;
         const nextIsDynEnd = nextVal === '||';
         const nextIsDynStart = nextVal.startsWith('||') && nextVal !== '||';
 
@@ -2636,7 +2664,7 @@ function tagsToString(tags) {
         } else {
           // Outside dynamic: use ,
           // Optimized: Allow comma before newline, but avoid double commas
-          if (!isHeader && !nextIsFooter) {
+          if (!isHeader && !nextIsTrulyFooter) {
             if (!outputVal.trim().endsWith(',')) {
               result += ', ';
             } else if (!outputVal.endsWith(' ')) {
@@ -2718,9 +2746,9 @@ function parsePromptToTags(promptText) {
       });
     } else {
       const isNL = p === '\n';
-      const isFooter = p === ' ::';
-      // Preserve ' ::' exactly, otherwise trim
-      result.push({ value: (isNL || isFooter) ? p : p.trim(), disabled: false });
+      const isFooter = p === ' ::' || p === '::';
+      // Normalize '::' to ' ::' and preserve it, otherwise trim
+      result.push({ value: isFooter ? ' ::' : (isNL ? p : p.trim()), disabled: false });
     }
   });
 
