@@ -43,11 +43,12 @@
     flex-direction: column;
     align-items: center;
     gap: 4px;
+    position: relative; /* 核心：配合 z-index 确保标签在装饰框之上 */
+    z-index: 2;
     cursor: default;
     user-select: none;
     transition: all 0.1s ease-in-out;
     max-width: 100%;
-    position: relative;
     box-sizing: border-box;
 }
 
@@ -357,6 +358,23 @@
 
 .tag-capsule:hover .tag-controls.pos-bottom {
     transform: translateX(-50%) translateY(0) scale(1);
+}
+
+/* 当工具栏内的输入框（分组名称、颜色选择器、权重输入等）获得焦点时，
+   保持工具栏可见，即使鼠标移开也不隐藏 */
+.tag-controls:focus-within {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateY(-50%) translateX(0) scale(1) !important;
+}
+.tag-controls.pos-left:focus-within {
+    transform: translateY(-50%) translateX(0) scale(1) !important;
+}
+.tag-controls.pos-top:focus-within {
+    transform: translateX(-50%) translateY(0) scale(1) !important;
+}
+.tag-controls.pos-bottom:focus-within {
+    transform: translateX(-50%) translateY(0) scale(1) !important;
 }
 
 /* Suppress toolbars during drag, marquee selection, or keyboard multi-select (Ctrl/Shift) */
@@ -906,7 +924,7 @@
     border: 1.5px dashed rgba(129, 140, 248, 0.35);
     border-radius: 10px;
     pointer-events: none; /* 鼠标穿透：Sortable.js 完全无感知 */
-    z-index: 2;
+    z-index: 1; /* 修复：设为 1，并确保标签项为 2，使其可见且位于标签后方 */
     transition: border-color 0.25s ease, opacity 0.2s ease;
 }
 
@@ -1038,11 +1056,11 @@
     color: #a5b4fc;
     border: 1px solid rgba(99, 102, 241, 0.25);
     border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 10px;
-    font-size: 11px;
     padding: 0 6px;
-    width: 90px;
+    font-size: 11px;
+    width: 80px;
+    height: var(--te-density-btn-size, 26px);
+    box-sizing: border-box;
     outline: none;
     transition: border-color 0.2s, width 0.2s;
 }
@@ -1050,7 +1068,7 @@
     border-color: rgba(129, 140, 248, 0.55);
     background: rgba(99, 102, 241, 0.15);
     box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.15);
-    width: 120px;
+    width: 90px;
 }
 
 /* 分组颜色选择器：圆形色块，点击弹出系统拾色器 */
