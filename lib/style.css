@@ -76,6 +76,10 @@
     z-index: 100;
 }
 
+.tag-item.toolbar-visible {
+    z-index: 3000;
+}
+
 .tag-item:hover .tag-capsule {
     background: #4a4a6a;
     border-color: #6c6c94;
@@ -342,21 +346,39 @@
     border-color: transparent transparent rgba(30, 30, 56, 0.98) transparent;
 }
 
-.tag-capsule:hover .tag-controls {
+.tag-editor-container:not(.toolbar-trigger-click) .tag-capsule:hover .tag-controls {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(-50%) translateX(0) scale(1);
 }
 
-.tag-capsule:hover .tag-controls.pos-left {
+.tag-editor-container:not(.toolbar-trigger-click) .tag-capsule:hover .tag-controls.pos-left {
     transform: translateY(-50%) translateX(0) scale(1);
 }
 
-.tag-capsule:hover .tag-controls.pos-top {
+.tag-editor-container:not(.toolbar-trigger-click) .tag-capsule:hover .tag-controls.pos-top {
     transform: translateX(-50%) translateY(0) scale(1);
 }
 
-.tag-capsule:hover .tag-controls.pos-bottom {
+.tag-editor-container:not(.toolbar-trigger-click) .tag-capsule:hover .tag-controls.pos-bottom {
+    transform: translateX(-50%) translateY(0) scale(1);
+}
+
+.tag-editor-container.toolbar-trigger-click .tag-item.toolbar-visible .tag-controls {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.tag-editor-container.toolbar-trigger-click .tag-item.toolbar-visible .tag-controls.pos-left {
+    transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.tag-editor-container.toolbar-trigger-click .tag-item.toolbar-visible .tag-controls.pos-top {
+    transform: translateX(-50%) translateY(0) scale(1);
+}
+
+.tag-editor-container.toolbar-trigger-click .tag-item.toolbar-visible .tag-controls.pos-bottom {
     transform: translateX(-50%) translateY(0) scale(1);
 }
 

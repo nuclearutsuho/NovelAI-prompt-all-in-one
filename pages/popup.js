@@ -1059,6 +1059,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
   const charEditor = new TagEditor(editorContainer, {
     dict: dict,
     toolbarConfig: ToolbarConfigManager.config,
+    toolbarTriggerMode: document.getElementById('tagToolbarClickMode')?.checked ? 'click' : 'hover',
     onRemoveTags: handleRemovedPendingAiTags,
     onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
@@ -1596,6 +1597,7 @@ async function initUI() {
   editor = new TagEditor(container, {
     dict: dict,
     toolbarConfig: toolbarConfig,
+    toolbarTriggerMode: document.getElementById('tagToolbarClickMode')?.checked ? 'click' : 'hover',
     onRemoveTags: handleRemovedPendingAiTags,
     onRetryPendingTag: (tag) => aiTranslateController?.translateFromInput({
       buttonEl: btnAiTranslate,
@@ -2103,6 +2105,7 @@ async function initUI() {
     'alternativeDanbooruAutocomplete',
     'hideAutoClicker',
     'settingSyncPulse',
+    'tagToolbarClickMode',
     'tagEditorDensity',
     'triggerSpace',
     'triggerTab',
@@ -2139,6 +2142,22 @@ async function initUI() {
             document.body.classList.toggle('disable-pulse', !el.checked);
         }
 
+        if (key === 'tagToolbarClickMode') {
+          const toolbarTriggerMode = el.checked ? 'click' : 'hover';
+          if (editor) {
+            editor.options.toolbarTriggerMode = toolbarTriggerMode;
+            editor.applyToolbarTriggerMode?.();
+            editor.render();
+          }
+          charEditors.forEach(charEdObj => {
+            if (charEdObj.editor) {
+              charEdObj.editor.options.toolbarTriggerMode = toolbarTriggerMode;
+              charEdObj.editor.applyToolbarTriggerMode?.();
+              charEdObj.editor.render();
+            }
+          });
+        }
+
         // Phase 14.8: Auto-open Sync Page toggle
         // 由于 manifest 中没有 tabs 权限，无法用 chrome.tabs.query 按 URL 检索。
         // 改用 sync.html 自身写入的 syncPageActive 标记来判断是否已有活跃页面。
@@ -2155,6 +2174,21 @@ async function initUI() {
           chrome.storage.local.set({ [key]: el.checked });
           if (key === 'settingSyncPulse') {
             document.body.classList.toggle('disable-pulse', !el.checked);
+          }
+          if (key === 'tagToolbarClickMode') {
+            const toolbarTriggerMode = el.checked ? 'click' : 'hover';
+            if (editor) {
+              editor.options.toolbarTriggerMode = toolbarTriggerMode;
+              editor.applyToolbarTriggerMode?.();
+              editor.render();
+            }
+            charEditors.forEach(charEdObj => {
+              if (charEdObj.editor) {
+                charEdObj.editor.options.toolbarTriggerMode = toolbarTriggerMode;
+                charEdObj.editor.applyToolbarTriggerMode?.();
+                charEdObj.editor.render();
+              }
+            });
           }
           if (key === 'enableGrouping') {
             if (editor) {
