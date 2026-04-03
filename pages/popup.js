@@ -205,7 +205,7 @@ const ToolbarConfigManager = {
     standard: {
       tag: { value: 'tag' },
       ctx: { 
-        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, 
+        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, isDynSeparator: false,
         canAnnotate: true, canSplit: true, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
         titles: { 
           decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
@@ -217,7 +217,7 @@ const ToolbarConfigManager = {
     ai: {
       tag: { value: 'tag', aiOriginal: '某个中文原文' },
       ctx: { 
-        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, 
+        isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, isDynSeparator: false,
         canAnnotate: false, canSplit: false, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
         titles: { 
           decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
@@ -247,7 +247,7 @@ const ToolbarConfigManager = {
 
     const data = await chrome.storage.local.get(['toolbarConfig']);
     const defaultConfig = {
-      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
+      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'insertDynSeparator', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
       stickyIds: ['del'],
       hiddenIds: [],
       sceneHiddenIds: { standard: [], ai: [] }
@@ -263,6 +263,39 @@ const ToolbarConfigManager = {
       // Remove duplicates after mapping
       this.config.order = [...new Set(this.config.order)];
     }
+
+    // --- 迁移逻辑统一管理 ---
+    let needsSave = false;
+
+    // Migrate: inject 'insertDynSeparator' if not present in existing saved configs
+    if (this.config.order && !this.config.order.includes('insertDynSeparator')) {
+      const anchor = this.config.order.indexOf('smartGroup');
+      const insertAt = anchor !== -1 ? anchor : Math.max(0, this.config.order.indexOf('del'));
+      this.config.order.splice(insertAt, 0, 'insertDynSeparator');
+      needsSave = true;
+    }
+
+    // Migrate: 清理可能被误放入 hiddenIds / sceneHiddenIds 的核心按钮
+    // 这些按钮由 showFor 逻辑自行控制可见性，不应该被设置面板隐藏
+    const protectedIds = ['weight', 'dynWeight', 'insertDynSeparator'];
+    if (this.config.hiddenIds) {
+      const before = this.config.hiddenIds.length;
+      this.config.hiddenIds = this.config.hiddenIds.filter(id => !protectedIds.includes(id));
+      if (this.config.hiddenIds.length !== before) needsSave = true;
+    }
+    if (this.config.sceneHiddenIds) {
+      for (const scene of Object.keys(this.config.sceneHiddenIds)) {
+        const list = this.config.sceneHiddenIds[scene];
+        if (list) {
+          const before = list.length;
+          this.config.sceneHiddenIds[scene] = list.filter(id => !protectedIds.includes(id));
+          if (this.config.sceneHiddenIds[scene].length !== before) needsSave = true;
+        }
+      }
+    }
+
+    if (needsSave) this.save();
+
 
     this.renderList();
     this.initSortable();
@@ -648,10 +681,10 @@ function setCharacterPromptSyncState(nextState = {}) {
 function renderBasePromptSyncEditor({ shouldUpdatePos = false, shouldUpdateNeg = false, positiveTags: nextPositiveTags = positiveTags, negativeTags: nextNegativeTags = negativeTags } = {}) {
   if (!editor) return;
   if (currentMode === 'positive' && shouldUpdatePos) {
-    editor.setTags(nextPositiveTags);
+    editor.setTags(nextPositiveTags, { skipInherit: true });
   }
   if (currentMode === 'negative' && shouldUpdateNeg) {
-    editor.setTags(nextNegativeTags);
+    editor.setTags(nextNegativeTags, { skipInherit: true });
   }
 }
 
@@ -660,9 +693,9 @@ function updateCharacterPromptSyncEditor({ index, shouldUpdatePos = false, shoul
   if (!charEditorObj?.editor) return;
 
   if (charEditorObj.activeTab === 'pos' && shouldUpdatePos) {
-    charEditorObj.editor.setTags(posTags);
+    charEditorObj.editor.setTags(posTags, { skipInherit: true });
   } else if (charEditorObj.activeTab === 'neg' && shouldUpdateNeg) {
-    charEditorObj.editor.setTags(negTags);
+    charEditorObj.editor.setTags(negTags, { skipInherit: true });
   }
 }
 
@@ -1121,13 +1154,13 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
         btnNeg.classList.remove('active');
         editorContainer.classList.remove('negative-mode');
         // Load pos tags
-        charEditor.setTags(characterPromptsData[index].posTags || []);
+        charEditor.setTags(characterPromptsData[index].posTags || [], { skipInherit: true });
     } else {
         btnNeg.classList.add('active');
         btnPos.classList.remove('active');
         editorContainer.classList.add('negative-mode');
         // Load neg tags
-        charEditor.setTags(characterPromptsData[index].negTags || []);
+        charEditor.setTags(characterPromptsData[index].negTags || [], { skipInherit: true });
     }
     syncPendingAiVisualTimer();
     
@@ -2534,9 +2567,9 @@ function switchTab(mode, fromUserClick = false) {
   document.getElementById('tab-negative').classList.toggle('active', mode === 'negative');
 
   if (mode === 'positive') {
-    editor.setTags(positiveTags);
+    editor.setTags(positiveTags, { skipInherit: true });
   } else {
-    editor.setTags(negativeTags);
+    editor.setTags(negativeTags, { skipInherit: true });
   }
   syncPendingAiVisualTimer();
 
@@ -2619,51 +2652,75 @@ function tagsToString(tags) {
   const activeTags = getSyncableTagList(tags).filter(t => !t.disabled);
   let inDynamic = false;
   let compDepthForComma = 0; // 追踪深度以决定是否省略逗号
+  let pendingDynWeight = null; // 暂存当前选项块的权重
 
   activeTags.forEach((t, i) => {
     const val = t.value;
     const isDynStart = val.startsWith('||') && (val !== '||' || t.isStart);
     const isDynEnd = val === '||' && !t.isStart;
+    const isDynSep = val === '|';
     const isHeader = !!val.match(/^([-?\d\.]+)::$/);
     const isFooter = val === ' ::' || val === '::';
     const isTrulyFooter = isFooter && compDepthForComma > 0;
 
     if (val === '\n') {
       result += '\n';
+      pendingDynWeight = null; // 换行通常意味着上下文断开
     } else {
-      if (isDynStart) inDynamic = true;
+      if (isDynStart) {
+        inDynamic = true;
+        pendingDynWeight = null;
+      }
       if (isHeader) compDepthForComma++;
       if (isTrulyFooter) compDepthForComma--;
       
+      // 记录权重逻辑：如果在动态块内且不是分隔符，尝试记录权重
+      // 在多标签模式下，任何一个标签有权重都会被暂存，最后统一输出给该选项
+      if (inDynamic && !isDynStart && !isDynEnd && !isDynSep) {
+        if (t.dynWeight && t.dynWeight !== 1) {
+          pendingDynWeight = t.dynWeight;
+        }
+      }
+
       // Handle native value
       let outputVal = val;
       if (isTrulyFooter) outputVal = ' ::'; // Canonicalize during output
-      if (inDynamic && !isDynStart && !isDynEnd && t.dynWeight && t.dynWeight !== 1) {
-          // Correct Fix: Always append to the very end of the value string.
-          // If val is "2::tag ::", output should be "2::tag :: :5"
-          // If val is "tag", output should be "tag:5"
-          outputVal = val + `:${t.dynWeight}`;
+      
+      const next = activeTags[i + 1];
+      const nextVal = next ? next.value : '';
+      const nextIsDynEnd = nextVal === '||' && !next.isStart;
+      const nextIsDynSep = nextVal === '|';
+      const nextIsNL = nextVal === '\n';
+
+      // 权重输出逻辑：如果下一个是分隔符或结尾，就把暂存的权重吐出来
+      if (inDynamic && pendingDynWeight && (nextIsDynSep || nextIsDynEnd || nextIsNL || !next)) {
+        outputVal += `:${pendingDynWeight}`;
+        pendingDynWeight = null;
       }
 
       result += outputVal;
       if (isDynEnd) inDynamic = false;
 
       if (i < activeTags.length - 1) {
-        const next = activeTags[i + 1];
-        const nextVal = next.value;
-        const nextIsNL = nextVal === '\n';
         const nextIsTrulyFooter = (nextVal === ' ::' || nextVal === '::') && compDepthForComma > 0;
-        const nextIsDynEnd = nextVal === '||';
-        const nextIsDynStart = nextVal.startsWith('||') && nextVal !== '||';
 
         if (inDynamic) {
-          // Inside dynamic: use | between members
-          if (!isDynStart && !nextIsDynEnd && !nextIsNL) {
-            result += '|';
+          // Inside dynamic: determine connection between tags
+          if (isDynStart && !nextIsDynEnd && !nextIsNL) {
+            // Space after header ||...$$
+            result += ' ';
+          } else if (isDynSep && !nextIsDynEnd && !nextIsNL) {
+            // Space after OR separator |
+            result += ' ';
+          } else if (!isDynStart && !nextIsDynEnd && !nextIsNL && !isDynSep && nextIsDynSep) {
+            // Space before OR separator |
+            result += ' ';
+          } else if (!isDynStart && !nextIsDynEnd && !nextIsNL && !isDynSep && !nextIsDynSep) {
+            // Comma between tags in the same option group
+            result += ', ';
           }
         } else {
           // Outside dynamic: use ,
-          // Optimized: Allow comma before newline, but avoid double commas
           if (!isHeader && !nextIsTrulyFooter) {
             if (!outputVal.trim().endsWith(',')) {
               result += ', ';
@@ -2747,8 +2804,21 @@ function parsePromptToTags(promptText) {
     } else {
       const isNL = p === '\n';
       const isFooter = p === ' ::' || p === '::';
-      // Normalize '::' to ' ::' and preserve it, otherwise trim
-      result.push({ value: isFooter ? ' ::' : (isNL ? p : p.trim()), disabled: false });
+      const isDynSep = p === '|';
+      let val = isFooter ? ' ::' : (isNL ? p : p.trim());
+
+      // 动态块内的普通 tag：提取 :weight 后缀作为 dynWeight
+      if (inDynamic && !isNL && !isFooter && !isDynSep && val) {
+        let dynWeight = 1;
+        const dMatch = val.match(/^(.*?)\s*:\s*(\d+(\.\d+)?)\s*$/);
+        if (dMatch && dMatch[2]) {
+          val = dMatch[1];
+          dynWeight = parseFloat(dMatch[2]);
+        }
+        result.push({ value: val, dynWeight: dynWeight, disabled: false });
+      } else {
+        result.push({ value: val, disabled: false });
+      }
     }
   });
 

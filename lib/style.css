@@ -576,6 +576,16 @@
     filter: drop-shadow(0 0 4px rgba(165, 180, 252, 0.3));
 }
 
+.tbtn-insert-sep {
+    color: #c4b5fd;
+}
+
+.tbtn-insert-sep:hover {
+    background: rgba(167, 139, 250, 0.2) !important;
+    color: #fff;
+    filter: drop-shadow(0 0 4px rgba(167, 139, 250, 0.4));
+}
+
 /* External Link Context Menu (Shared by Autocomplete & TagEditor) */
 #autocomplete-link-menu {
     position: fixed;
@@ -708,9 +718,74 @@
     margin: 0 2px;
 }
 
-.tag-dynamic .tag-capsule:not(.gh):not(.gf):not(.dh):not(.df) {
+.tag-dynamic .tag-capsule:not(.gh):not(.gf):not(.dh):not(.df):not(.ds) {
     background: rgba(167, 139, 250, 0.05);
     border-color: rgba(167, 139, 250, 0.2);
+}
+
+/* 动态组头尾 - 禁用状态 */
+.tag-dyn-header .tag-capsule.disabled,
+.tag-dyn-footer .tag-capsule.disabled {
+    background: rgba(42, 42, 46, 0.8) !important;
+    border-color: #444 !important;
+}
+
+.tag-dyn-header .tag-capsule.disabled {
+    border-left-color: #555 !important;
+}
+
+.tag-dyn-footer .tag-capsule.disabled {
+    border-right-color: #555 !important;
+}
+
+.tag-dyn-header .tag-capsule.disabled::before,
+.tag-dyn-footer .tag-capsule.disabled::after {
+    color: #555 !important;
+    opacity: 0.5;
+}
+
+/* 动态组成员 - 禁用状态 */
+.tag-dynamic .tag-capsule.disabled:not(.dh):not(.df) {
+    background: #2a2a2e !important;
+    border-color: #444 !important;
+}
+
+/* | 分界胶囊专用样式 (Slim Vertical Divider) */
+.tag-dyn-separator {
+    margin-left: -1px !important;
+    margin-right: -1px !important;
+}
+
+.tag-dyn-separator .tag-capsule.ds {
+    background: rgba(167, 139, 250, 0.1);
+    border-color: #a78bfa;
+    min-width: 10px; /* 适当放宽，使其更显眼 */
+    padding: 0 1px; /* 增加少量内边距 */
+    justify-content: center;
+    border-style: solid;
+    border-width: 0 3px; /* 稍微加粗边框 */
+    box-shadow: none;
+    border-radius: 1px;
+}
+
+/* 选中状态：高亮背景与边框 */
+.tag-item.selected .tag-capsule.ds {
+    background: rgba(167, 139, 250, 0.3) !important;
+    border-color: #c4b5fd !important;
+    box-shadow: 0 0 8px rgba(167, 139, 250, 0.4);
+}
+
+.tag-dyn-separator .tag-text {
+    font-weight: 900; /* 加粗字符 */
+    font-size: 16px; /* 放大字符 */
+    color: #a78bfa;
+    opacity: 1; /* 提高不透明度 */
+    font-family: serif;
+}
+
+/* 隐藏分界胶囊多余的 UI */
+.tag-dyn-separator .tag-zh-row {
+    visibility: hidden;
 }
 
 /* Specificity Fix for Nesting: Composite Header inside Dynamic Group */
