@@ -18,6 +18,10 @@
   let wildcardFolderList = [];
   let wildcardUsageStats = {};
   let sequentialCounters = {};
+  const PENDING_SEQUENTIAL_TTL_MS = 120000;
+  let sequentialRequestSeq = 0;
+  let unclaimedSequentialImageEvents = 0;
+  const pendingSequentialTransactions = [];
   let v3 = false;
   let preservePrompt = true;
   let alternativeDanbooruAutocomplete = true;
@@ -309,6 +313,12 @@
   function makeDeepSwap(rng) {
     // 使用外层定义的正则表达式和 containsWildcardSyntax 函数 (Use outer-scope patterns and function)
     let pendingUIResync = false;
+    const pendingSequentialUpdates = new Map();
+
+    function normalizeSequentialIndex(value, length) {
+      if (!length) return 0;
+      return ((value % length) + length) % length;
+    }
 
     function swap(txt, slotCounters) {
       // 1) [sS]?(\d+)?__token__ lines → pick one line OR sequentially
@@ -339,29 +349,18 @@
           // Aligned key logic: Slot 0 uses 'name', others use 'name:idx'
           const storageKey = slotIdx === 0 ? effectiveKey : `${effectiveKey}:${slotIdx}`;
 
-          // Numeric jump logic
-          if (startNum) {
-            const jumpTarget = parseInt(startNum, 10) - 1;
-            sequentialCounters[storageKey] = jumpTarget % lines.length; // Apply modulo to jump target
-            window.postMessage({
-              type: '__UPDATE_SEQUENTIAL_COUNTER__',
-              name: storageKey,
-              value: sequentialCounters[storageKey]
-            }, '*');
-            pendingUIResync = true;
-          }
-
-          const idx = sequentialCounters[storageKey] || 0;
+          const persistedIdx = sequentialCounters[storageKey] || 0;
+          const idx = startNum
+            ? normalizeSequentialIndex(parseInt(startNum, 10) - 1, lines.length)
+            : normalizeSequentialIndex(persistedIdx, lines.length);
           const picked = lines[idx % lines.length];
 
-          // Increment with wrap-around
           const nextVal = (idx + 1) % lines.length;
-          sequentialCounters[storageKey] = nextVal;
-          window.postMessage({
-            type: '__UPDATE_SEQUENTIAL_COUNTER__',
+          pendingSequentialUpdates.set(storageKey, {
             name: storageKey,
             value: nextVal
-          }, '*');
+          });
+          if (startNum) pendingUIResync = true;
 
           return picked;
         }
@@ -503,7 +502,94 @@
       return o;
     };
 
-    return { deepSwap, getPendingUIResync: () => pendingUIResync };
+    return {
+      deepSwap,
+      getPendingUIResync: () => pendingUIResync,
+      getSequentialUpdates: () => Array.from(pendingSequentialUpdates.values())
+    };
+  }
+
+  function resetSequentialImageCreditsIfIdle() {
+    if (pendingSequentialTransactions.length === 0) {
+      unclaimedSequentialImageEvents = 0;
+    }
+  }
+
+  function pruneExpiredSequentialTransactions() {
+    const now = Date.now();
+    for (let i = pendingSequentialTransactions.length - 1; i >= 0; i--) {
+      const tx = pendingSequentialTransactions[i];
+      if ((now - tx.createdAt) > PENDING_SEQUENTIAL_TTL_MS) {
+        pendingSequentialTransactions.splice(i, 1);
+      }
+    }
+    resetSequentialImageCreditsIfIdle();
+  }
+
+  function queueSequentialTransaction(updates = [], options = {}) {
+    pruneExpiredSequentialTransactions();
+    if (!Array.isArray(updates) || updates.length === 0) return null;
+
+    const id = `seq_${Date.now().toString(36)}_${(sequentialRequestSeq++).toString(36)}`;
+    pendingSequentialTransactions.push({
+      id,
+      createdAt: Date.now(),
+      status: 'awaiting-response',
+      updates,
+      needsUIResync: !!options.needsUIResync
+    });
+    return id;
+  }
+
+  function dropSequentialTransaction(id) {
+    if (!id) return;
+    const idx = pendingSequentialTransactions.findIndex(tx => tx.id === id);
+    if (idx !== -1) {
+      pendingSequentialTransactions.splice(idx, 1);
+      resetSequentialImageCreditsIfIdle();
+    }
+  }
+
+  function applySequentialCounterUpdate(update) {
+    if (!update?.name) return;
+    sequentialCounters[update.name] = update.value;
+    window.postMessage({
+      type: '__UPDATE_SEQUENTIAL_COUNTER__',
+      name: update.name,
+      value: update.value
+    }, '*');
+  }
+
+  function flushReadySequentialTransactions() {
+    pruneExpiredSequentialTransactions();
+    while (unclaimedSequentialImageEvents > 0) {
+      const idx = pendingSequentialTransactions.findIndex(tx => tx.status === 'ready');
+      if (idx === -1) break;
+      const [tx] = pendingSequentialTransactions.splice(idx, 1);
+      tx.updates.forEach(applySequentialCounterUpdate);
+      if (tx.needsUIResync) {
+        setTimeout(cleanNumericPrefixesFromUI, 100);
+      }
+      unclaimedSequentialImageEvents--;
+    }
+    resetSequentialImageCreditsIfIdle();
+  }
+
+  function markSequentialTransactionReady(id) {
+    if (!id) return;
+    pruneExpiredSequentialTransactions();
+    const tx = pendingSequentialTransactions.find(item => item.id === id);
+    if (!tx) return;
+    tx.status = 'ready';
+    tx.readyAt = Date.now();
+    flushReadySequentialTransactions();
+  }
+
+  function noteSequentialImageGenerated() {
+    pruneExpiredSequentialTransactions();
+    if (pendingSequentialTransactions.length === 0) return;
+    unclaimedSequentialImageEvents++;
+    flushReadySequentialTransactions();
   }
 
   function cleanNumericPrefixesFromUI() {
@@ -632,6 +718,7 @@
   /* 2‑A. fetch 패치 (fetch 补丁) */
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
+    let sequentialTransactionId = null;
     try {
       const url = typeof input === 'string' ? input : input.url;
       const m = (init.method || input.method || 'GET').toUpperCase();
@@ -649,10 +736,10 @@
 
           /* ① wildcard 치환 (Wildcard 替换) */
           json = swapper.deepSwap(json);
-
-          if (swapper.getPendingUIResync()) {
-            setTimeout(cleanNumericPrefixesFromUI, 100);
-          }
+          sequentialTransactionId = queueSequentialTransaction(
+            swapper.getSequentialUpdates(),
+            { needsUIResync: swapper.getPendingUIResync() }
+          );
 
           /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */      // <<< NEW
           if (preservePrompt) await applyImg2ImgMetadata(json);            // <<< NEW
@@ -706,8 +793,23 @@
           }
         }
       }
-    } catch (e) { console.error('[Wildcard] fetch patch error:', e); }
-    return $fetch(input, init);
+    } catch (e) {
+      if (sequentialTransactionId) dropSequentialTransaction(sequentialTransactionId);
+      console.error('[Wildcard] fetch patch error:', e);
+    }
+
+    return $fetch(input, init)
+      .then((response) => {
+        if (sequentialTransactionId) {
+          if (response?.ok) markSequentialTransactionReady(sequentialTransactionId);
+          else dropSequentialTransaction(sequentialTransactionId);
+        }
+        return response;
+      })
+      .catch((error) => {
+        if (sequentialTransactionId) dropSequentialTransaction(sequentialTransactionId);
+        throw error;
+      });
   };
 
   /* 2‑B. XHR 패치 (XHR 补丁) */
@@ -720,6 +822,7 @@
   };
 
   XMLHttpRequest.prototype.send = function (body) {
+    let sequentialTransactionId = null;
     try {
       if (this.__wild_m?.toUpperCase() === 'POST' &&
         this.__wild_u?.startsWith(TARGET) &&
@@ -732,10 +835,10 @@
         const rng = (seed32 != null) ? mulberry32(seed32) : Math.random;
         const swapper = makeDeepSwap(rng);
         json = swapper.deepSwap(json);
-
-        if (swapper.getPendingUIResync()) {
-          setTimeout(cleanNumericPrefixesFromUI, 100);
-        }
+        sequentialTransactionId = queueSequentialTransaction(
+          swapper.getSequentialUpdates(),
+          { needsUIResync: swapper.getPendingUIResync() }
+        );
 
         /* ② Multi-Resolution 动态替换 (多选分辨率注入) */
         if (window.__multiResConfig && window.__multiResConfig.active && window.__multiResConfig.active.length > 1) {
@@ -768,9 +871,21 @@
         }
 
         const newBody = JSON.stringify(json);
+        if (sequentialTransactionId) {
+          this.addEventListener('loadend', () => {
+            if (this.status >= 200 && this.status < 300) {
+              markSequentialTransactionReady(sequentialTransactionId);
+            } else {
+              dropSequentialTransaction(sequentialTransactionId);
+            }
+          }, { once: true });
+        }
         return $send.call(this, newBody);
       }
-    } catch (e) { console.error('[Wildcard] XHR patch error:', e); }
+    } catch (e) {
+      if (sequentialTransactionId) dropSequentialTransaction(sequentialTransactionId);
+      console.error('[Wildcard] XHR patch error:', e);
+    }
     return $send.call(this, body);
   };
 
@@ -944,6 +1059,11 @@
 
     if (type === '__SET_RESOLUTION__') {
       setWebpageResolution(data.width, data.height);
+      return;
+    }
+
+    if (type === '__NAI_IMAGE_GENERATED__') {
+      noteSequentialImageGenerated();
       return;
     }
 

@@ -127,6 +127,11 @@
 
         imageCount++;
         if (imgCounterEl) imgCounterEl.textContent = `📷 ${imageCount}`;
+        window.postMessage({
+          type: '__NAI_IMAGE_GENERATED__',
+          imageCount,
+          src
+        }, '*');
         
         // 统一处理耗时显示：不论是连点器自动触发还是手动触发
         if (lastGenerateTime > 0) {
