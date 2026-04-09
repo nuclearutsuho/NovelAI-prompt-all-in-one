@@ -931,6 +931,26 @@ async function saveSequentialCounter(name, value) {
   }
 }
 
+async function resetStepProgress(key, isSequential) {
+  if (!key) return;
+  // 更新本地缓存
+  if (isSequential) {
+    delete currentSequentialStepProgress[key];
+  } else {
+    delete currentRandomWildcardLocks[key];
+  }
+  applyRuntimeStateToEditors();
+  // 发送到 content script（bridge.js）同步到 injector
+  const activeTab = await getActiveTab();
+  if (activeTab?.id) {
+    chrome.tabs.sendMessage(activeTab.id, {
+      type: 'RESET_STEP_PROGRESS',
+      key,
+      isSequential
+    });
+  }
+}
+
 function getActiveTab() {
   return new Promise((resolve) => {
     if (!chrome.tabs) {
@@ -1186,6 +1206,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onSequentialStepChange: (key, value) => saveSequentialStepSetting(key, value),
     onSequentialCounterChange: (name, value) => saveSequentialCounter(name, value),
+    onStepProgressReset: (key, isSequential) => resetStepProgress(key, isSequential),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
       // 检测是否为结构性变更（tag 数量变化）
@@ -1725,6 +1746,7 @@ async function initUI() {
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
     onSequentialStepChange: (key, value) => saveSequentialStepSetting(key, value),
     onSequentialCounterChange: (name, value) => saveSequentialCounter(name, value),
+    onStepProgressReset: (key, isSequential) => resetStepProgress(key, isSequential),
     onChange: (tags) => {
       // 检测是否为结构性变更（tag 数量变化 = 增删操作）
       const prevTags = currentMode === 'positive' ? positiveTags : negativeTags;

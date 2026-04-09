@@ -1315,6 +1315,19 @@
       return;
     }
 
+    // 从 popup 端重置步长进度
+    if (type === '__RESET_STEP_PROGRESS__') {
+      const { key, isSequential } = e.data;
+      if (key) {
+        if (isSequential) {
+          delete sequentialStepProgress[key];
+        } else {
+          delete randomWildcardLocks[key];
+        }
+      }
+      return;
+    }
+
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
       rebuildWildcardFolderList(typeof folders !== 'undefined' ? folders : wildcardFolders, dict);

@@ -1511,6 +1511,31 @@
         notifyRuntimeStateUpdate();
       }
     }
+    if (request.type === 'RESET_STEP_PROGRESS') {
+      const { key, isSequential } = request;
+      if (key) {
+        if (isSequential) {
+          // 顺序通配符：清除步长进度
+          delete sequentialStepProgress[key];
+          saveScopedSequentialStepProgress(sequentialStepProgress);
+          window.postMessage({
+            type: '__RESET_STEP_PROGRESS__',
+            key,
+            isSequential: true
+          }, '*');
+        } else {
+          // 随机通配符：清除锁定状态
+          delete randomWildcardLocks[key];
+          saveScopedRandomWildcardLocks(randomWildcardLocks);
+          window.postMessage({
+            type: '__RESET_STEP_PROGRESS__',
+            key,
+            isSequential: false
+          }, '*');
+        }
+        notifyRuntimeStateUpdate();
+      }
+    }
     
     // Return true if we want to sendResponse asynchronously, but here we use runtime.sendMessage for return.
   });
