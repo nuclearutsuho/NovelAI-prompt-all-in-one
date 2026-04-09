@@ -1,6 +1,7 @@
 // bridge.js
 (async () => {
   const SESSION_COUNTERS_KEY = '__nai_aio_sequentialCounters__';
+  const SESSION_STEP_PROGRESS_KEY = '__nai_aio_sequentialStepProgress__';
   const HOST_SESSION_KEY = '__nai_aio_host_session__';
 
   const promptStorageShimReady = new Promise((resolve) => {
@@ -29,10 +30,53 @@
     }
   }
 
-  function notifySequentialCounterUpdate(nextCounters) {
+  function loadScopedSequentialStepProgress() {
+    try {
+      const raw = window.sessionStorage.getItem(SESSION_STEP_PROGRESS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      console.warn('[Bridge] Failed to load scoped sequential step progress:', e);
+      return {};
+    }
+  }
+
+  function saveScopedSequentialStepProgress(nextProgress) {
+    try {
+      window.sessionStorage.setItem(SESSION_STEP_PROGRESS_KEY, JSON.stringify(nextProgress || {}));
+    } catch (e) {
+      console.warn('[Bridge] Failed to save scoped sequential step progress:', e);
+    }
+  }
+
+  // ── 随机通配符锁定 sessionStorage 持久化 ──
+  const SESSION_RANDOM_LOCKS_KEY = '__nai_aio_randomWildcardLocks__';
+
+  function loadScopedRandomWildcardLocks() {
+    try {
+      const raw = window.sessionStorage.getItem(SESSION_RANDOM_LOCKS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      console.warn('[Bridge] Failed to load scoped random wildcard locks:', e);
+      return {};
+    }
+  }
+
+  function saveScopedRandomWildcardLocks(locks) {
+    try {
+      window.sessionStorage.setItem(SESSION_RANDOM_LOCKS_KEY, JSON.stringify(locks || {}));
+    } catch (e) {
+      console.warn('[Bridge] Failed to save scoped random wildcard locks:', e);
+    }
+  }
+
+  function notifyRuntimeStateUpdate() {
     chrome.runtime.sendMessage({
-      type: 'SEQUENTIAL_COUNTERS_UPDATED',
-      counters: nextCounters || {},
+      type: 'RUNTIME_STATE_UPDATED',
+      counters: sequentialCounters || {},
+      stepProgress: sequentialStepProgress || {},
+      randomLocks: randomWildcardLocks || {},
       hostSessionId
     }).catch(() => {});
   }
@@ -76,6 +120,18 @@
     return normalizedPath ? `${kind}:${normalizedPath}` : '';
   }
 
+  function normalizeSequentialStepSettings(rawSettings = {}) {
+    const normalizedSettings = {};
+    Object.entries(rawSettings || {}).forEach(([key, value]) => {
+      if (!key) return;
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed > 1) {
+        normalizedSettings[key] = parsed;
+      }
+    });
+    return normalizedSettings;
+  }
+
   function applyWildcardUsageRecords(currentStats = {}, records = []) {
     const nextStats = {
       ...normalizeWildcardUsageStats(currentStats)
@@ -112,10 +168,14 @@
     multiResConfig = null,
     hideAutoClicker = false,
     autoClickerI18n = null,
-    hotkeys = null
-  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'wildcardUsageStats', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys']);
+    hotkeys = null,
+    sequentialStepSettings = {}
+  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'wildcardUsageStats', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys', 'sequentialStepSettings']);
   wildcardUsageStats = normalizeWildcardUsageStats(wildcardUsageStats);
+  sequentialStepSettings = normalizeSequentialStepSettings(sequentialStepSettings);
   let sequentialCounters = loadScopedSequentialCounters();
+  let sequentialStepProgress = loadScopedSequentialStepProgress();
+  let randomWildcardLocks = loadScopedRandomWildcardLocks();
 
   // 1.5) inject Sortable.js dependency first, then history/favorites panel
   const sortableScript = document.createElement('script');
@@ -165,6 +225,9 @@
       triggerTab,
       triggerSpace,
       sequentialCounters,
+      sequentialStepSettings,
+      sequentialStepProgress,
+      randomWildcardLocks,
       multiResConfig,
       hideAutoClicker,
       autoClickerI18n
@@ -1082,6 +1145,16 @@
 
   // 3) propagate later changes
   chrome.storage.onChanged.addListener(changes => {
+    if (changes.sequentialStepSettings) {
+      sequentialStepSettings = normalizeSequentialStepSettings(changes.sequentialStepSettings.newValue);
+      window.postMessage({
+        type: '__SEQUENTIAL_STEP_SETTINGS_UPDATE__',
+        sequentialStepSettings,
+        sequentialStepProgress,
+        randomWildcardLocks
+      }, '*');
+    }
+
     // wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 중 하나라도 바뀌면 반영 (wildcards, v3mode, preservePrompt, alternativeDanbooruAutocomplete 中任何一个改变都反映)
     if (changes.wildcards ||
       changes.wildcardFolders ||
@@ -1149,6 +1222,9 @@
         triggerTab,
       triggerSpace,
       sequentialCounters,
+      sequentialStepSettings,
+      sequentialStepProgress,
+      randomWildcardLocks,
       multiResConfig,
       hideAutoClicker,
       autoClickerI18n
@@ -1163,7 +1239,21 @@
       const { name, value } = e.data;
       sequentialCounters[name] = value;
       saveScopedSequentialCounters(sequentialCounters);
-      notifySequentialCounterUpdate(sequentialCounters);
+      notifyRuntimeStateUpdate();
+    }
+    if (e.data?.type === '__UPDATE_RANDOM_WILDCARD_LOCKS__') {
+      randomWildcardLocks = e.data.locks && typeof e.data.locks === 'object'
+        ? e.data.locks
+        : {};
+      saveScopedRandomWildcardLocks(randomWildcardLocks);
+      notifyRuntimeStateUpdate();
+    }
+    if (e.data?.type === '__UPDATE_SEQUENTIAL_STEP_PROGRESS__') {
+      sequentialStepProgress = e.data.progress && typeof e.data.progress === 'object'
+        ? e.data.progress
+        : {};
+      saveScopedSequentialStepProgress(sequentialStepProgress);
+      notifyRuntimeStateUpdate();
     }
     if (e.data?.type === '__RECORD_WILDCARD_USAGE__') {
       wildcardUsageStats = applyWildcardUsageRecords(wildcardUsageStats, e.data.records);
@@ -1400,8 +1490,26 @@
         }, '*');
       }
     }
-    if (request.type === 'GET_SEQUENTIAL_COUNTERS') {
-      sendResponse({ sequentialCounters });
+    if (request.type === 'GET_RUNTIME_STATE') {
+      sendResponse({ 
+        sequentialCounters,
+        sequentialStepProgress,
+        randomWildcardLocks
+      });
+    }
+    if (request.type === 'SET_SEQUENTIAL_COUNTER') {
+      const { name, value } = request;
+      if (name) {
+        sequentialCounters[name] = value;
+        saveScopedSequentialCounters(sequentialCounters);
+        // 通知 injector 更新内存中的计数器
+        window.postMessage({
+          type: '__SET_SEQUENTIAL_COUNTER__',
+          name,
+          value
+        }, '*');
+        notifyRuntimeStateUpdate();
+      }
     }
     
     // Return true if we want to sendResponse asynchronously, but here we use runtime.sendMessage for return.

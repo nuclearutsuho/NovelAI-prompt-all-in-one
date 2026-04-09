@@ -40,7 +40,8 @@
   let intervalInputEl = null;
   let randomInputEl = null;
   let timeStrEl = null; // 生成耗时显示元素
-  let lastGenerateTime = 0; // 记录上次点击生成的时间戳
+  const pendingGenerateTimes = [];
+  let lastGenerateRecordAt = 0;
   let spanTimingTextEl = null; // 折叠态耗时文本
 
   let autoClickerI18n = {
@@ -51,6 +52,20 @@
   };
 
   const imageWaiters = new Set();
+
+  function recordGenerateStart(now = performance.now(), { force = false } = {}) {
+    if (!force && (now - lastGenerateRecordAt) < 800) return;
+    lastGenerateRecordAt = now;
+    pendingGenerateTimes.push(now);
+  }
+
+  function settleGenerateTiming(now = performance.now()) {
+    if (pendingGenerateTimes.length === 0) return false;
+    const startedAt = pendingGenerateTimes.shift();
+    const waitTimeSec = ((now - startedAt) / 1000).toFixed(1);
+    if (timeStrEl) timeStrEl.textContent = `⏱ ${waitTimeSec}s`;
+    return true;
+  }
 
   /**
    * 判断 img 是否为 NAI 实际生成的图片（排除小图标、SVG、预览图等）
@@ -133,13 +148,6 @@
           src
         }, '*');
         
-        // 统一处理耗时显示：不论是连点器自动触发还是手动触发
-        if (lastGenerateTime > 0) {
-          const waitTimeSec = ((performance.now() - lastGenerateTime) / 1000).toFixed(1);
-          if (timeStrEl) timeStrEl.textContent = `⏱ ${waitTimeSec}s`;
-          lastGenerateTime = 0; // 结算完毕，清空防重
-        }
-
         notifyImageWaiters();
         console.log('[AutoClicker] 检测到新生成图片:', src.substring(0, 60));
       }
@@ -570,7 +578,6 @@
 
     const target = findGenerateButton();
     if (target) {
-      lastGenerateTime = performance.now(); // 记录起步时间
       triggerClick(target);
     } else {
       console.error('[AutoClicker] Visible Generate button not found');
@@ -882,7 +889,7 @@
         if (interval) clearTimeout(interval);
         interval = null;
         cancelPendingWaits();
-        currentLoop = 0; imageCount = 0; lastGenerateTime = 0;
+        currentLoop = 0; imageCount = 0; pendingGenerateTimes.length = 0; lastGenerateRecordAt = 0;
         if (imgCounterEl) imgCounterEl.textContent = '📷 0';
         if (timeStrEl) timeStrEl.textContent = '⏱ --s';
         const v = parseInt(inputLoops.value, 10);
@@ -905,7 +912,9 @@
     btnCustom.addEventListener('click', async () => {
       if (!(await checkAnlas())) return;
       XPATH_I2I_LIST.forEach(xpath => { const el = xpathNode(xpath); if (el) triggerClick(el); });
-      setTimeout(() => triggerClick(findGenerateButton()), 600);
+      setTimeout(() => {
+        triggerClick(findGenerateButton());
+      }, 600);
       setTimeout(() => resetSeed(), 1000);
     });
 
@@ -1015,13 +1024,23 @@
         autoClickerI18n = { ...autoClickerI18n, ...i18n };
         applyModeI18n();
       }
+      return;
+    }
+
+    if (type === '__NAI_GENERATION_REQUEST__') {
+      recordGenerateStart(performance.now(), { force: true });
+      return;
+    }
+
+    if (type === '__NAI_GENERATION_RESPONSE__') {
+      settleGenerateTiming();
+      return;
     }
 
     // 快捷键触发生成图像（来自 bridge.js 的转发）
     if (type === '__TRIGGER_GENERATE__') {
       const btn = findGenerateButton();
       if (btn) {
-        lastGenerateTime = performance.now(); // 记录快捷键触发耗时起点
         triggerClick(btn);
         console.log('[AutoClicker] 快捷键触发生成图像');
       } else {
@@ -1029,24 +1048,6 @@
       }
     }
   });
-
-  // ─── 全局监听器：捕获手动生成，以便记录耗时 ────────────────────
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('button');
-    if (btn) {
-      const txt = btn.textContent || '';
-      if (txt.includes('Generate') && txt.includes('Image')) {
-        lastGenerateTime = performance.now();
-      }
-    }
-  }, { capture: true }); // 使用 capture 保证在被其它逻辑阻止冒泡前拿到记录
-
-  document.addEventListener('keydown', e => {
-    // 捕捉 NAI 原生的 Ctrl+Enter 或 Meta+Enter 快捷键
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      lastGenerateTime = performance.now();
-    }
-  }, { capture: true });
 
   const initTimer = setInterval(() => {
     const btn = xpathNode(XPATH_GENERATE);

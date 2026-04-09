@@ -18,6 +18,9 @@
   let wildcardFolderList = [];
   let wildcardUsageStats = {};
   let sequentialCounters = {};
+  let sequentialStepSettings = {};
+  let sequentialStepProgress = {};
+  let randomWildcardLocks = {};    // { [key]: { picked: string, progress: number } }
   const PENDING_SEQUENTIAL_TTL_MS = 120000;
   let sequentialRequestSeq = 0;
   let unclaimedSequentialImageEvents = 0;
@@ -27,6 +30,92 @@
   let alternativeDanbooruAutocomplete = true;
   let triggerTab = false;
   let triggerSpace = true;
+
+  function normalizeSequentialStepValue(value) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 1 ? parsed : 1;
+  }
+
+  function normalizeSequentialStepSettings(rawSettings = {}) {
+    const normalized = {};
+    Object.entries(rawSettings || {}).forEach(([key, value]) => {
+      if (!key) return;
+      const step = normalizeSequentialStepValue(value);
+      if (step > 1) normalized[key] = step;
+    });
+    return normalized;
+  }
+
+  function normalizeSequentialStepProgressValue(value) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function postSequentialStepProgressUpdate() {
+    window.postMessage({
+      type: '__UPDATE_SEQUENTIAL_STEP_PROGRESS__',
+      progress: sequentialStepProgress
+    }, '*');
+  }
+
+  function reconcileSequentialStepProgress() {
+    let changed = false;
+    const nextProgress = {};
+
+    Object.entries(sequentialStepProgress || {}).forEach(([key, value]) => {
+      if (!key) return;
+      const step = normalizeSequentialStepValue(sequentialStepSettings[key]);
+      if (step <= 1) {
+        changed = true;
+        return;
+      }
+
+      const normalizedValue = Math.min(normalizeSequentialStepProgressValue(value), step - 1);
+      if (normalizedValue > 0) {
+        nextProgress[key] = normalizedValue;
+        if (sequentialStepProgress[key] !== normalizedValue) changed = true;
+      } else if (sequentialStepProgress[key] !== undefined) {
+        changed = true;
+      }
+    });
+
+    if (changed || Object.keys(nextProgress).length !== Object.keys(sequentialStepProgress || {}).length) {
+      sequentialStepProgress = nextProgress;
+      postSequentialStepProgressUpdate();
+    }
+  }
+
+  // ── 随机通配符锁定辅助函数 ──
+
+  function postRandomWildcardLocksUpdate() {
+    window.postMessage({
+      type: '__UPDATE_RANDOM_WILDCARD_LOCKS__',
+      locks: randomWildcardLocks
+    }, '*');
+  }
+
+  // 步长设置变化时清理无效锁定（step 降至 1 的键需释放）
+  function reconcileRandomWildcardLocks() {
+    let changed = false;
+    const next = {};
+    Object.entries(randomWildcardLocks || {}).forEach(([key, lock]) => {
+      const step = normalizeSequentialStepValue(sequentialStepSettings[key]);
+      if (step > 1 && lock && lock.picked) {
+        const progress = Math.min(
+          normalizeSequentialStepProgressValue(lock.progress),
+          step - 1
+        );
+        next[key] = { picked: lock.picked, progress };
+        if (lock.progress !== progress) changed = true;
+      } else {
+        if (randomWildcardLocks[key]) changed = true;
+      }
+    });
+    if (changed || Object.keys(next).length !== Object.keys(randomWildcardLocks || {}).length) {
+      randomWildcardLocks = next;
+      postRandomWildcardLocksUpdate();
+    }
+  }
 
   function getWildcardParentPath(path) {
     const normalized = String(path || '').trim().replace(/^\/+|\/+$/g, '');
@@ -314,6 +403,7 @@
     // 使用外层定义的正则表达式和 containsWildcardSyntax 函数 (Use outer-scope patterns and function)
     let pendingUIResync = false;
     const pendingSequentialUpdates = new Map();
+    const pendingRandomLockUpdates = new Map();
 
     function normalizeSequentialIndex(value, length) {
       if (!length) return 0;
@@ -344,8 +434,8 @@
         // --- Sequential Logic ---
         if (prefix) {
           // Slot identification
-          const slotIdx = slotCounters[effectiveKey] || 0;
-          slotCounters[effectiveKey] = slotIdx + 1;
+          const slotIdx = slotCounters.seq[effectiveKey] || 0;
+          slotCounters.seq[effectiveKey] = slotIdx + 1;
           // Aligned key logic: Slot 0 uses 'name', others use 'name:idx'
           const storageKey = slotIdx === 0 ? effectiveKey : `${effectiveKey}:${slotIdx}`;
 
@@ -365,12 +455,40 @@
           return picked;
         }
 
-        if (effectiveV3) {
-          // deterministic pick
-          return lines[Math.floor(rng() * lines.length)];
+        // --- 随机通配符分支（步长锁定逻辑） ---
+        const rndSlotIdx = slotCounters.rnd[effectiveKey] || 0;
+        slotCounters.rnd[effectiveKey] = rndSlotIdx + 1;
+        const rndKey = rndSlotIdx === 0
+          ? `r:${effectiveKey}`
+          : `r:${effectiveKey}:${rndSlotIdx}`;
+
+        const step = normalizeSequentialStepValue(sequentialStepSettings[rndKey]);
+
+        // step <= 1：纯 seed 随机，完全不变
+        if (step <= 1) {
+          if (effectiveV3) {
+            return lines[Math.floor(rng() * lines.length)];
+          } else {
+            return `||${lines.join('|')}||`;
+          }
+        }
+
+        // step > 1：锁定模式
+        const existingLock = randomWildcardLocks[rndKey];
+        if (existingLock && existingLock.picked) {
+          pendingRandomLockUpdates.set(rndKey, {
+            key: rndKey,
+            action: 'reuse'
+          });
+          return existingLock.picked;
         } else {
-          // keep as NovelAI dynamic syntax
-          return `||${lines.join('|')}||`;
+          const picked = lines[Math.floor(rng() * lines.length)];
+          pendingRandomLockUpdates.set(rndKey, {
+            key: rndKey,
+            action: 'create',
+            picked
+          });
+          return picked;
         }
       });
 
@@ -470,7 +588,7 @@
       let iteration = 0;
       // Per-request slot counters must be consistent for input vs base_caption
       // But we use memoization to ensure same input string gets processed once.
-      const slotCounters = {};
+      const slotCounters = { seq: {}, rnd: {} };
 
       while (containsWildcardSyntax(current) && iteration < 100) {
         const next = swap(current, slotCounters);
@@ -505,7 +623,8 @@
     return {
       deepSwap,
       getPendingUIResync: () => pendingUIResync,
-      getSequentialUpdates: () => Array.from(pendingSequentialUpdates.values())
+      getSequentialUpdates: () => Array.from(pendingSequentialUpdates.values()),
+      getRandomLockUpdates: () => Array.from(pendingRandomLockUpdates.values())
     };
   }
 
@@ -528,7 +647,8 @@
 
   function queueSequentialTransaction(updates = [], options = {}) {
     pruneExpiredSequentialTransactions();
-    if (!Array.isArray(updates) || updates.length === 0) return null;
+    if ((!Array.isArray(updates) || updates.length === 0) &&
+        (!Array.isArray(options.randomLockUpdates) || options.randomLockUpdates.length === 0)) return null;
 
     const id = `seq_${Date.now().toString(36)}_${(sequentialRequestSeq++).toString(36)}`;
     pendingSequentialTransactions.push({
@@ -536,6 +656,7 @@
       createdAt: Date.now(),
       status: 'awaiting-response',
       updates,
+      randomLockUpdates: options.randomLockUpdates || [],
       needsUIResync: !!options.needsUIResync
     });
     return id;
@@ -560,18 +681,109 @@
     }, '*');
   }
 
+  function notifyGenerationResponse() {
+    window.postMessage({
+      type: '__NAI_GENERATION_RESPONSE__'
+    }, '*');
+  }
+
+  function notifyGenerationRequest() {
+    window.postMessage({
+      type: '__NAI_GENERATION_REQUEST__'
+    }, '*');
+  }
+
+  function applySequentialSuccessProgress(update) {
+    if (!update?.name) return false;
+
+    const step = normalizeSequentialStepValue(sequentialStepSettings[update.name]);
+    const currentProgress = normalizeSequentialStepProgressValue(sequentialStepProgress[update.name]);
+    let progressChanged = false;
+
+    if (step <= 1) {
+      if (sequentialStepProgress[update.name] !== undefined) {
+        delete sequentialStepProgress[update.name];
+        progressChanged = true;
+      }
+      applySequentialCounterUpdate(update);
+      return progressChanged;
+    }
+
+    const nextProgress = (currentProgress % step) + 1;
+    if (nextProgress >= step) {
+      if (sequentialStepProgress[update.name] !== undefined) {
+        delete sequentialStepProgress[update.name];
+        progressChanged = true;
+      }
+      applySequentialCounterUpdate(update);
+      return progressChanged;
+    }
+
+    if (sequentialStepProgress[update.name] !== nextProgress) {
+      sequentialStepProgress[update.name] = nextProgress;
+      progressChanged = true;
+    }
+
+    return progressChanged;
+  }
+
+  // 随机通配符锁定 progress 推进
+  function applyRandomLockSuccessProgress(update) {
+    if (!update?.key) return false;
+    const step = normalizeSequentialStepValue(sequentialStepSettings[update.key]);
+    let changed = false;
+
+    if (step <= 1) {
+      // step 已变回 1，释放锁定
+      if (randomWildcardLocks[update.key]) {
+        delete randomWildcardLocks[update.key];
+        changed = true;
+      }
+      return changed;
+    }
+
+    if (update.action === 'create') {
+      // 新建锁定，progress=1（本次已使用一次）
+      randomWildcardLocks[update.key] = { picked: update.picked, progress: 1 };
+      return true;
+    }
+
+    if (update.action === 'reuse') {
+      const lock = randomWildcardLocks[update.key];
+      if (!lock) return false;
+      const nextProgress = (lock.progress || 0) + 1;
+      if (nextProgress >= step) {
+        // 达到步长，释放锁定
+        delete randomWildcardLocks[update.key];
+        return true;
+      }
+      lock.progress = nextProgress;
+      return true;
+    }
+    return false;
+  }
+
   function flushReadySequentialTransactions() {
     pruneExpiredSequentialTransactions();
+    let progressChanged = false;
+    let lockChanged = false;
     while (unclaimedSequentialImageEvents > 0) {
       const idx = pendingSequentialTransactions.findIndex(tx => tx.status === 'ready');
       if (idx === -1) break;
       const [tx] = pendingSequentialTransactions.splice(idx, 1);
-      tx.updates.forEach(applySequentialCounterUpdate);
+      tx.updates.forEach((update) => {
+        if (applySequentialSuccessProgress(update)) progressChanged = true;
+      });
+      (tx.randomLockUpdates || []).forEach((update) => {
+        if (applyRandomLockSuccessProgress(update)) lockChanged = true;
+      });
       if (tx.needsUIResync) {
         setTimeout(cleanNumericPrefixesFromUI, 100);
       }
       unclaimedSequentialImageEvents--;
     }
+    if (progressChanged) postSequentialStepProgressUpdate();
+    if (lockChanged) postRandomWildcardLocksUpdate();
     resetSequentialImageCreditsIfIdle();
   }
 
@@ -719,10 +931,13 @@
   const $fetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     let sequentialTransactionId = null;
+    let isGenerateRequest = false;
     try {
       const url = typeof input === 'string' ? input : input.url;
       const m = (init.method || input.method || 'GET').toUpperCase();
       if (m === 'POST' && url.startsWith(TARGET)) {
+        isGenerateRequest = true;
+        notifyGenerationRequest();
         const patchedBody = await extractGenerateRequestBody(
           init.body,
           input instanceof Request ? input : null
@@ -738,7 +953,7 @@
           json = swapper.deepSwap(json);
           sequentialTransactionId = queueSequentialTransaction(
             swapper.getSequentialUpdates(),
-            { needsUIResync: swapper.getPendingUIResync() }
+            { needsUIResync: swapper.getPendingUIResync(), randomLockUpdates: swapper.getRandomLockUpdates() }
           );
 
           /* ② img2img 메타데이터 반영 (应用 img2img 元数据) */      // <<< NEW
@@ -800,9 +1015,17 @@
 
     return $fetch(input, init)
       .then((response) => {
-        if (sequentialTransactionId) {
-          if (response?.ok) markSequentialTransactionReady(sequentialTransactionId);
-          else dropSequentialTransaction(sequentialTransactionId);
+        if (response?.ok) {
+          if (sequentialTransactionId) {
+            markSequentialTransactionReady(sequentialTransactionId);
+          }
+          if (isGenerateRequest) {
+            notifyGenerationResponse();
+          }
+        } else if (sequentialTransactionId) {
+          if (!response?.ok) {
+            dropSequentialTransaction(sequentialTransactionId);
+          }
         }
         return response;
       })
@@ -823,9 +1046,23 @@
 
   XMLHttpRequest.prototype.send = function (body) {
     let sequentialTransactionId = null;
+    const isGenerateRequest = this.__wild_m?.toUpperCase() === 'POST' &&
+      this.__wild_u?.startsWith(TARGET);
+    if (isGenerateRequest) {
+      notifyGenerationRequest();
+      this.addEventListener('loadend', () => {
+        if (this.status >= 200 && this.status < 300) {
+          if (sequentialTransactionId) {
+            markSequentialTransactionReady(sequentialTransactionId);
+          }
+          notifyGenerationResponse();
+        } else if (sequentialTransactionId) {
+          dropSequentialTransaction(sequentialTransactionId);
+        }
+      }, { once: true });
+    }
     try {
-      if (this.__wild_m?.toUpperCase() === 'POST' &&
-        this.__wild_u?.startsWith(TARGET) &&
+      if (isGenerateRequest &&
         typeof body === 'string') {
 
         let json = JSON.parse(body);
@@ -837,7 +1074,7 @@
         json = swapper.deepSwap(json);
         sequentialTransactionId = queueSequentialTransaction(
           swapper.getSequentialUpdates(),
-          { needsUIResync: swapper.getPendingUIResync() }
+          { needsUIResync: swapper.getPendingUIResync(), randomLockUpdates: swapper.getRandomLockUpdates() }
         );
 
         /* ② Multi-Resolution 动态替换 (多选分辨率注入) */
@@ -871,15 +1108,6 @@
         }
 
         const newBody = JSON.stringify(json);
-        if (sequentialTransactionId) {
-          this.addEventListener('loadend', () => {
-            if (this.status >= 200 && this.status < 300) {
-              markSequentialTransactionReady(sequentialTransactionId);
-            } else {
-              dropSequentialTransaction(sequentialTransactionId);
-            }
-          }, { once: true });
-        }
         return $send.call(this, newBody);
       }
     } catch (e) {
@@ -1068,6 +1296,25 @@
     }
 
     // 옵션 초기화 및 업데이트 처리 (选项初始化及更新处理)
+    if (type === '__SEQUENTIAL_STEP_SETTINGS_UPDATE__') {
+      sequentialStepSettings = normalizeSequentialStepSettings(e.data.sequentialStepSettings || {});
+      sequentialStepProgress = e.data.sequentialStepProgress && typeof e.data.sequentialStepProgress === 'object'
+        ? e.data.sequentialStepProgress
+        : sequentialStepProgress;
+      reconcileSequentialStepProgress();
+      reconcileRandomWildcardLocks();  // 步长变化时清理无效锁定
+      return;
+    }
+
+    // 从 popup 端手动设置顺序通配符计数器
+    if (type === '__SET_SEQUENTIAL_COUNTER__') {
+      const { name, value } = e.data;
+      if (name) {
+        sequentialCounters[name] = value;
+      }
+      return;
+    }
+
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
       dict = map || {};
       rebuildWildcardFolderList(typeof folders !== 'undefined' ? folders : wildcardFolders, dict);
@@ -1081,6 +1328,15 @@
       if (e.data.sequentialCounters) {
         sequentialCounters = e.data.sequentialCounters;
       }
+      sequentialStepSettings = normalizeSequentialStepSettings(e.data.sequentialStepSettings || {});
+      sequentialStepProgress = e.data.sequentialStepProgress && typeof e.data.sequentialStepProgress === 'object'
+        ? e.data.sequentialStepProgress
+        : {};
+      reconcileSequentialStepProgress();
+      if (e.data.randomWildcardLocks && typeof e.data.randomWildcardLocks === 'object') {
+        randomWildcardLocks = e.data.randomWildcardLocks;
+      }
+      reconcileRandomWildcardLocks();
 
       if (e.data.multiResConfig !== undefined) {
         window.__multiResConfig = e.data.multiResConfig;

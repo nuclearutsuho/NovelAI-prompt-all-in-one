@@ -24,6 +24,10 @@ let maxCharacters = 6;
 let isShortMode = false;
 let isInputShortMode = false;
 let currentSequentialCounters = {};
+let currentSequentialStepProgress = {};
+let currentRandomWildcardLocks = {};
+
+let currentSequentialStepSettings = {};
 let popupToastTimer = null;
 let popupToastFrame = null;
 
@@ -203,10 +207,12 @@ const ToolbarConfigManager = {
   // Mock data for different simulation scenes
   SIMULATED_CONTEXTS: {
     standard: {
-      tag: { value: 'tag' },
+      tag: { value: 's__poses__' },
       ctx: { 
         isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, isDynSeparator: false,
-        canAnnotate: true, canSplit: true, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
+        canAnnotate: true, canSplit: true, isMultiSelect: false, hasWeight: true, weightVal: 1.0,
+        wildcardInfo: { name: 'poses', slot: 0, key: 'poses', count: 0, step: 1, isSequential: true },
+        editorInstance: null,
         titles: { 
           decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
           decDynWeightTitle: '减少选中项权重', editDynWeightTitle: '编辑选中项权重', incDynWeightTitle: '增加选中项权重',
@@ -218,7 +224,9 @@ const ToolbarConfigManager = {
       tag: { value: 'tag', aiOriginal: '某个中文原文' },
       ctx: { 
         isAiPending: false, isAiPendingFailed: false, isNewline: false, isCompHeader: false, isCompFooter: false, isDynHeader: false, isDynFooter: false, isDynMember: false, isDynSeparator: false,
-        canAnnotate: false, canSplit: false, isMultiSelect: false, hasWeight: true, weightVal: 1.0, 
+        canAnnotate: false, canSplit: false, isMultiSelect: false, hasWeight: true, weightVal: 1.0,
+        wildcardInfo: null,
+        editorInstance: null,
         titles: { 
           decWeightTitle: '减少权重', editWeightTitle: '编辑权重', incWeightTitle: '增加权重',
           decDynWeightTitle: '减少选中项权重', editDynWeightTitle: '编辑选中项权重', incDynWeightTitle: '增加选中项权重',
@@ -247,7 +255,7 @@ const ToolbarConfigManager = {
 
     const data = await chrome.storage.local.get(['toolbarConfig']);
     const defaultConfig = {
-      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'insertDynSeparator', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
+      order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'insertDynSeparator', 'seqStep', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
       stickyIds: ['del'],
       hiddenIds: [],
       sceneHiddenIds: { standard: [], ai: [] }
@@ -275,9 +283,17 @@ const ToolbarConfigManager = {
       needsSave = true;
     }
 
+    // Migrate: inject 'seqStep' if not present in existing saved configs
+    if (this.config.order && !this.config.order.includes('seqStep')) {
+      const anchor = this.config.order.indexOf('smartGroup');
+      const insertAt = anchor !== -1 ? anchor : Math.max(0, this.config.order.indexOf('del'));
+      this.config.order.splice(insertAt, 0, 'seqStep');
+      needsSave = true;
+    }
+
     // Migrate: 清理可能被误放入 hiddenIds / sceneHiddenIds 的核心按钮
     // 这些按钮由 showFor 逻辑自行控制可见性，不应该被设置面板隐藏
-    const protectedIds = ['weight', 'dynWeight', 'insertDynSeparator'];
+    const protectedIds = ['weight', 'dynWeight', 'insertDynSeparator', 'seqStep'];
     if (this.config.hiddenIds) {
       const before = this.config.hiddenIds.length;
       this.config.hiddenIds = this.config.hiddenIds.filter(id => !protectedIds.includes(id));
@@ -845,16 +861,74 @@ window.addEventListener('pagehide', () => {
   promptSyncController?.destroy();
 });
 
-function applySequentialCountersToEditors(counters) {
-  currentSequentialCounters = counters || {};
+function applyRuntimeStateToEditors() {
   if (editor) {
-    editor.setSequentialCounters(currentSequentialCounters);
+    if (editor.setSequentialCounters) editor.setSequentialCounters(currentSequentialCounters);
+    if (editor.setSequentialStepProgress) editor.setSequentialStepProgress(currentSequentialStepProgress);
+    if (editor.setRandomWildcardLocks) editor.setRandomWildcardLocks(currentRandomWildcardLocks);
   }
   charEditors.forEach((charEditorObj) => {
     if (charEditorObj?.editor) {
-      charEditorObj.editor.setSequentialCounters(currentSequentialCounters);
+      if (charEditorObj.editor.setSequentialCounters) charEditorObj.editor.setSequentialCounters(currentSequentialCounters);
+      if (charEditorObj.editor.setSequentialStepProgress) charEditorObj.editor.setSequentialStepProgress(currentSequentialStepProgress);
+      if (charEditorObj.editor.setRandomWildcardLocks) charEditorObj.editor.setRandomWildcardLocks(currentRandomWildcardLocks);
     }
   });
+}
+
+function normalizeSequentialStepValue(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 1 ? parsed : 1;
+}
+
+function normalizeSequentialStepSettings(settings) {
+  const normalized = {};
+  Object.entries(settings || {}).forEach(([key, value]) => {
+    if (!key) return;
+    const step = normalizeSequentialStepValue(value);
+    if (step > 1) normalized[key] = step;
+  });
+  return normalized;
+}
+
+function applySequentialStepSettingsToEditors(settings) {
+  currentSequentialStepSettings = normalizeSequentialStepSettings(settings);
+  if (editor) {
+    editor.setSequentialStepSettings(currentSequentialStepSettings);
+  }
+  charEditors.forEach((charEditorObj) => {
+    if (charEditorObj?.editor) {
+      charEditorObj.editor.setSequentialStepSettings(currentSequentialStepSettings);
+    }
+  });
+}
+
+async function saveSequentialStepSetting(key, value) {
+  if (!key) return;
+  const nextSettings = { ...currentSequentialStepSettings };
+  const normalizedValue = normalizeSequentialStepValue(value);
+  if (normalizedValue > 1) nextSettings[key] = normalizedValue;
+  else delete nextSettings[key];
+  applySequentialStepSettingsToEditors(nextSettings);
+  await chrome.storage.local.set({ sequentialStepSettings: nextSettings });
+}
+
+async function saveSequentialCounter(name, value) {
+  if (!name) return;
+  const parsed = Number.parseInt(value, 10);
+  const normalizedValue = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  // 更新本地缓存
+  currentSequentialCounters[name] = normalizedValue;
+  applyRuntimeStateToEditors();
+  // 发送到 content script（bridge.js）同步到 injector
+  const activeTab = await getActiveTab();
+  if (activeTab?.id) {
+    chrome.tabs.sendMessage(activeTab.id, {
+      type: 'SET_SEQUENTIAL_COUNTER',
+      name,
+      value: normalizedValue
+    });
+  }
 }
 
 function getActiveTab() {
@@ -869,29 +943,33 @@ function getActiveTab() {
   });
 }
 
-function getSequentialCountersFromTab(tabId) {
+function getRuntimeStateFromTab(tabId) {
   return new Promise((resolve) => {
     if (!chrome.tabs || !tabId) {
       resolve({});
       return;
     }
-    chrome.tabs.sendMessage(tabId, { type: 'GET_SEQUENTIAL_COUNTERS' }, (response) => {
+    chrome.tabs.sendMessage(tabId, { type: 'GET_RUNTIME_STATE' }, (response) => {
       if (chrome.runtime.lastError) {
         resolve({});
         return;
       }
-      resolve(response?.sequentialCounters || {});
+      resolve(response || {});
     });
   });
 }
 
-async function refreshSequentialCountersFromActiveTab() {
+async function refreshRuntimeStateFromActiveTab() {
   const activeTab = await getActiveTab();
   if (!activeTab?.id) {
-    applySequentialCountersToEditors({});
+    applyRuntimeStateToEditors();
     return;
   }
-  applySequentialCountersToEditors(await getSequentialCountersFromTab(activeTab.id));
+  const state = await getRuntimeStateFromTab(activeTab.id);
+  currentSequentialCounters = state.sequentialCounters || {};
+  currentSequentialStepProgress = state.sequentialStepProgress || {};
+  currentRandomWildcardLocks = state.randomWildcardLocks || {};
+  applyRuntimeStateToEditors();
 }
 
 function shouldIgnoreRuntimeMessage(msg) {
@@ -901,7 +979,7 @@ function shouldIgnoreRuntimeMessage(msg) {
 }
 
 async function initData() {
-  const data = await chrome.storage.local.get(['promptHistory']);
+  const data = await chrome.storage.local.get(['promptHistory', 'sequentialStepSettings']);
   const activeTab = await getActiveTab();
   const historyScopeId = isEmbeddedPopup && popupHostSessionId
     ? `host:${popupHostSessionId}`
@@ -916,7 +994,8 @@ async function initData() {
     });
   }
 
-  await refreshSequentialCountersFromActiveTab();
+  applySequentialStepSettingsToEditors(data.sequentialStepSettings || {});
+  await refreshRuntimeStateFromActiveTab();
 
   // ===== 同步页面存活状态指示器 =====
   const libraryBtn = document.getElementById('btn-library');
@@ -947,6 +1026,9 @@ async function initData() {
             if (c.editor) c.editor.render();
           });
         });
+      }
+      if (changes.sequentialStepSettings) {
+        applySequentialStepSettingsToEditors(changes.sequentialStepSettings.newValue || {});
       }
       // 同步页面存活状态变化时，实时更新按钮指示器
       if (changes.syncPageActive) {
@@ -1102,6 +1184,8 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       tags
     }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
+    onSequentialStepChange: (key, value) => saveSequentialStepSetting(key, value),
+    onSequentialCounterChange: (name, value) => saveSequentialCounter(name, value),
     onChange: (tags) => {
       const active = charEditors[index]?.activeTab || 'pos';
       // 检测是否为结构性变更（tag 数量变化）
@@ -1124,6 +1208,9 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
     }
   });
   charEditor.setSequentialCounters(currentSequentialCounters);
+  charEditor.setSequentialStepSettings(currentSequentialStepSettings);
+  if (charEditor.setSequentialStepProgress) charEditor.setSequentialStepProgress(currentSequentialStepProgress);
+  if (charEditor.setRandomWildcardLocks) charEditor.setRandomWildcardLocks(currentRandomWildcardLocks);
 
   // ── 焦点追踪：点击角色编辑器容器时设为活动目标 ──
   editorContainer.addEventListener('mousedown', () => {
@@ -1636,6 +1723,8 @@ async function initUI() {
       tags
     }),
     onAddToGroupTags: (tagData) => groupTagsController?.addTagToGroupTags(tagData),
+    onSequentialStepChange: (key, value) => saveSequentialStepSetting(key, value),
+    onSequentialCounterChange: (name, value) => saveSequentialCounter(name, value),
     onChange: (tags) => {
       // 检测是否为结构性变更（tag 数量变化 = 增删操作）
       const prevTags = currentMode === 'positive' ? positiveTags : negativeTags;
@@ -1647,6 +1736,9 @@ async function initUI() {
       syncActiveTagsToPanel();
     }
   });
+  editor.setSequentialStepSettings(currentSequentialStepSettings);
+  if (editor.setSequentialStepProgress) editor.setSequentialStepProgress(currentSequentialStepProgress);
+  if (editor.setRandomWildcardLocks) editor.setRandomWildcardLocks(currentRandomWildcardLocks);
 
   // Bind Autocomplete to Editor (for inline edit)
   editor.bindAutocomplete(autocomplete);
@@ -2958,12 +3050,15 @@ function initCommunication() {
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (shouldIgnoreRuntimeMessage(msg)) return;
-    if (msg.type === 'SEQUENTIAL_COUNTERS_UPDATED') {
+    if (msg.type === 'RUNTIME_STATE_UPDATED') {
       const senderTabId = sender?.tab?.id;
       if (senderTabId) {
         getActiveTab().then((activeTab) => {
           if (activeTab?.id === senderTabId) {
-            applySequentialCountersToEditors(msg.counters || {});
+            currentSequentialCounters = msg.counters || {};
+            currentSequentialStepProgress = msg.stepProgress || {};
+            currentRandomWildcardLocks = msg.randomLocks || {};
+            applyRuntimeStateToEditors();
           }
         });
       }
