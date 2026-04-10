@@ -405,12 +405,14 @@
     const pendingSequentialUpdates = new Map();
     const pendingRandomLockUpdates = new Map();
 
+    const globalSlotCounters = { seq: {}, rnd: {} };
+
     function normalizeSequentialIndex(value, length) {
       if (!length) return 0;
       return ((value % length) + length) % length;
     }
 
-    function swap(txt, slotCounters) {
+    function swap(txt) {
       // 1) [sS]?(\d+)?__token__ lines → pick one line OR sequentially
       let result = txt.replace(/([sS])?(\d+)?__([A-Za-z0-9_\/\.\-\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+)__/g, (match, prefix, startNum, name) => {
         let effectiveKey = name;
@@ -434,8 +436,8 @@
         // --- Sequential Logic ---
         if (prefix) {
           // Slot identification
-          const slotIdx = slotCounters.seq[effectiveKey] || 0;
-          slotCounters.seq[effectiveKey] = slotIdx + 1;
+          const slotIdx = globalSlotCounters.seq[effectiveKey] || 0;
+          globalSlotCounters.seq[effectiveKey] = slotIdx + 1;
           // Aligned key logic: Slot 0 uses 'name', others use 'name:idx'
           const storageKey = slotIdx === 0 ? effectiveKey : `${effectiveKey}:${slotIdx}`;
 
@@ -456,8 +458,8 @@
         }
 
         // --- 随机通配符分支（步长锁定逻辑） ---
-        const rndSlotIdx = slotCounters.rnd[effectiveKey] || 0;
-        slotCounters.rnd[effectiveKey] = rndSlotIdx + 1;
+        const rndSlotIdx = globalSlotCounters.rnd[effectiveKey] || 0;
+        globalSlotCounters.rnd[effectiveKey] = rndSlotIdx + 1;
         const rndKey = rndSlotIdx === 0
           ? `r:${effectiveKey}`
           : `r:${effectiveKey}:${rndSlotIdx}`;
@@ -586,12 +588,9 @@
     function recursiveSwap(txt) {
       let current = txt;
       let iteration = 0;
-      // Per-request slot counters must be consistent for input vs base_caption
-      // But we use memoization to ensure same input string gets processed once.
-      const slotCounters = { seq: {}, rnd: {} };
 
       while (containsWildcardSyntax(current) && iteration < 100) {
-        const next = swap(current, slotCounters);
+        const next = swap(current);
         if (next === current) break;
         current = next;
         iteration++;
@@ -600,20 +599,21 @@
     }
 
     const memo = new Map();
-    const deepSwap = o => {
+    const deepSwap = (o, path = '') => {
       if (typeof o === 'string') {
-        if (memo.has(o)) return memo.get(o);
+        const isChar = path.includes('characterPrompts') || path.includes('char_captions');
+        if (!isChar && memo.has(o)) return memo.get(o);
         const processed = recursiveSwap(o);
-        memo.set(o, processed);
+        if (!isChar) memo.set(o, processed);
         return processed;
       }
-      if (Array.isArray(o)) return o.map(deepSwap);
+      if (Array.isArray(o)) return o.map((item, idx) => deepSwap(item, `${path}[${idx}]`));
       if (o && typeof o === 'object') {
         for (const k in o) {
-          o[k] = deepSwap(o[k]);
           if (k === 'char_captions' && Array.isArray(o[k]) && o[k].length > 6) {
             o[k] = o[k].slice(0, 6);
           }
+          o[k] = deepSwap(o[k], path ? `${path}.${k}` : k);
         }
         return o;
       }

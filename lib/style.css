@@ -1611,7 +1611,7 @@
 #char-list-container {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;    /* 之前是 8px */
     padding: 0 0 8px 0;
     flex: 1;
     box-sizing: border-box;
@@ -1626,12 +1626,12 @@
     background: #181825;
     border: 1px solid #4a4a6a;
     border-radius: 6px;
-    overflow: hidden;
+    overflow: visible; /* Changed from hidden to allow toolbars to overlap adjecent blocks */
     display: flex;
     margin: 0 8px;
     flex-direction: column;
-    /* Allow to grow into empty space (1) but never shrink (0) below its text content */
-    flex: 1 0 auto;
+    /* 不再吸收多余高度 */
+    flex: 0 0 auto; 
 }
 
 .char-input-area {
@@ -1640,6 +1640,7 @@
     gap: 6px;
     background: #2a2a3e;
     border-bottom: 1px solid #4a4a6a;
+    border-radius: 5px 5px 0 0; /* Maintain curve without overflow:hidden */
     align-items: center;
 }
 
@@ -1715,12 +1716,17 @@
 }
 
 .char-editor-container {
-    padding: 4px;
+    padding: 2px !important;
     background: #181825;
-    min-height: 48px;
-    /* Fill any remaining space within the char-prompt-block when it grows */
-    flex: 1 0 auto;
+    min-height: 32px !important;
+    border-radius: 0 0 5px 5px; /* Maintain curve without overflow:hidden */
+    flex: 0 0 auto; 
     transition: background-color 0.2s;
+}
+
+/* 压榨角色框标签列表的周围留白 */
+.char-editor-container .tag-list {
+    padding: 6px 20px 6px 6px !important;
 }
 
 /* Red tint when negative tab is active */
