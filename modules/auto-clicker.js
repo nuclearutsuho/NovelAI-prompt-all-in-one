@@ -40,7 +40,7 @@
   let intervalInputEl = null;
   let randomInputEl = null;
   let timeStrEl = null; // 生成耗时显示元素
-  const pendingGenerateTimes = [];
+  let lastPendingGenerateTime = 0;
   let lastGenerateRecordAt = 0;
   let spanTimingTextEl = null; // 折叠态耗时文本
 
@@ -56,13 +56,21 @@
   function recordGenerateStart(now = performance.now(), { force = false } = {}) {
     if (!force && (now - lastGenerateRecordAt) < 800) return;
     lastGenerateRecordAt = now;
-    pendingGenerateTimes.push(now);
+    // 直接覆盖：每次新请求都替换上一次的时间戳
+    // 这样即使上一次请求失败了也不会产生残留
+    lastPendingGenerateTime = now;
   }
 
   function settleGenerateTiming(now = performance.now()) {
-    if (pendingGenerateTimes.length === 0) return false;
-    const startedAt = pendingGenerateTimes.shift();
+    if (lastPendingGenerateTime === 0) return false;
+    const startedAt = lastPendingGenerateTime;
+    lastPendingGenerateTime = 0;
     const waitTimeSec = ((now - startedAt) / 1000).toFixed(1);
+    // 额外保护：如果计算出的耗时超过合理范围（120 秒），丢弃该数据
+    if (parseFloat(waitTimeSec) > 120) {
+      console.warn('[AutoClicker] 丢弃异常耗时数据:', waitTimeSec, 's');
+      return false;
+    }
     if (timeStrEl) timeStrEl.textContent = `⏱ ${waitTimeSec}s`;
     return true;
   }
@@ -889,7 +897,7 @@
         if (interval) clearTimeout(interval);
         interval = null;
         cancelPendingWaits();
-        currentLoop = 0; imageCount = 0; pendingGenerateTimes.length = 0; lastGenerateRecordAt = 0;
+        currentLoop = 0; imageCount = 0; lastPendingGenerateTime = 0; lastGenerateRecordAt = 0;
         if (imgCounterEl) imgCounterEl.textContent = '📷 0';
         if (timeStrEl) timeStrEl.textContent = '⏱ --s';
         const v = parseInt(inputLoops.value, 10);
