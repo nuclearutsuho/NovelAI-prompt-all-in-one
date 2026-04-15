@@ -35,6 +35,16 @@
   let runToken = 0;
   const ON_IMAGE_TIMEOUT_MS = 25000;
 
+  // ─── 循环次数硬上限（防止 NAI 账号被封禁） ────────────────────
+  const LOOP_HARD_CAP = 500;
+  let devMode = false;          // 开发者模式：解除上限限制
+
+  // ─── 生成错误检测与重试机制 ───────────────────────────
+  const RETRY_MAX = 10;          // 每次失败后最多重试次数
+  const RETRY_INTERVAL = 5000;  // 重试间隔（5秒）
+  const RETRYABLE_CODES = new Set([429, 500]); // 可重试的 HTTP 错误码
+  let lastGenerationError = null; // 最近一次生成错误的状态码（null = 无错误）
+
   let startBtnEl = null;
   let modeBtnEl = null;
   let intervalInputEl = null;
@@ -52,6 +62,35 @@
   };
 
   const imageWaiters = new Set();
+
+  let keepAliveCtx = null;
+
+  function enableBackgroundKeepAlive() {
+    if (keepAliveCtx) return;
+    try {
+      // 使用 Web Audio API 防止 Chrome 后台标签页定时器节流
+      keepAliveCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = keepAliveCtx.createOscillator();
+      const gainNode = keepAliveCtx.createGain();
+      gainNode.gain.value = 0.001; // 极低音量（接近静音）
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(keepAliveCtx.destination);
+      oscillator.start();
+      
+      console.log('[AutoClicker] 后台保活 AudioContext 已启动');
+    } catch (e) {
+      console.warn('[AutoClicker] 无法启动后台保活:', e);
+    }
+  }
+
+  function disableBackgroundKeepAlive() {
+    if (keepAliveCtx) {
+      keepAliveCtx.close();
+      keepAliveCtx = null;
+      console.log('[AutoClicker] 后台保活 AudioContext 已关闭');
+    }
+  }
 
   function recordGenerateStart(now = performance.now(), { force = false } = {}) {
     if (!force && (now - lastGenerateRecordAt) < 800) return;
@@ -202,8 +241,9 @@
     if (maxLoops > 0) {
       loopCounterEl.textContent = `${currentLoop}/${maxLoops}`;
     } else {
-      // 无限模式：对于极简面板，可以显示更好看的样式
-      loopCounterEl.textContent = `${currentLoop}/∞`;
+      // 无限模式：显示当前进度/硬上限（开发者模式则显示 ∞）
+      const cap = devMode ? '∞' : LOOP_HARD_CAP;
+      loopCounterEl.textContent = `${currentLoop}/${cap}`;
     }
   }
 
@@ -289,6 +329,21 @@
     }
   }
 
+  /**
+   * 当检测到生成错误（如 429/500）时，立即唤醒所有正在等待新图片的 waiter。
+   * 这样就不需要傻等 25 秒超时才发现失败，可以立即进入重试流程。
+   */
+  function notifyErrorWaiters() {
+    if (imageWaiters.size === 0) return;
+    for (const waiter of imageWaiters) {
+      if (waiter.done) continue;
+      waiter.done = true;
+      clearTimeout(waiter.timeoutId);
+      waiter.resolve(false);  // 返回 false 表示没有拿到新图片
+      imageWaiters.delete(waiter);
+    }
+  }
+
   function waitForNewImage(prevCount, timeoutMs, token) {
     return new Promise(resolve => {
       const waiter = { prevCount, token, resolve, timeoutId: null, done: false };
@@ -323,6 +378,7 @@
     if (interval) clearTimeout(interval);
     interval = null;
     cancelPendingWaits();
+    disableBackgroundKeepAlive();
     if (startBtnEl) startBtnEl.textContent = '▶';
     if (reason) console.log('[AutoClicker] stopped:', reason);
   }
@@ -537,6 +593,73 @@
   }
 
   /**
+   * 显示循环上限警告对话框（只弹出一次）。
+   * 说明为何限制为 LOOP_HARD_CAP 次，防止用户因过量请求被 NAI 封号。
+   */
+  function showLoopCapWarning() {
+    const BG    = 'rgb(34, 37, 63)';
+    const FG    = 'rgb(245, 243, 194)';
+    const BORDER = `0.5px solid ${FG}`;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'nai-loop-cap-dialog';
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0',
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      zIndex: '99999',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    });
+
+    const box = document.createElement('div');
+    Object.assign(box.style, {
+      backgroundColor: BG,
+      border: BORDER,
+      borderRadius: '6px',
+      padding: '20px 28px',
+      color: FG,
+      fontFamily: 'Source Sans Pro, sans-serif',
+      fontSize: '14px',
+      maxWidth: '360px',
+      textAlign: 'center',
+      lineHeight: '1.6',
+    });
+
+    const titleText = (autoClickerI18n.loopCapTitle || '单次任务上限为 {cap} 次').replace('{cap}', `<span style="color:#f5c842;font-size:18px">${LOOP_HARD_CAP}</span>`);
+    const reason1 = autoClickerI18n.loopCapReason1 || 'NovelAI 对短时间内的大量图片生成请求设有频率限制。';
+    const reason2 = autoClickerI18n.loopCapReason2 || '超过阈值可能导致账号一直被永久限制。';
+    const reason3 = (autoClickerI18n.loopCapReason3 || '为保护您的账号安全，单次自动连点任务的上限已被设置为 {cap} 次。').replace('{cap}', `<strong style="color:#f5c842">${LOOP_HARD_CAP}</strong>`);
+    const reason4 = autoClickerI18n.loopCapReason4 || '任务完成后可再次启动新一轮循环。';
+    const okText = autoClickerI18n.loopCapOk || '我知道了';
+
+    box.innerHTML = `
+      <div style="font-size:22px;margin-bottom:10px">🚫</div>
+      <div style="font-size:15px;font-weight:bold;margin-bottom:8px">
+        ${titleText}
+      </div>
+      <div style="opacity:0.85;font-size:12px;line-height:1.7;text-align:left;margin-top:8px;word-break:keep-all;">
+        ${reason1}<br>
+        ${reason2.replace(/(permanent account restriction|永久限制|永久に制限)/i, '<strong style="color:#ff6b6b">$&</strong>')}<br><br>
+        ${reason3}<br>
+        ${reason4}
+      </div>
+    `;
+
+    const btnOk = document.createElement('button');
+    btnOk.textContent = okText;
+    Object.assign(btnOk.style, {
+      padding: '6px 24px', backgroundColor: 'rgb(80,100,170)',
+      color: FG, border: BORDER, borderRadius: '4px',
+      cursor: 'pointer', fontSize: '13px', marginTop: '16px',
+    });
+    btnOk.addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    box.appendChild(btnOk);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+  }
+
+  /**
    * 检查是否需要消耗 Anlas。异步函数，使用自定义对话框而非 confirm()。
    * @returns {Promise<boolean>}
    */
@@ -570,8 +693,10 @@
     if (!isRunning) return;
     const token = runToken;
 
-    if (maxLoops > 0 && currentLoop >= maxLoops) {
-      console.log(`[AutoClicker] Completed ${maxLoops} loops, stopping`);
+    // 计算实际上限：有填数字就取 maxLoops，否则非开发者模式取硬上限
+    const effectiveCap = maxLoops > 0 ? maxLoops : (devMode ? 0 : LOOP_HARD_CAP);
+    if (effectiveCap > 0 && currentLoop >= effectiveCap) {
+      console.log(`[AutoClicker] Completed ${effectiveCap} loops, stopping`);
       stopAutoClicker('completed');
       updateLoopCounter();
       return;
@@ -608,15 +733,88 @@
     }
 
     const prevCount = imageCount;
+    // 重置错误标志：本轮点击已发出，清除上一次残留的错误状态
+    lastGenerationError = null;
+
     let gotImage = await waitForNewImage(prevCount, ON_IMAGE_TIMEOUT_MS, token);
     if (!isRunning || token !== runToken) return;
-    if (!gotImage) {
-      console.warn('[AutoClicker] On-image timeout, retrying once');
-      gotImage = await waitForNewImage(prevCount, ON_IMAGE_TIMEOUT_MS, token);
-      if (!isRunning || token !== runToken) return;
-      if (!gotImage) {
-        console.warn('[AutoClicker] On-image timeout twice, stopping');
-        stopAutoClicker('image-timeout');
+
+    // ── 失败重试机制（仅对可重试的错误码 429/500 或超时触发） ──
+    const isRetryable = !lastGenerationError || RETRYABLE_CODES.has(Number(lastGenerationError));
+    if (!gotImage || lastGenerationError) {
+      const errorStatus = lastGenerationError || 'timeout';
+
+      // 不可重试的错误（如 400/401/403）直接停止
+      if (!isRetryable) {
+        console.error(`[AutoClicker] 不可恢复的错误 (HTTP ${errorStatus})，直接停止`);
+        if (timeStrEl) {
+          timeStrEl.style.backgroundColor = 'rgba(215, 60, 60, 0.85)';
+          timeStrEl.textContent = `❌ Err ${errorStatus}`;
+        }
+        stopAutoClicker('fatal-error');
+        return;
+      }
+
+      console.warn(`[AutoClicker] 生成失败 (${errorStatus})，开始重试机制…`);
+
+      // 视觉反馈：将状态标签变为红色警戒状态
+      const originBg = timeStrEl ? timeStrEl.style.backgroundColor : '';
+      if (timeStrEl) {
+        timeStrEl.style.backgroundColor = 'rgba(215, 60, 60, 0.85)';
+      }
+
+      let retrySuccess = false;
+      for (let attempt = 1; attempt <= RETRY_MAX; attempt++) {
+        if (!isRunning || token !== runToken) break;
+        console.log(`[AutoClicker] 第 ${attempt}/${RETRY_MAX} 次重试，${RETRY_INTERVAL / 1000}秒后重新生成…`);
+
+        if (timeStrEl) {
+          // 在 UI 上显示等待秒数和重试次数
+          timeStrEl.textContent = `⚠️ R${attempt}/${RETRY_MAX} (${RETRY_INTERVAL/1000}s)`;
+        }
+
+        // 等待重试间隔
+        await new Promise(r => setTimeout(r, RETRY_INTERVAL));
+        if (!isRunning || token !== runToken) break;
+
+        // 重置错误标志并重新点击生成
+        lastGenerationError = null;
+        const retryTarget = findGenerateButton();
+        if (retryTarget) {
+          triggerClick(retryTarget);
+          console.log(`[AutoClicker] 重试 #${attempt}: 已点击生成按钮`);
+          if (timeStrEl) timeStrEl.textContent = `⚠️ Wait..`;
+        } else {
+          console.error(`[AutoClicker] 重试 #${attempt}: 未找到生成按钮`);
+          continue;
+        }
+
+        // 等待新图片或错误
+        const retryPrevCount = imageCount;
+        const retryGot = await waitForNewImage(retryPrevCount, ON_IMAGE_TIMEOUT_MS, token);
+        if (!isRunning || token !== runToken) break;
+
+        if (retryGot && !lastGenerationError) {
+          console.log(`[AutoClicker] 重试 #${attempt} 成功！`);
+          retrySuccess = true;
+          break;
+        } else {
+          console.warn(`[AutoClicker] 重试 #${attempt} 失败 (${lastGenerationError || 'timeout'})`);
+        }
+      }
+
+      // 恢复正常的视觉反馈颜色
+      if (timeStrEl) {
+        timeStrEl.style.backgroundColor = originBg;
+      }
+
+      if (!retrySuccess && isRunning && token === runToken) {
+        console.error(`[AutoClicker] ${RETRY_MAX} 次重试均失败，停止连点器`);
+        if (timeStrEl) {
+          timeStrEl.style.backgroundColor = 'rgba(215, 60, 60, 0.85)';
+          timeStrEl.textContent = `❌ Failed`;
+        }
+        stopAutoClicker('retry-exhausted');
         return;
       }
     }
@@ -803,12 +1001,52 @@
     const inputLoops = document.createElement('input');
     inputLoops.type = 'number';
     inputLoops.min  = '1';
+    inputLoops.max  = String(LOOP_HARD_CAP); // 默认上限
     inputLoops.placeholder = '循环';
-    inputLoops.title = '需要连点的总次数，清空为无限';
+    inputLoops.title = `需要连点的总次数（上限 ${LOOP_HARD_CAP}），清空则自动 ${LOOP_HARD_CAP}`;
     inputLoops.className = 'nai-ac-expanded';
     styleInput(inputLoops, { width: '48px', padding: '0 4px', textAlign: 'center' });
     bindCollapseCheck(inputLoops);
     middleWrapper.appendChild(inputLoops);
+
+    // ── 开发者后门：连续快速点击输入框 10 次解锁无限制模式 ──
+    let devClickCount = 0;
+    let devClickTimer = null;
+    inputLoops.addEventListener('click', () => {
+      devClickCount++;
+      clearTimeout(devClickTimer);
+      devClickTimer = setTimeout(() => { devClickCount = 0; }, 600); // 600ms 内完成 10 次
+      if (devClickCount >= 10) {
+        devClickCount = 0;
+        devMode = !devMode; // 切换开发者模式
+        if (devMode) {
+          // 解锁：移除上限，输入框换色
+          inputLoops.removeAttribute('max');
+          inputLoops.style.color = '#00ffaa';
+          inputLoops.style.borderColor = '#00ffaa';
+          inputLoops.style.boxShadow = '0 0 6px rgba(0, 255, 170, 0.4)';
+          inputLoops.placeholder = '∞';
+          inputLoops.title = '🔓 开发者模式已激活 — 无上限限制';
+          console.log('[AutoClicker] 🔓 开发者模式已激活');
+        } else {
+          // 重新锁定
+          inputLoops.max = String(LOOP_HARD_CAP);
+          inputLoops.style.color = FG;
+          inputLoops.style.borderColor = '';
+          inputLoops.style.boxShadow = '';
+          inputLoops.placeholder = '循环';
+          inputLoops.title = `需要连点的总次数（上限 ${LOOP_HARD_CAP}），清空则自动 ${LOOP_HARD_CAP}`;
+          // 如果当前值超过上限，截断
+          const cur = parseInt(inputLoops.value, 10);
+          if (!isNaN(cur) && cur > LOOP_HARD_CAP) {
+            inputLoops.value = String(LOOP_HARD_CAP);
+            maxLoops = LOOP_HARD_CAP;
+          }
+          console.log('[AutoClicker] 🔒 开发者模式已关闭');
+        }
+        updateLoopCounter();
+      }
+    });
 
     // 5. 刷新重绘 (Expanded)
     const btnCustom = document.createElement('button');
@@ -901,19 +1139,41 @@
         if (imgCounterEl) imgCounterEl.textContent = '📷 0';
         if (timeStrEl) timeStrEl.textContent = '⏱ --s';
         const v = parseInt(inputLoops.value, 10);
-        maxLoops = (!isNaN(v) && v > 0) ? v : 0;
+        if (!isNaN(v) && v > 0) {
+          // 非开发者模式下，输入值超过上限时弹出提示并截断
+          if (!devMode && v > LOOP_HARD_CAP) {
+            inputLoops.value = String(LOOP_HARD_CAP);
+            maxLoops = LOOP_HARD_CAP;
+            showLoopCapWarning();
+          } else {
+            maxLoops = v;
+          }
+        } else {
+          maxLoops = 0; // 无限模式（实际受 LOOP_HARD_CAP 保护）
+        }
         updateLoopCounter();
 
         console.log(`[AutoClicker] Starting, target loops: ${maxLoops > 0 ? maxLoops : 'inf'}`);
         isRunning = true; ignoreAnlasWarning = false;
         btnStart.textContent = '⏸';
+        enableBackgroundKeepAlive();
         runAutoClicker();
       }
     });
 
     inputLoops.addEventListener('change', () => {
       const v = parseInt(inputLoops.value, 10);
-      maxLoops = (!isNaN(v) && v > 0) ? v : 0;
+      if (!isNaN(v) && v > 0) {
+        if (!devMode && v > LOOP_HARD_CAP) {
+          inputLoops.value = String(LOOP_HARD_CAP);
+          maxLoops = LOOP_HARD_CAP;
+          showLoopCapWarning();
+        } else {
+          maxLoops = v;
+        }
+      } else {
+        maxLoops = 0;
+      }
       updateLoopCounter();
     });
 
@@ -1042,6 +1302,14 @@
 
     if (type === '__NAI_GENERATION_RESPONSE__') {
       settleGenerateTiming();
+      return;
+    }
+
+    // 生成请求失败（如 HTTP 429）—— 记录错误状态并立即唤醒等待中的 waiter
+    if (type === '__NAI_GENERATION_ERROR__') {
+      lastGenerationError = e.data.status || 'unknown';
+      console.warn(`[AutoClicker] 检测到生成错误: HTTP ${lastGenerationError}`);
+      notifyErrorWaiters();  // 立即唤醒 waitForNewImage，不再傻等超时
       return;
     }
 

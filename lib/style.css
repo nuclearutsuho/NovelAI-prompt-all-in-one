@@ -1722,6 +1722,8 @@
     border-radius: 0 0 5px 5px; /* Maintain curve without overflow:hidden */
     flex: 0 0 auto; 
     transition: background-color 0.2s;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
 }
 
 /* 压榨角色框标签列表的周围留白 */

@@ -2140,7 +2140,13 @@ async function initUI() {
       fixedShort: dict.ac_mode_fixed_short || fallbackDict.ac_mode_fixed_short || 'Fixed',
       onImageShort: dict.ac_mode_on_image_short || fallbackDict.ac_mode_on_image_short || 'On Img',
       fixedTitle: dict.ac_mode_fixed_title || fallbackDict.ac_mode_fixed_title || 'Fixed Interval',
-      onImageTitle: dict.ac_mode_on_image_title || fallbackDict.ac_mode_on_image_title || 'On Image'
+      onImageTitle: dict.ac_mode_on_image_title || fallbackDict.ac_mode_on_image_title || 'On Image',
+      loopCapTitle: dict.ac_loop_cap_title || fallbackDict.ac_loop_cap_title || 'Task limit is {cap} generations',
+      loopCapReason1: dict.ac_loop_cap_reason1 || fallbackDict.ac_loop_cap_reason1 || 'NovelAI has strict rate limits for high-frequency image generation requests.',
+      loopCapReason2: dict.ac_loop_cap_reason2 || fallbackDict.ac_loop_cap_reason2 || 'Exceeding the threshold may result in a permanent account restriction.',
+      loopCapReason3: dict.ac_loop_cap_reason3 || fallbackDict.ac_loop_cap_reason3 || 'To protect your account, the maximum limit for a single auto-clicker task is set to {cap}.',
+      loopCapReason4: dict.ac_loop_cap_reason4 || fallbackDict.ac_loop_cap_reason4 || 'You can start a new loop manually once the task is completed.',
+      loopCapOk: dict.ac_loop_cap_ok || fallbackDict.ac_loop_cap_ok || 'I Understand'
     };
     chrome.storage.local.set({ autoClickerI18n: acI18n });
 

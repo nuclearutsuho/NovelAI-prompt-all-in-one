@@ -687,6 +687,13 @@
     }, '*');
   }
 
+  function notifyGenerationError(status) {
+    window.postMessage({
+      type: '__NAI_GENERATION_ERROR__',
+      status: status || 0
+    }, '*');
+  }
+
   function notifyGenerationRequest() {
     window.postMessage({
       type: '__NAI_GENERATION_REQUEST__'
@@ -1022,15 +1029,19 @@
           if (isGenerateRequest) {
             notifyGenerationResponse();
           }
-        } else if (sequentialTransactionId) {
-          if (!response?.ok) {
+        } else {
+          if (sequentialTransactionId) {
             dropSequentialTransaction(sequentialTransactionId);
+          }
+          if (isGenerateRequest) {
+            notifyGenerationError(response?.status);
           }
         }
         return response;
       })
       .catch((error) => {
         if (sequentialTransactionId) dropSequentialTransaction(sequentialTransactionId);
+        if (isGenerateRequest) notifyGenerationError(0);
         throw error;
       });
   };
@@ -1056,8 +1067,11 @@
             markSequentialTransactionReady(sequentialTransactionId);
           }
           notifyGenerationResponse();
-        } else if (sequentialTransactionId) {
-          dropSequentialTransaction(sequentialTransactionId);
+        } else {
+          if (sequentialTransactionId) {
+            dropSequentialTransaction(sequentialTransactionId);
+          }
+          notifyGenerationError(this.status);
         }
       }, { once: true });
     }
