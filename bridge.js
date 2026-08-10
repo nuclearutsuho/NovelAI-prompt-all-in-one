@@ -4,17 +4,38 @@
   const SESSION_STEP_PROGRESS_KEY = '__nai_aio_sequentialStepProgress__';
   const HOST_SESSION_KEY = '__nai_aio_host_session__';
   const messageProtocol = globalThis.NaiAioMessageProtocol;
+  const runtime = globalThis.NaiAioRuntime;
+  if (!runtime) {
+    console.error('[NAI-Prompt-All-In-One] 运行时生命周期内核未加载，停止初始化 bridge。');
+    return;
+  }
+  const bridgeScope = runtime.acquire('content:bridge');
+  const storageApi = globalThis.NaiAioStorage;
+  if (!storageApi?.createRepository) {
+    console.error('[NAI-Prompt-All-In-One] 扩展存储仓库未加载，停止初始化 bridge。');
+    bridgeScope.dispose('missing-storage-repository');
+    return;
+  }
+  const storageRepository = storageApi.createRepository(chrome.storage.local, { logger: console });
 
   const promptStorageShimReady = new Promise((resolve) => {
+    let settled = false;
+    const finish = (loaded) => {
+      if (settled) return;
+      settled = true;
+      resolve(loaded);
+    };
     const shimScript = document.createElement('script');
     shimScript.src = chrome.runtime.getURL('lib/injected/prompt-storage-shim.js');
-    shimScript.onload = () => { shimScript.remove(); resolve(true); };
+    bridgeScope.ownNode(shimScript);
+    shimScript.onload = () => { shimScript.remove(); finish(true); };
     shimScript.onerror = () => {
       shimScript.remove();
       console.error('[NAI-Prompt-All-In-One] 提示词存储隔离脚本加载失败，扩展将继续初始化。');
-      resolve(false);
+      finish(false);
     };
     (document.head || document.documentElement).appendChild(shimScript);
+    bridgeScope.add(() => finish(false));
   });
 
   function loadScopedSequentialCounters() {
@@ -161,7 +182,7 @@
   }
 
   await promptStorageShimReady;
-  // 1) get settings from storage  ← preservePrompt 포함 (包含 preservePrompt)
+  // 1) 通过统一存储仓库读取并规范化设置。
   let {
     wildcards = {},
     wildcardFolders = [],
@@ -176,7 +197,7 @@
     autoClickerI18n = null,
     hotkeys = null,
     sequentialStepSettings = {}
-  } = await chrome.storage.local.get(['wildcards', 'wildcardFolders', 'wildcardUsageStats', 'v3mode', 'preservePrompt', 'alternativeDanbooruAutocomplete', 'triggerTab', 'triggerSpace', 'multiResConfig', 'hideAutoClicker', 'autoClickerI18n', 'hotkeys', 'sequentialStepSettings']);
+  } = await storageRepository.readBridgeSettings();
   wildcardUsageStats = normalizeWildcardUsageStats(wildcardUsageStats);
   sequentialStepSettings = normalizeSequentialStepSettings(sequentialStepSettings);
   let sequentialCounters = loadScopedSequentialCounters();
@@ -188,6 +209,7 @@
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = chrome.runtime.getURL(path);
+      bridgeScope.ownNode(script);
       script.onload = () => {
         script.remove();
         resolve();
@@ -200,9 +222,13 @@
     });
   }
 
-  const p1 = injectPageScript('lib/injected/novelai-compat.js')
+  // 页面上下文与内容脚本上下文相互隔离，因此页面侧也必须先安装同一套生命周期内核。
+  const pageRuntimeReady = injectPageScript('lib/runtime/lifecycle.js');
+  const p1 = pageRuntimeReady
+    .then(() => injectPageScript('lib/injected/novelai-compat.js'))
+    .then(() => injectPageScript('lib/injected/prompt-sync-controller.js'))
     .then(() => injectPageScript('injector.js'));
-  const p2 = injectPageScript('modules/auto-clicker.js');
+  const p2 = pageRuntimeReady.then(() => injectPageScript('modules/auto-clicker.js'));
 
   Promise.all([p1, p2])
     .then(() => {
@@ -232,7 +258,8 @@
   // 3) inject manager panel (runs in Content Script context)
   // 创建一个全局 Promise，让 GroupTags 能等待主面板位置恢复完毕后再执行吸附
   let _resolveWMReady;
-  window.__wmPositionReady = new Promise(resolve => { _resolveWMReady = resolve; });
+  const wmPositionReady = new Promise(resolve => { _resolveWMReady = resolve; });
+  bridgeScope.patch(window, '__wmPositionReady', wmPositionReady);
 
   function injectManagerPanel() {
     // 避免重复注入
@@ -247,6 +274,7 @@
     link.rel = 'stylesheet';
     link.href = cssUrl;
     document.head.appendChild(link);
+    bridgeScope.ownNode(link);
 
     // 创建触发按钮
     const toggleBtn = document.createElement('button');
@@ -259,6 +287,7 @@
       </svg>
     `;
     document.body.appendChild(toggleBtn);
+    bridgeScope.ownNode(toggleBtn);
 
     // 创建面板容器
     const container = document.createElement('div');
@@ -276,6 +305,7 @@
       <iframe id="wildcard-manager-iframe" src="${popupUrl}"></iframe>
     `;
     document.body.appendChild(container);
+    bridgeScope.ownNode(container);
 
     const header = container.querySelector('#wildcard-manager-header');
     const minBtn = container.querySelector('.min-btn');
@@ -312,8 +342,9 @@
     let densityRAF = null;
     densitySlider.addEventListener('input', (e) => {
       const val = e.target.value;
-      if (densityRAF) cancelAnimationFrame(densityRAF);
-      densityRAF = requestAnimationFrame(() => {
+      if (densityRAF !== null) bridgeScope.cancelFrame(densityRAF);
+      densityRAF = bridgeScope.frame(() => {
+        densityRAF = null;
         // During drag, ONLY notify iframe directly
         if (iframe && iframe.contentWindow) {
           iframe.contentWindow.postMessage({ type: '__UPDATE_TE_DENSITY__', value: val }, '*');
@@ -323,7 +354,7 @@
 
     densitySlider.addEventListener('change', (e) => {
       const val = e.target.value;
-      chrome.storage.local.set({ tagEditorDensity: val });
+      storageRepository.set({ tagEditorDensity: val }).catch(() => {});
     });
 
     densitySlider.addEventListener('mousedown', () => setResizing(true));
@@ -352,7 +383,7 @@
       e.preventDefault();
     });
 
-    document.addEventListener('mousemove', e => {
+    bridgeScope.on(document, 'mousemove', e => {
       if (!isDragging) return;
       const dx = e.clientX - dragStartX;
       const dy = e.clientY - dragStartY;
@@ -370,7 +401,7 @@
       container.style.right = 'auto';
     });
 
-    document.addEventListener('mouseup', () => {
+    bridgeScope.on(document, 'mouseup', () => {
       if (isDragging) {
         isDragging = false;
         container.classList.remove('dragging');
@@ -382,7 +413,7 @@
     const resizeObserver = new ResizeObserver(() => {
       if (!isInitializing) saveState();
     });
-    resizeObserver.observe(container);
+    bridgeScope.observe(resizeObserver, container);
 
     // 保存面板状态
     function saveState() {
@@ -396,11 +427,13 @@
         width: container.offsetWidth,
         height: container.offsetHeight
       };
-      chrome.storage.local.set({ [STORAGE_KEY]: state });
+      storageRepository.set({ [STORAGE_KEY]: state }).catch(error => {
+        console.error('[Bridge] 保存主面板状态失败:', error);
+      });
     }
 
     // 恢复面板状态
-    chrome.storage.local.get([STORAGE_KEY, 'tagEditorDensity'], data => {
+    storageRepository.get([STORAGE_KEY, 'tagEditorDensity']).then(data => {
       const state = data[STORAGE_KEY];
       const density = data['tagEditorDensity'];
 
@@ -436,13 +469,17 @@
 
       // Allow saving state only after we are sure initialization is done
       // and initial layout shifts have settled.
-      requestAnimationFrame(() => {
+      bridgeScope.frame(() => {
         // 此时浏览器已经计算了至少一次布局，主面板的 getBoundingClientRect() 现在能返回正确值
         if (_resolveWMReady) _resolveWMReady();
-        setTimeout(() => {
+        bridgeScope.timeout(() => {
           isInitializing = false;
         }, 300);
       });
+    }).catch(error => {
+      console.error('[Bridge] 恢复主面板状态失败:', error);
+      if (_resolveWMReady) _resolveWMReady();
+      isInitializing = false;
     });
 
     // ── 快捷键系统 ──
@@ -471,7 +508,7 @@
     }
 
     // 全局快捷键监听（宿主页面层级）
-    document.addEventListener('keydown', e => {
+    bridgeScope.on(document, 'keydown', e => {
       // 在输入框中时跳过某些快捷键（避免干扰正常输入）
       const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
 
@@ -496,8 +533,8 @@
         }
 
         // 3. 等待面板展开/恢复的 CSS 渲染完成后再操作焦点
-        requestAnimationFrame(() => {
-          setTimeout(() => {
+        bridgeScope.frame(() => {
+          bridgeScope.timeout(() => {
             // 实时查询 iframe 元素（避免变量作用域问题）
             const iframeEl = document.getElementById('wildcard-manager-iframe');
             if (!iframeEl) return;
@@ -533,7 +570,7 @@
     });
 
     // 监听快捷键配置更新（来自 storage 变化 → 闭包内 currentHotkeys 同步）
-    window.addEventListener('__hotkeys_updated__', (e) => {
+    bridgeScope.on(window, '__hotkeys_updated__', (e) => {
       const DEFAULT_HOTKEYS_INNER = {
         toggleMinimize: { key: 'm', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false },
         triggerGenerate: { key: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false },
@@ -543,7 +580,7 @@
     });
 
     // 监听来自 iframe 的快捷键动作请求
-    window.addEventListener('message', (e) => {
+    bridgeScope.on(window, 'message', (e) => {
       if (!messageProtocol?.isFromIframe(e, iframe, chrome.runtime)
         || !messageProtocol.isValidManagerPanelMessage(e.data)) return;
 
@@ -623,6 +660,7 @@
       <iframe id="group-tags-iframe" src="${panelUrl}" style="flex:1; width:100%; border:none; background:transparent;"></iframe>
     `;
     document.body.appendChild(container);
+    bridgeScope.ownNode(container);
 
     const header = container.querySelector('#group-tags-header');
     const minBtn = container.querySelector('.gt-min-btn');
@@ -642,14 +680,16 @@
     let isInitializing = true;
 
     // 显示/隐藏
-    window.toggleGroupTagsPanel = function() {
+    const toggleGroupTagsPanel = function() {
       container.style.display = (container.style.display === 'none' || container.style.display === '') ? 'flex' : 'none';
       saveState();
     };
-    window.hideGroupTagsPanel = function() {
+    const hideGroupTagsPanel = function() {
       container.style.display = 'none';
       saveState();
     };
+    bridgeScope.patch(window, 'toggleGroupTagsPanel', toggleGroupTagsPanel);
+    bridgeScope.patch(window, 'hideGroupTagsPanel', hideGroupTagsPanel);
 
     // 最小化逻辑
     function toggleGTMinimize() {
@@ -703,11 +743,13 @@
       }
     `;
     document.head.appendChild(minStyle);
+    bridgeScope.ownNode(minStyle);
 
     // 创建磁吸预告虚线框元素
     const snapGhost = document.createElement('div');
     snapGhost.className = 'gt-snap-ghost';
     document.body.appendChild(snapGhost);
+    bridgeScope.ownNode(snapGhost);
 
     // 磁铁指示器引用
     const dockIndicator = container.querySelector('.gt-dock-indicator');
@@ -744,9 +786,9 @@
       }
     });
     // 延迟绑定，等 wildcard-manager 注入完成
-    setTimeout(() => {
+    bridgeScope.timeout(() => {
       const wm = getWMContainer();
-      if (wm) wmMinObserver.observe(wm, { attributes: true, attributeFilter: ['class'] });
+      if (wm) bridgeScope.observe(wmMinObserver, wm, { attributes: true, attributeFilter: ['class'] });
     }, 500);
 
     // ─── 磁吸式吸附系统 ───
@@ -830,7 +872,7 @@
       wmObserver = new MutationObserver(() => {
         applyDockedPosition();
       });
-      wmObserver.observe(wm, { attributes: true, attributeFilter: ['style', 'class'] });
+      bridgeScope.observe(wmObserver, wm, { attributes: true, attributeFilter: ['style', 'class'] });
     }
 
     // 停止监听
@@ -846,7 +888,7 @@
       // 首次吸附时触发平滑过渡动效
       if (wasUndocked) {
         container.classList.add('snap-transition');
-        setTimeout(() => container.classList.remove('snap-transition'), 200);
+        bridgeScope.timeout(() => container.classList.remove('snap-transition'), 200);
       }
       applyDockedPosition();
       startWMTracking();
@@ -975,7 +1017,7 @@
       e.preventDefault();
     });
 
-    document.addEventListener('mousemove', e => {
+    bridgeScope.on(document, 'mousemove', e => {
       if (!isDragging) return;
       let newLeft = initialLeft + (e.clientX - dragStartX);
       let newTop = initialTop + (e.clientY - dragStartY);
@@ -1044,7 +1086,7 @@
       }
     });
 
-    document.addEventListener('mouseup', () => {
+    bridgeScope.on(document, 'mouseup', () => {
       if (isDragging) {
         isDragging = false;
         container.classList.remove('dragging');
@@ -1062,25 +1104,26 @@
     const dragStyle = document.createElement('style');
     dragStyle.textContent = '#group-tags-manager-container.dragging #group-tags-iframe { pointer-events: none; }';
     document.head.appendChild(dragStyle);
+    bridgeScope.ownNode(dragStyle);
 
     // ─── 保存/恢复面板状态（含吸附信息） ───
     function saveDockState() {
       // 单独保存吸附状态，避免与 saveState 冲突
-      chrome.storage.local.set({ groupTagsDockState: dockState || '' });
+      storageRepository.set({ groupTagsDockState: dockState || '' }).catch(() => {});
     }
 
     function saveState() {
       if (isInitializing) return;
       const rect = container.getBoundingClientRect();
-      chrome.storage.local.set({ [STORAGE_KEY]: {
+      storageRepository.set({ [STORAGE_KEY]: {
         visible: container.style.display === 'flex',
         left: rect.left, top: rect.top,
         width: container.offsetWidth, height: container.offsetHeight,
         docked: dockState || ''
-      }});
+      }}).catch(error => console.error('[Bridge] 保存 Group Tags 面板状态失败:', error));
     }
 
-    chrome.storage.local.get(STORAGE_KEY, data => {
+    storageRepository.get(STORAGE_KEY).then(data => {
       const state = data[STORAGE_KEY];
       if (state) {
         if (state.width) container.style.width = state.width + 'px';
@@ -1098,8 +1141,8 @@
             container.style.top = state.top + 'px';
           }
           // 等待主面板就位后，再等一帧确保布局完成，然后精确吸附
-          window.__wmPositionReady.then(() => {
-            requestAnimationFrame(() => {
+          wmPositionReady.then(() => {
+            bridgeScope.frame(() => {
               dockState = state.docked;
               applyDockedPosition();
               startWMTracking();
@@ -1116,18 +1159,23 @@
           }
         }
       }
-      requestAnimationFrame(() => { setTimeout(() => { isInitializing = false; }, 300); });
+      bridgeScope.frame(() => {
+        bridgeScope.timeout(() => { isInitializing = false; }, 300);
+      });
+    }).catch(error => {
+      console.error('[Bridge] 恢复 Group Tags 面板状态失败:', error);
+      isInitializing = false;
     });
 
     // 监听大小变化
     const resizeObserver = new ResizeObserver(() => { if (!isInitializing) saveState(); });
-    resizeObserver.observe(container);
+    bridgeScope.observe(resizeObserver, container);
 
     console.log('[Wildcard] Group Tags panel injected');
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
+    bridgeScope.on(document, 'DOMContentLoaded', () => {
       injectManagerPanel();
       injectGroupTagsPanel();
     });
@@ -1137,7 +1185,7 @@
   }
 
   // 3) propagate later changes
-  chrome.storage.onChanged.addListener(changes => {
+  bridgeScope.chromeEvent(chrome.storage.onChanged, changes => {
     if (changes.sequentialStepSettings) {
       sequentialStepSettings = normalizeSequentialStepSettings(changes.sequentialStepSettings.newValue);
       window.postMessage({
@@ -1226,7 +1274,7 @@
   });
 
   // Handle sequential counter updates from injector
-  window.addEventListener('message', e => {
+  bridgeScope.on(window, 'message', e => {
     if (e.source !== window) return;
     const isRuntimeStateMessage = messageProtocol?.RUNTIME_STATE_MESSAGE_TYPES?.has(e.data?.type);
     if (!isRuntimeStateMessage || !messageProtocol.isValidRuntimeStateMessage(e.data)) return;
@@ -1253,7 +1301,9 @@
     }
     if (e.data?.type === '__RECORD_WILDCARD_USAGE__') {
       wildcardUsageStats = applyWildcardUsageRecords(wildcardUsageStats, e.data.records);
-      chrome.storage.local.set({ wildcardUsageStats });
+      storageRepository.set({ wildcardUsageStats }).catch(error => {
+        console.error('[Bridge] 保存通配符使用统计失败:', error);
+      });
     }
     if (e.data?.type === '__CLEAN_NUMERIC_PREFIXES__') {
       chrome.runtime.sendMessage({ type: '__CLEAN_NUMERIC_PREFIXES__' });
@@ -1330,7 +1380,7 @@
     }, '*');
   }
 
-  window.addEventListener('message', e => {
+  bridgeScope.on(window, 'message', e => {
     // ── 来自 GroupTags iframe 的指令（e.source 是 iframe window，不等于当前 window）──
     const groupTagsIframe = document.getElementById('group-tags-iframe');
     const isGroupPanelMessage = messageProtocol?.GROUP_PANEL_MESSAGE_TYPES?.has(e.data?.type);
@@ -1362,6 +1412,32 @@
     }
     if (e.data?.type === '__CLOSE_GROUP_TAGS_PANEL__') {
       if (window.hideGroupTagsPanel) window.hideGroupTagsPanel();
+      return;
+    }
+
+    const isHistoryActionMessage = messageProtocol?.HISTORY_ACTION_MESSAGE_TYPES?.has(e.data?.type);
+    if (isHistoryActionMessage) {
+      const isCurrentPageMessage = e.source === window;
+      const isCurrentGroupPanelMessage = messageProtocol.isFromIframe(e, groupTagsIframe, chrome.runtime);
+      if ((!isCurrentPageMessage && !isCurrentGroupPanelMessage)
+        || !messageProtocol.isValidHistoryActionMessage(e.data)) {
+        return;
+      }
+
+      if (e.data.type === '__RESTORE_HISTORY__') {
+        chrome.runtime.sendMessage({
+          type: 'RESTORE_HISTORY_SNAPSHOT',
+          snapshot: e.data.snapshot,
+          hostSessionId
+        });
+      } else {
+        chrome.runtime.sendMessage({
+          type: 'APPEND_HISTORY_SNIPPET',
+          snapshot: e.data.snapshot,
+          target: e.data.target,
+          hostSessionId
+        });
+      }
       return;
     }
 
@@ -1402,28 +1478,10 @@
       });
     }
 
-    // 来自注入层 history modal 的恢复指令，中继给 popup
-    if (e.data?.type === '__RESTORE_HISTORY__') {
-      chrome.runtime.sendMessage({
-        type: 'RESTORE_HISTORY_SNAPSHOT',
-        snapshot: e.data.snapshot,
-        hostSessionId
-      });
-    }
-
-    if (e.data?.type === '__APPEND_HISTORY_SNIPPET__') {
-      chrome.runtime.sendMessage({
-        type: 'APPEND_HISTORY_SNIPPET',
-        snapshot: e.data.snapshot,
-        target: e.data.target,
-        hostSessionId
-      });
-    }
-
   });
 
   // Relay from Popup to Injector
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  bridgeScope.chromeEvent(chrome.runtime.onMessage, (request, sender, sendResponse) => {
     // console.log('[Bridge] Received runtime message:', request);
     if (request.type === 'GET_PROMPT') {
       console.log('[Bridge] Broadcasting __GET_PROMPT__ to window');

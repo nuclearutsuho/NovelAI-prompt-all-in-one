@@ -1,4 +1,12 @@
 // ========== 核心数据与状态 (Phase 1) ==========
+const groupTagsRuntime = globalThis.NaiAioRuntime;
+const groupTagsStorageApi = globalThis.NaiAioStorage;
+if (!groupTagsRuntime?.acquire || !groupTagsStorageApi?.createRepository) {
+  throw new Error('[GroupTagsPanel] 运行时内核或扩展存储仓库未加载');
+}
+const groupTagsScope = groupTagsRuntime.acquire('extension:group-tags-panel');
+const groupTagsStorage = groupTagsStorageApi.createRepository(chrome.storage.local, { logger: console });
+
 let customGroupsData = null;
 let defaultGroupsData = { categories: [] };
 let activeCategoryIndex = 0;
@@ -22,7 +30,6 @@ const requiredGroupTagsDataMethods = [
   'toCanonicalTagKey',
   'canonicalToDisplayTag',
   'buildLegacyId',
-  'createEmptyGroupTagsData',
   'createMergeSummary',
   'countSummarySkipped',
   'normalizeGroupTagsData',
@@ -46,6 +53,26 @@ if (missingGroupTagsDataMethods.length > 0) {
   throw new Error(`[GroupTagsPanel] 共享数据模块不完整: ${missingGroupTagsDataMethods.join(', ')}`);
 }
 const groupTagsFavoritesUtils = window.GroupTagsFavoritesUtils || {};
+const groupTagsPreviewApi = window.GroupTagsPreviewController;
+if (!groupTagsPreviewApi?.createController) {
+  throw new Error('[GroupTagsPanel] 悬浮预览控制器 lib/group-tags-preview-controller.js 未加载');
+}
+const groupTagsSortableApi = window.GroupTagsSortableController;
+if (!groupTagsSortableApi?.createController) {
+  throw new Error('[GroupTagsPanel] 排序控制器 lib/group-tags-sortable-controller.js 未加载');
+}
+const groupTagsImportExportApi = window.GroupTagsImportExportController;
+if (!groupTagsImportExportApi?.createController) {
+  throw new Error('[GroupTagsPanel] 导入导出控制器 lib/group-tags-import-export-controller.js 未加载');
+}
+const groupTagsInlineAddApi = window.GroupTagsInlineAddController;
+if (!groupTagsInlineAddApi?.createController) {
+  throw new Error('[GroupTagsPanel] 标签新增控制器 lib/group-tags-inline-add-controller.js 未加载');
+}
+const groupTagsEditApi = window.GroupTagsEditController;
+if (!groupTagsEditApi?.createController) {
+  throw new Error('[GroupTagsPanel] 编辑控制器 lib/group-tags-edit-controller.js 未加载');
+}
 const SPECIAL_FAVORITES_CATEGORY_ID = groupTagsFavoritesUtils.SPECIAL_CATEGORY_ID || '__group_tags_favorites__';
 const SPECIAL_FAVORITES_CATEGORY_NAME = groupTagsFavoritesUtils.SPECIAL_CATEGORY_NAME || '收藏片段';
 const SPECIAL_FAVORITES_ROOT_GROUP_ID = groupTagsFavoritesUtils.ROOT_GROUP_ID || '__favorites_unfiled__';
@@ -57,9 +84,7 @@ let inactiveTagsContext = []; // 另一个输入框的 tags
 let specialCategoryPosition = 0;
 let draggedFavoriteItemId = null;
 let draggedTagInfo = null; // 普通标签拖拽状态：{ tag, sourceCategoryIndex, sourceGroupIndex, sourceTagIndex }
-let favoritePreviewPopover = null;
 let favoritesHistorySnapshot = null;
-let favoritePreviewHideTimer = null;
 let sentenceCardEditState = null;
 let specialFavoritesDirty = false;
 
@@ -88,9 +113,6 @@ function getGroupItemTranslationText(value) {
 }
 
 // ========== 密度控制逻辑 ==========
-const GROUP_TAGS_EXPORT_FORMAT = 'group-tags-export';
-const GROUP_TAGS_SCHEMA_VERSION = 1;
-
 const densitySlider = document.getElementById('density-slider');
 const root = document.documentElement;
 const STORAGE_KEY_DENSITY = 'groupTagsDensity';
@@ -147,18 +169,18 @@ function applyDensity(value) {
 }
 
 // 初始化读取存储
-chrome.storage.local.get(STORAGE_KEY_DENSITY, (data) => {
+groupTagsStorage.get(STORAGE_KEY_DENSITY).then(data => {
   // 默认设置为目前的高密度状态 (大致相当于 value=80)
   const val = data[STORAGE_KEY_DENSITY] !== undefined ? data[STORAGE_KEY_DENSITY] : 80;
   densitySlider.value = val;
   applyDensity(val);
-});
+}).catch(error => console.error('[GroupTags] 读取密度设置失败:', error));
 
 // 监听拖动并实时应用并保存
-densitySlider.addEventListener('input', (e) => {
+groupTagsScope.on(densitySlider, 'input', (e) => {
   const val = e.target.value;
   applyDensity(val);
-  chrome.storage.local.set({ [STORAGE_KEY_DENSITY]: val });
+  groupTagsStorage.set({ [STORAGE_KEY_DENSITY]: val }).catch(() => {});
 });
 
 // ========== 颜色自定义与同步 ==========
@@ -182,7 +204,9 @@ function buildTranslationMap() {
 // 将翻译映射直接写入 chrome.storage.local（无需经过 bridge 中继）
 function syncTranslationsToParent() {
   const translationMap = buildTranslationMap();
-  chrome.storage.local.set({ groupTranslationMap: translationMap });
+  groupTagsStorage.set({ groupTranslationMap: translationMap }).catch(error => {
+    console.error('[GroupTags] 保存翻译映射失败:', error);
+  });
 }
 // ========== 渲染逻辑 ==========
 let isEditMode = false;
@@ -213,7 +237,7 @@ const dom = {
 // ========== 辅助交互 (滚轮横向滚动) (Phase 16.18) ==========
 [dom.primaryTabs, dom.secondaryTabs].forEach(el => {
   if (el) {
-    el.addEventListener('wheel', (e) => {
+    groupTagsScope.on(el, 'wheel', (e) => {
       if (e.deltaY !== 0) {
         // 将垂直滚轮偏移量转换为平滑的横向滚动 (Phase 16.19)
         e.preventDefault();
@@ -346,58 +370,36 @@ function getFavoriteItemsCount(category) {
   return (category.groups || []).reduce((total, group) => total + ((group.items || []).length), 0);
 }
 
-function getCurrentSpecialFavoritesGroup() {
-  if (!isSpecialFavoritesActive()) return null;
-  return customGroupsData?.categories?.[activeCategoryIndex]?.groups?.[activeGroupIndex] || null;
-}
+const favoritePreviewController = groupTagsPreviewApi.createController({
+  scope: groupTagsScope,
+  favoritesUtils: groupTagsFavoritesUtils,
+  cloneData,
+  showModal,
+  hideModal,
+  modalRoot: dom.modalDialog,
+  getIsEditMode: () => isEditMode
+});
 
-function ensureFavoritePreviewPopover() {
-  if (favoritePreviewPopover) return favoritePreviewPopover;
-  favoritePreviewPopover = document.createElement('div');
-  favoritePreviewPopover.className = 'favorites-preview-popover';
-  favoritePreviewPopover.addEventListener('wheel', (event) => {
-    const body = favoritePreviewPopover?.querySelector('.favorites-preview-body');
-    if (!body || body.scrollHeight <= body.clientHeight) return;
-    // 预览浮层是 fixed 元素，这里主动接管滚轮，避免事件落回底层网格导致看得见却滚不动。
-    event.preventDefault();
-    event.stopPropagation();
-    body.scrollTop += event.deltaY;
-  }, { passive: false });
-  favoritePreviewPopover.addEventListener('mouseenter', () => {
-    if (favoritePreviewHideTimer) {
-      clearTimeout(favoritePreviewHideTimer);
-      favoritePreviewHideTimer = null;
-    }
-  });
-  favoritePreviewPopover.addEventListener('mouseleave', () => {
-    hideFavoritePreviewPopover();
-  });
-  document.body.appendChild(favoritePreviewPopover);
-  return favoritePreviewPopover;
-}
-
+// 主面板只保留稳定门面，预览 DOM 与计时器由控制器自行管理。
 function hideFavoritePreviewPopover() {
-  if (favoritePreviewHideTimer) {
-    clearTimeout(favoritePreviewHideTimer);
-    favoritePreviewHideTimer = null;
-  }
-  if (!favoritePreviewPopover) return;
-  favoritePreviewPopover.classList.remove('visible');
+  favoritePreviewController.hide();
 }
 
-function scheduleHideFavoritePreviewPopover() {
-  if (favoritePreviewHideTimer) {
-    clearTimeout(favoritePreviewHideTimer);
-  }
-  // 给鼠标从卡片移动到浮层预留一点时间，避免刚想滚动就被立刻隐藏。
-  favoritePreviewHideTimer = setTimeout(() => {
-    favoritePreviewHideTimer = null;
-    hideFavoritePreviewPopover();
-  }, 80);
+function bindFavoritePreview(card, item) {
+  favoritePreviewController.bindFavoritePreview(card, item);
 }
 
-function clampPreviewPosition(value, min, max) {
-  return Math.max(min, Math.min(value, max));
+function bindSentencePreview(card, item, currentCategory, currentGroup, zhPart, enPart) {
+  favoritePreviewController.bindSentencePreview(card, item, {
+    currentCategory,
+    currentGroup,
+    zhPart,
+    enPart
+  });
+}
+
+function openFavoriteActionModal(item) {
+  favoritePreviewController.openFavoriteActionModal(item);
 }
 
 function updateSpecialCategoryControls() {
@@ -422,228 +424,51 @@ function applyVisibleCurrentGroupColor(newColor) {
 }
 
 // ========== 拖拽排序 ==========
-let sortableRefreshFrame = null;
-const sortableInstances = {
-  primary: null,
-  secondary: null,
-  tags: null
-};
-
-function destroySortableInstance(key) {
-  const instance = sortableInstances[key];
-  if (!instance) return;
-  try {
-    instance.destroy();
-  } catch (err) {
-    console.warn(`[GroupTags] Failed to destroy ${key} sortable:`, err);
-  }
-  sortableInstances[key] = null;
-}
+const sortableController = groupTagsSortableApi.createController({
+  scope: groupTagsScope,
+  SortableCtor: globalThis.Sortable,
+  elements: {
+    primaryTabs: dom.primaryTabs,
+    secondaryTabs: dom.secondaryTabs,
+    tagsGrid: dom.tagsGrid
+  },
+  getState: () => ({
+    isEditMode,
+    data: customGroupsData,
+    activeCategoryIndex,
+    activeGroupIndex
+  }),
+  setActiveCategoryIndex: value => { activeCategoryIndex = value; },
+  setActiveGroupIndex: value => { activeGroupIndex = value; },
+  setDraggedFavoriteItemId: value => { draggedFavoriteItemId = value; },
+  setDraggedTagInfo: value => { draggedTagInfo = value; },
+  cloneData,
+  isSpecialCategory: isSpecialFavoritesCategory,
+  getSpecialCategoryIndex: () => getSpecialFavoritesIndex(),
+  saveSpecialCategoryPosition,
+  favoritesUtils: groupTagsFavoritesUtils,
+  specialRootGroupId: SPECIAL_FAVORITES_ROOT_GROUP_ID,
+  async rebuildSpecialFavorites() {
+    customGroupsData = await rebuildWithSpecialFavorites(
+      stripSpecialFavoritesCategory(customGroupsData),
+      { apply: false }
+    );
+  },
+  renderPrimaryTabs,
+  renderSecondaryTabs,
+  renderTagsGrid,
+  logger: console
+});
 
 function destroyAllSortables() {
-  if (sortableRefreshFrame !== null) {
-    cancelAnimationFrame(sortableRefreshFrame);
-    sortableRefreshFrame = null;
-  }
-  destroySortableInstance('primary');
-  destroySortableInstance('secondary');
-  destroySortableInstance('tags');
-}
-
-function moveArrayItem(list, oldIndex, newIndex) {
-  if (!Array.isArray(list)) return null;
-  if (oldIndex === newIndex) return list[oldIndex] || null;
-  if (oldIndex < 0 || newIndex < 0 || oldIndex >= list.length || newIndex >= list.length) return null;
-  const [item] = list.splice(oldIndex, 1);
-  list.splice(newIndex, 0, item);
-  return item || null;
-}
-
-function remapActiveIndex(activeIndex, oldIndex, newIndex) {
-  // 拖拽后保持“激活对象”不变，只修正它所在的新下标
-  if (oldIndex === newIndex) return activeIndex;
-  if (activeIndex === oldIndex) return newIndex;
-  if (oldIndex < newIndex && activeIndex > oldIndex && activeIndex <= newIndex) return activeIndex - 1;
-  if (oldIndex > newIndex && activeIndex >= newIndex && activeIndex < oldIndex) return activeIndex + 1;
-  return activeIndex;
-}
-
-function getSortableIndices(evt) {
-  return {
-    oldIndex: evt.oldDraggableIndex ?? evt.oldIndex,
-    newIndex: evt.newDraggableIndex ?? evt.newIndex
-  };
-}
-
-function createCommonSortableOptions() {
-  // 过滤交互控件，避免重命名输入框和删除按钮被误判为拖拽起点
-  return {
-    animation: 150,
-    fallbackTolerance: 4,
-    preventOnFilter: false,
-    filter: '.add-tab-btn, .inline-rename-input, .tab-inline-delete, .card-delete-badge'
-  };
-}
-
-function initPrimaryTabsSortable() {
-  destroySortableInstance('primary');
-  if (!isEditMode || typeof Sortable === 'undefined') return;
-  if (!dom.primaryTabs || !customGroupsData?.categories?.length) return;
-
-  sortableInstances.primary = new Sortable(dom.primaryTabs, {
-    ...createCommonSortableOptions(),
-    draggable: '.tab-btn:not(.add-tab-btn)',
-    onEnd(evt) {
-      const { oldIndex, newIndex } = getSortableIndices(evt);
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-
-      const movedCategory = moveArrayItem(customGroupsData.categories, oldIndex, newIndex);
-      if (!movedCategory) return;
-
-      if (!isSpecialFavoritesCategory(movedCategory)) {
-        movedCategory._modified = true;
-      }
-      activeCategoryIndex = remapActiveIndex(activeCategoryIndex, oldIndex, newIndex);
-      if (getSpecialFavoritesIndex() >= 0) {
-        saveSpecialCategoryPosition();
-      }
-      renderPrimaryTabs();
-      renderSecondaryTabs();
-    }
-  });
-}
-
-function initSecondaryTabsSortable() {
-  destroySortableInstance('secondary');
-  if (!isEditMode || typeof Sortable === 'undefined') return;
-
-  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
-  if (!dom.secondaryTabs || !currentCategory?.groups?.length) return;
-  const isSpecialCategory = isSpecialFavoritesCategory(currentCategory);
-
-  sortableInstances.secondary = new Sortable(dom.secondaryTabs, {
-    ...createCommonSortableOptions(),
-    draggable: isSpecialCategory ? '.tab-btn.special-folder-tab' : '.tab-btn:not(.add-tab-btn)',
-    onEnd(evt) {
-      const { oldIndex, newIndex } = getSortableIndices(evt);
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-
-      const movedGroup = moveArrayItem(currentCategory.groups, oldIndex, newIndex);
-      if (!movedGroup) return;
-
-      if (!isSpecialCategory) {
-        movedGroup._modified = true;
-        currentCategory._modified = true;
-      } else if (groupTagsFavoritesUtils.reorderFavoriteFolders) {
-        // 特殊分类的二级分组直接映射收藏文件夹顺序，拖拽后立即回写到 promptHistory。
-        const folderIds = currentCategory.groups
-          .filter(group => group.id !== SPECIAL_FAVORITES_ROOT_GROUP_ID)
-          .map(group => group.id);
-        groupTagsFavoritesUtils.reorderFavoriteFolders(folderIds).then(async () => {
-          customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-          renderSecondaryTabs();
-        });
-      }
-      activeGroupIndex = remapActiveIndex(activeGroupIndex, oldIndex, newIndex);
-      renderSecondaryTabs();
-    }
-  });
-}
-
-function initTagsGridSortable() {
-  destroySortableInstance('tags');
-  if (!isEditMode || typeof Sortable === 'undefined') return;
-
-  const currentCategory = customGroupsData?.categories?.[activeCategoryIndex];
-  const currentGroup = currentCategory?.groups?.[activeGroupIndex];
-  if (!dom.tagsGrid) return;
-
-  if (isSpecialFavoritesCategory(currentCategory)) {
-    if (!currentGroup?.items?.length) return;
-
-    sortableInstances.tags = new Sortable(dom.tagsGrid, {
-      ...createCommonSortableOptions(),
-      draggable: '.tag-card',
-      onStart(evt) {
-        draggedFavoriteItemId = evt.item?.dataset?.favoriteId || null;
-      },
-      onEnd(evt) {
-        const { oldIndex, newIndex } = getSortableIndices(evt);
-        draggedFavoriteItemId = null;
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-
-        moveArrayItem(currentGroup.items, oldIndex, newIndex);
-        const orderedIds = currentGroup.items.map(item => item.id);
-        if (groupTagsFavoritesUtils.reorderFavoriteItemsInGroup) {
-          groupTagsFavoritesUtils.reorderFavoriteItemsInGroup(currentGroup.id, orderedIds).then(async () => {
-            customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-            renderTagsGrid();
-          });
-        } else {
-          renderTagsGrid();
-        }
-      }
-    });
-    return;
-  }
-
-  if (!currentGroup?.tags?.length) return;
-
-  sortableInstances.tags = new Sortable(dom.tagsGrid, {
-    ...createCommonSortableOptions(),
-    draggable: '.tag-card',
-    onStart(evt) {
-      // 同步设置 draggedTagInfo，使 Sortable 拖拽也能触发跨分组 drop
-      const tagIndex = evt.oldDraggableIndex ?? evt.oldIndex;
-      const tag = currentGroup.tags?.[tagIndex];
-      if (tag) {
-        draggedTagInfo = {
-          tag: cloneData(tag),
-          sourceCategoryIndex: activeCategoryIndex,
-          sourceGroupIndex: activeGroupIndex,
-          sourceTagIndex: tagIndex
-        };
-      }
-    },
-    onEnd(evt) {
-      const { oldIndex, newIndex } = getSortableIndices(evt);
-      draggedTagInfo = null; // 拖拽结束时清除状态
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-
-      const movedTag = moveArrayItem(currentGroup.tags, oldIndex, newIndex);
-      if (!movedTag) return;
-
-      currentGroup._modified = true;
-      currentCategory._modified = true;
-      renderTagsGrid();
-    }
-  });
-}
-
-function refreshSortables() {
-  if (!isEditMode) {
-    destroyAllSortables();
-    return;
-  }
-
-  if (typeof Sortable === 'undefined') {
-    console.warn('[GroupTags] Sortable.js 未加载，跳过拖拽初始化');
-    return;
-  }
-
-  initPrimaryTabsSortable();
-  initSecondaryTabsSortable();
-  initTagsGridSortable();
+  sortableController.destroy();
 }
 
 function scheduleSortableRefresh() {
-  // 统一合并到下一帧重建，避免一次交互里反复销毁/创建实例
-  if (sortableRefreshFrame !== null) return;
-  sortableRefreshFrame = requestAnimationFrame(() => {
-    sortableRefreshFrame = null;
-    refreshSortables();
-  });
+  sortableController.schedule();
 }
+
+
 
 // ========== 弹窗工具 ==========
 function showModal(html) {
@@ -651,7 +476,7 @@ function showModal(html) {
   dom.modalOverlay.classList.add('active');
   // 自动聚焦第一个输入框
   const firstInput = dom.modalDialog.querySelector('input');
-  if (firstInput) setTimeout(() => firstInput.focus(), 50);
+  if (firstInput) groupTagsScope.timeout(() => firstInput.focus(), 50);
 }
 
 function hideModal() {
@@ -659,9 +484,14 @@ function hideModal() {
   dom.modalDialog.innerHTML = '';
 }
 
+let importExportController = null;
+
 // 点击 overlay 背景关闭弹窗
-dom.modalOverlay.addEventListener('click', (e) => {
-  if (e.target === dom.modalOverlay) hideModal();
+groupTagsScope.on(dom.modalOverlay, 'click', (e) => {
+  if (e.target !== dom.modalOverlay) return;
+  // 若导入方式弹窗仍在等待选择，需要同步结束 Promise，避免留下悬空任务。
+  importExportController?.cancelPendingDialog({ hide: false });
+  hideModal();
 });
 
 // ========== 编辑模式切换 ==========
@@ -678,10 +508,6 @@ async function enterEditMode() {
   dom.app.classList.add('edit-mode');
   renderPrimaryTabs();
   renderSecondaryTabs();
-}
-
-function exitEditMode(save) {
-  return finalizeEditMode(save);
 }
 
 async function finalizeEditMode(save) {
@@ -752,18 +578,6 @@ function buildLegacyId(prefix, parts) {
   return groupTagsDataUtils.buildLegacyId(prefix, parts);
 }
 
-function createEmptyGroupTagsData() {
-  return groupTagsDataUtils.createEmptyGroupTagsData();
-}
-
-function createMergeSummary() {
-  return groupTagsDataUtils.createMergeSummary();
-}
-
-function countSummarySkipped(summary) {
-  return groupTagsDataUtils.countSummarySkipped(summary);
-}
-
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, '&amp;')
@@ -775,19 +589,6 @@ function escapeHtml(text) {
 
 function normalizeGroupTagsData(rawData) {
   return groupTagsDataUtils.normalizeGroupTagsData(rawData);
-}
-
-function mergeGroupTagsData(baseData, sourceData) {
-  return groupTagsDataUtils.mergeGroupTagsData(baseData, sourceData);
-}
-
-function extractImportData(payload) {
-  if (payload && Array.isArray(payload.categories)) return payload;
-  if (payload?.format === GROUP_TAGS_EXPORT_FORMAT && payload.data && Array.isArray(payload.data.categories)) {
-    return payload.data;
-  }
-  if (payload?.data && Array.isArray(payload.data.categories)) return payload.data;
-  throw new Error('导入文件格式无效，未找到 categories 数组');
 }
 
 function clampActiveIndices() {
@@ -899,23 +700,6 @@ async function upsertDictionaryEntry(tagKey, patch = {}) {
   return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
 }
 
-async function ensureDictionaryTagMeta(tagText, zhText) {
-  const canonicalTag = toCanonicalTagKey(tagText);
-  if (!canonicalTag) {
-    return { tagKey: '', entry: null };
-  }
-
-  const patch = {};
-  if (zhText !== undefined) {
-    patch.zhCN = sanitizeText(zhText);
-  }
-  const result = await upsertDictionaryEntry(canonicalTag, patch);
-  return {
-    tagKey: result.tagKey || canonicalTag,
-    entry: result.entry || null
-  };
-}
-
 function queueDictionaryTagMeta(tagText, zhText) {
   const canonicalTag = toCanonicalTagKey(tagText);
   if (!canonicalTag) return;
@@ -931,25 +715,6 @@ async function flushPendingDictionaryUpserts() {
     await upsertDictionaryEntry(tagKey, patch);
   }
   pendingDictionaryUpserts.clear();
-}
-
-function getCurrentExportData() {
-  return normalizeGroupTagsData(getPersistableGroupTagsData(customGroupsData)).data;
-}
-
-function buildExportPayload() {
-  return {
-    format: GROUP_TAGS_EXPORT_FORMAT,
-    schemaVersion: GROUP_TAGS_SCHEMA_VERSION,
-    exportedAt: new Date().toISOString(),
-    data: getCurrentExportData()
-  };
-}
-
-function getTimestampForFilename() {
-  const now = new Date();
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
 }
 
 function applyGroupTagsData(nextData) {
@@ -972,853 +737,126 @@ function saveGroupTagsData(nextData) {
   return groupTagsDataUtils.saveGroupTagsStorage(persistableData);
 }
 
+importExportController = groupTagsImportExportApi.createController({
+  scope: groupTagsScope,
+  dataUtils: groupTagsDataUtils,
+  documentRef: document,
+  modalRoot: dom.modalDialog,
+  importFileInput: dom.importFileInput,
+  showModal,
+  hideModal,
+  getIsEditMode: () => isEditMode,
+  getCurrentData: () => normalizeGroupTagsData(getPersistableGroupTagsData(customGroupsData)).data,
+  getDefaultData: () => defaultGroupsData,
+  saveData: saveGroupTagsData,
+  syncTranslations: nextData => groupTagsDataUtils.syncTranslationsToDictionary(nextData),
+  rebuildData: nextData => rebuildWithSpecialFavorites(nextData, { apply: false }),
+  applyData: applyGroupTagsData,
+  logger: console
+});
+
 function showInfoModal(title, message) {
-  showModal(`
-    <h3>${escapeHtml(title)}</h3>
-    <div style="color:#d1d5db;font-size:12px;line-height:1.6;white-space:pre-line;">${escapeHtml(message)}</div>
-    <div class="modal-buttons">
-      <button class="modal-btn primary" id="modal-info-confirm">确定</button>
-    </div>
-  `);
-  document.getElementById('modal-info-confirm').onclick = () => hideModal();
+  // 编辑操作仍通过统一控制器显示信息，避免面板内维护第二套弹窗协议。
+  importExportController.showInfo?.(title, message);
 }
 
-function promptImportMode() {
-  return new Promise(resolve => {
-    showModal(`
-      <h3>选择导入方式</h3>
-      <div style="margin-bottom:12px;padding:10px 12px;border:1px solid rgba(245, 158, 11, 0.28);border-radius:8px;background:rgba(245, 158, 11, 0.08);color:#fcd34d;font-size:12px;line-height:1.7;">
-        导入前建议先备份当前 Tags 组信息，尤其是在使用“覆盖”导入时，原有自定义内容可能被替换。
-      </div>
-      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">
-        覆盖：用文件内容替换当前数据，再补齐默认库新增项。<br>
-        合并：保留当前数据，只补充文件中的缺失项。
-      </div>
-      <div class="modal-buttons">
-        <button class="modal-btn" id="modal-import-backup">下载当前备份</button>
-        <button class="modal-btn" id="modal-import-cancel">取消</button>
-        <button class="modal-btn" id="modal-import-merge">合并</button>
-        <button class="modal-btn primary" id="modal-import-overwrite">覆盖</button>
-      </div>
-    `);
-
-    document.getElementById('modal-import-backup').onclick = async () => {
-      await exportGroupTagsData();
-    };
-    document.getElementById('modal-import-cancel').onclick = () => {
-      hideModal();
-      resolve(null);
-    };
-    document.getElementById('modal-import-merge').onclick = () => {
-      hideModal();
-      resolve('merge');
-    };
-    document.getElementById('modal-import-overwrite').onclick = () => {
-      hideModal();
-      resolve('overwrite');
-    };
-  });
+function exportGroupTagsData() {
+  return importExportController.exportData();
 }
 
-async function readJsonFile(file) {
-  const text = await file.text();
-  return JSON.parse(text);
-}
-
-function buildImportSummaryMessage(mode, summary, normalizationSummary, defaultSummary) {
-  const lines = [];
-
-  if (mode === 'overwrite') {
-    lines.push('已用导入文件覆盖当前数据。');
-  } else {
-    lines.push('已将导入文件合并到当前数据。');
-    lines.push(`新增分类 ${summary.addedCategories} 个，分组 ${summary.addedGroups} 个，标签 ${summary.addedTags} 个。`);
-  }
-
-  if (defaultSummary.addedCategories || defaultSummary.addedGroups || defaultSummary.addedTags) {
-    lines.push(`默认库补增：分类 ${defaultSummary.addedCategories} 个，分组 ${defaultSummary.addedGroups} 个，标签 ${defaultSummary.addedTags} 个。`);
-  }
-
-  lines.push(`跳过重复或无效项 ${countSummarySkipped(summary) + countSummarySkipped(normalizationSummary)} 个。`);
-  return lines.join('\n');
-}
-
-async function exportGroupTagsData() {
-  if (!customGroupsData?.categories) {
-    showInfoModal('导出失败', '当前没有可导出的分组标签数据。');
-    return;
-  }
-
-  const payload = buildExportPayload();
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `group-tags-${getTimestampForFilename()}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-async function importGroupTagsData(file) {
-  if (!file) return;
-
-  if (isEditMode) {
-    showInfoModal('无法导入', '请先保存或取消当前编辑，再执行导入。');
-    return;
-  }
-
-  try {
-    const payload = await readJsonFile(file);
-    const importMode = await promptImportMode();
-    if (!importMode) return;
-
-    const rawData = extractImportData(payload);
-    const normalizedImport = normalizeGroupTagsData(rawData);
-    let nextData;
-    let importSummary = createMergeSummary();
-
-    if (importMode === 'overwrite') {
-      nextData = cloneData(normalizedImport.data);
-    } else {
-      const mergedImport = mergeGroupTagsData(getCurrentExportData(), normalizedImport.data);
-      nextData = mergedImport.data;
-      importSummary = mergedImport.summary;
-    }
-
-    const mergedWithDefault = mergeGroupTagsData(nextData, defaultGroupsData);
-    nextData = mergedWithDefault.data;
-
-    nextData = await saveGroupTagsData(nextData);
-    await groupTagsDataUtils.syncTranslationsToDictionary(nextData);
-    nextData = await rebuildWithSpecialFavorites(nextData, { apply: false });
-    applyGroupTagsData(nextData);
-
-    showInfoModal(
-      '导入完成',
-      buildImportSummaryMessage(importMode, importSummary, normalizedImport.summary, mergedWithDefault.summary)
-    );
-  } catch (err) {
-    console.error('[GroupTags] Failed to import data:', err);
-    showInfoModal('导入失败', err?.message || '无法解析导入文件，请确认 JSON 格式正确。');
-  } finally {
-    dom.importFileInput.value = '';
-  }
+function importGroupTagsData(file) {
+  return importExportController.importData(file);
 }
 
 // ========== 分类操作 ==========
+const editController = groupTagsEditApi.createController({
+  modalRoot: dom.modalDialog,
+  showModal,
+  hideModal,
+  showInfo: showInfoModal,
+  getState: () => ({
+    isEditMode,
+    data: customGroupsData,
+    activeCategoryIndex,
+    activeGroupIndex
+  }),
+  setData: value => { customGroupsData = value; },
+  setActiveCategoryIndex: value => { activeCategoryIndex = value; },
+  setActiveGroupIndex: value => { activeGroupIndex = value; },
+  generateId,
+  isSpecialCategory: isSpecialFavoritesCategory,
+  specialRootGroupId: SPECIAL_FAVORITES_ROOT_GROUP_ID,
+  favoritesUtils: groupTagsFavoritesUtils,
+  markDeletedDefaultCategory,
+  markDeletedDefaultGroup,
+  hideFavoritePreview: hideFavoritePreviewPopover,
+  refreshSpecialData: () => rebuildWithSpecialFavorites(
+    stripSpecialFavoritesCategory(customGroupsData),
+    { apply: false }
+  ),
+  renderPrimaryTabs,
+  renderSecondaryTabs,
+  renderTagsGrid,
+  logger: console
+});
+
 function addCategory() {
-  showModal(`
-    <h3>新建分类</h3>
-    <input class="modal-input" id="modal-cat-name" placeholder="分类名称" />
-    <div class="modal-buttons">
-      <button class="modal-btn" id="modal-cat-cancel">取消</button>
-      <button class="modal-btn primary" id="modal-cat-confirm">确认</button>
-    </div>
-  `);
-  document.getElementById('modal-cat-cancel').onclick = () => hideModal();
-  document.getElementById('modal-cat-confirm').onclick = () => {
-    const name = document.getElementById('modal-cat-name').value.trim();
-    if (!name) return;
-    customGroupsData.categories.push({
-      id: generateId('cat'),
-      name,
-      _modified: true,
-      groups: []
-    });
-    hideModal();
-    activeCategoryIndex = customGroupsData.categories.length - 1;
-    activeGroupIndex = 0;
-    renderPrimaryTabs();
-    renderSecondaryTabs();
-  };
-  // 回车确认
-  document.getElementById('modal-cat-name').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('modal-cat-confirm').click();
-  });
+  return editController.addCategory();
 }
 
 function deleteCategory(index) {
-  const cat = customGroupsData.categories[index];
-  if (!cat) return;
-  showModal(`
-    <h3>确认删除分类</h3>
-    <p style="color:#ccc;font-size:13px;">确定要删除分类 "<strong>${cat.name}</strong>" 及其所有分组和标签吗？</p>
-    <div class="modal-buttons">
-      <button class="modal-btn" id="modal-del-cancel">取消</button>
-      <button class="modal-btn danger" id="modal-del-confirm">删除</button>
-    </div>
-  `);
-  document.getElementById('modal-del-cancel').onclick = () => hideModal();
-  document.getElementById('modal-del-confirm').onclick = () => {
-    markDeletedDefaultCategory(cat.id);
-    customGroupsData.categories.splice(index, 1);
-    if (activeCategoryIndex >= customGroupsData.categories.length) {
-      activeCategoryIndex = Math.max(0, customGroupsData.categories.length - 1);
-    }
-    activeGroupIndex = 0;
-    hideModal();
-    renderPrimaryTabs();
-    renderSecondaryTabs();
-  };
+  return editController.deleteCategory(index);
 }
 
-// ========== 分组操作 ==========
 function addGroup() {
-  const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory) return;
-  const isSpecialCategory = isSpecialFavoritesCategory(currentCategory);
-  const dialogTitle = isSpecialCategory ? '新建文件夹' : '新建分组';
-  const inputPlaceholder = isSpecialCategory ? '文件夹名称' : '分组名称';
-  showModal(`
-    <h3>${dialogTitle}</h3>
-    <input class="modal-input" id="modal-grp-name" placeholder="${inputPlaceholder}" />
-    <div class="modal-buttons">
-      <button class="modal-btn" id="modal-grp-cancel">取消</button>
-      <button class="modal-btn primary" id="modal-grp-confirm">确认</button>
-    </div>
-  `);
-  document.getElementById('modal-grp-cancel').onclick = () => hideModal();
-  document.getElementById('modal-grp-confirm').onclick = async () => {
-    const name = document.getElementById('modal-grp-name').value.trim();
-    if (!name) return;
-    if (isSpecialFavoritesCategory(currentCategory)) {
-      if (!groupTagsFavoritesUtils.createFavoriteFolder) return;
-      await groupTagsFavoritesUtils.createFavoriteFolder(name);
-      customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-      const specialCategory = customGroupsData.categories[activeCategoryIndex];
-      if (specialCategory?.groups?.length) {
-        activeGroupIndex = specialCategory.groups.length - 1;
-      }
-      hideModal();
-      renderSecondaryTabs();
-      return;
-    }
-    currentCategory.groups.push({
-      id: generateId('grp'),
-      name,
-      color: '#4a4a6a',
-      _modified: true,
-      tags: []
-    });
-    currentCategory._modified = true;
-    hideModal();
-    activeGroupIndex = currentCategory.groups.length - 1;
-    renderSecondaryTabs();
-  };
-  document.getElementById('modal-grp-name').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('modal-grp-confirm').click();
-  });
+  return editController.addGroup();
 }
 
 function deleteGroup(index) {
-  const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory) return;
-  if (isSpecialFavoritesCategory(currentCategory)) {
-    const specialGroup = currentCategory.groups[index];
-    if (!specialGroup || specialGroup.id === SPECIAL_FAVORITES_ROOT_GROUP_ID || !groupTagsFavoritesUtils.deleteFavoriteFolder) return;
-    hideFavoritePreviewPopover();
-    showModal(`
-      <h3>确认删除文件夹</h3>
-      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除文件夹 <strong>${escapeHtml(specialGroup.name)}</strong> 吗？文件夹内收藏会回到未归档分组，这项修改在当前编辑态下可通过取消恢复。</div>
-      <div class="modal-buttons">
-        <button class="modal-btn" id="modal-special-group-cancel">取消</button>
-        <button class="modal-btn danger" id="modal-special-group-confirm">删除</button>
-      </div>
-    `);
-    document.getElementById('modal-special-group-cancel').onclick = () => hideModal();
-    document.getElementById('modal-special-group-confirm').onclick = () => {
-      hideModal();
-      groupTagsFavoritesUtils.deleteFavoriteFolder(specialGroup.id).then(async () => {
-        customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-        activeGroupIndex = Math.max(0, Math.min(activeGroupIndex, (customGroupsData.categories[activeCategoryIndex]?.groups?.length || 1) - 1));
-        renderSecondaryTabs();
-      });
-    };
-    return;
-  }
-  const grp = currentCategory.groups[index];
-  if (!grp) return;
-  showModal(`
-    <h3>确认删除分组</h3>
-    <p style="color:#ccc;font-size:13px;">确定要删除分组 "<strong>${grp.name}</strong>" 及其所有标签吗？</p>
-    <div class="modal-buttons">
-      <button class="modal-btn" id="modal-del-grp-cancel">取消</button>
-      <button class="modal-btn danger" id="modal-del-grp-confirm">删除</button>
-    </div>
-  `);
-  document.getElementById('modal-del-grp-cancel').onclick = () => hideModal();
-  document.getElementById('modal-del-grp-confirm').onclick = () => {
-    markDeletedDefaultGroup(currentCategory.id, grp.id);
-    const nextCategory = customGroupsData.categories[activeCategoryIndex];
-    if (!nextCategory) return;
-    nextCategory.groups.splice(index, 1);
-    nextCategory._modified = true;
-    if (activeGroupIndex >= nextCategory.groups.length) {
-      activeGroupIndex = Math.max(0, nextCategory.groups.length - 1);
-    }
-    hideModal();
-    renderSecondaryTabs();
-  };
+  return editController.deleteGroup(index);
 }
 
 // ========== 底部内联添加面板 (Plan A) ==========
+const inlineAddController = groupTagsInlineAddApi.createController({
+  scope: groupTagsScope,
+  storage: groupTagsStorage,
+  documentRef: document,
+  elements: {
+    enInput: document.getElementById('inline-tag-en'),
+    zhInput: document.getElementById('inline-tag-zh'),
+    wrapper: document.getElementById('inline-autocomplete-wrapper'),
+    dropdown: document.getElementById('inline-autocomplete-dropdown'),
+    resizer: document.getElementById('inline-autocomplete-resizer'),
+    submitButton: document.getElementById('inline-add-submit'),
+    gridContainer: dom.tagsGridContainer
+  },
+  getDictionary: () => autocompleteDict,
+  getState: () => ({
+    data: customGroupsData,
+    activeCategoryIndex,
+    activeGroupIndex
+  }),
+  isSpecialCategoryActive: isSpecialFavoritesActive,
+  toCanonicalTagKey,
+  toDisplayTagText,
+  findGlobalTagLocation,
+  formatTagLocation,
+  loadEffectiveDictionaryData,
+  queueDictionaryTagMeta,
+  renderTagsGrid,
+  onSubmitError: error => showInfoModal('新增失败', error?.message || '无法新增标签，请稍后重试。'),
+  logger: console
+});
+
 function setupInlineAddPanel() {
-  const enInput = document.getElementById('inline-tag-en');
-  const zhInput = document.getElementById('inline-tag-zh');
-  const wrapper = document.getElementById('inline-autocomplete-wrapper');
-  const dropdown = document.getElementById('inline-autocomplete-dropdown');
-  const resizer = document.getElementById('inline-autocomplete-resizer');
-  const submitBtn = document.getElementById('inline-add-submit');
-
-  let selectedIndex = -1;
-  let currentMatches = [];
-
-  // 初始化拉拽调高
-  let startY = 0;
-  let startHeight = 0;
-
-  // 读取可能的已保存高度
-  chrome.storage.local.get(['groupTagsAutocompleteHeight'], (data) => {
-    if (data.groupTagsAutocompleteHeight) {
-      wrapper.style.height = data.groupTagsAutocompleteHeight;
-    }
-  });
-
-  const onMouseMove = (e) => {
-    // 鼠标往上拖动（Y减小），拉长容器；反之缩短 (弹窗在上方，bottom固定)
-    const dy = startY - e.clientY; 
-    let newHeight = Math.max(100, startHeight + dy);
-    wrapper.style.height = `${newHeight}px`;
-  };
-
-  const onMouseUp = () => {
-    document.body.style.cursor = "";
-    resizer.classList.remove('active');
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mouseup", onMouseUp);
-    chrome.storage.local.set({
-      groupTagsAutocompleteHeight: wrapper.style.height,
-    });
-  };
-
-  resizer.addEventListener("mousedown", (e) => {
-    e.preventDefault(); // Prevent blur on input
-    startY = e.clientY;
-    startHeight = wrapper.getBoundingClientRect().height;
-    document.body.style.cursor = "row-resize";
-    resizer.classList.add('active');
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  });
-
-  const closeDropdown = () => {
-    wrapper.style.display = 'none';
-    selectedIndex = -1;
-  };
-
-  const renderDropdown = (matches, query) => {
-    if (matches.length === 0) {
-      closeDropdown();
-      return;
-    }
-    dropdown.innerHTML = '';
-    currentMatches = matches;
-    const formatCount = (n) => {
-      if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-      if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
-      return n + "";
-    };
-
-    const appendHighlightedText = (container, text, searchText) => {
-      const sourceText = String(text || '');
-      const normalizedSearchText = String(searchText || '').toLowerCase();
-      if (!normalizedSearchText) {
-        container.textContent = sourceText;
-        return;
-      }
-
-      const normalizedSourceText = sourceText.toLowerCase();
-      let cursor = 0;
-      let matchIndex = normalizedSourceText.indexOf(normalizedSearchText, cursor);
-
-      while (matchIndex >= 0) {
-        container.appendChild(document.createTextNode(sourceText.slice(cursor, matchIndex)));
-        const strong = document.createElement('strong');
-        strong.textContent = sourceText.slice(matchIndex, matchIndex + normalizedSearchText.length);
-        container.appendChild(strong);
-        cursor = matchIndex + normalizedSearchText.length;
-        matchIndex = normalizedSourceText.indexOf(normalizedSearchText, cursor);
-      }
-
-      container.appendChild(document.createTextNode(sourceText.slice(cursor)));
-    };
-
-    matches.forEach((m, idx) => {
-      const item = document.createElement('div');
-      item.className = 'autocomplete-item';
-      if (idx === selectedIndex) item.classList.add('selected');
-      const displayWord = m.displayWord || toDisplayTagText(m.word);
-
-      const enPart = document.createElement('span');
-      enPart.className = 'ac-en';
-      enPart.style.color = m.color;
-      appendHighlightedText(enPart, displayWord, query);
-
-      const zhPart = document.createElement('span');
-      zhPart.className = 'ac-zh';
-      const translation = document.createElement('span');
-      translation.className = 'autocomplete-trans';
-      appendHighlightedText(translation, m.zhCN || '', query);
-      const count = document.createElement('span');
-      count.className = 'autocomplete-count';
-      count.textContent = ` (${formatCount(m.pop)})`;
-      zhPart.appendChild(translation);
-      zhPart.appendChild(count);
-
-      item.appendChild(enPart);
-      item.appendChild(zhPart);
-      
-      item.onclick = () => {
-        // 用户期望：只填充输入框，并将词汇中的下划线去掉换成空格，随后聚焦中文框
-        enInput.value = m.word.replace(/_/g, ' ');
-        if (m.zhCN) zhInput.value = m.zhCN;
-        closeDropdown();
-        zhInput.focus();
-      };
-      dropdown.appendChild(item);
-    });
-    // 使用绝对定位的底部拉起
-    wrapper.style.display = 'flex';
-  };
-
-  enInput.addEventListener('input', () => {
-    // 允许输入下划线，但在匹配逻辑里，将输入的下划线视为空格（与原版字典兼容）
-    let valQuery = enInput.value.trim().toLowerCase();
-    if (!valQuery) {
-      closeDropdown();
-      return;
-    }
-    const valMatch = valQuery.replace(/_/g, ' '); // 将搜索词里的下划线转为空格，对应字典格式
-    
-    // wildcards-for-novelai-diffusion 的字典中的 word 是带下划线的还是带空格的？原版 Danbooru 是下划线。
-    // 但是在 Autocomplete.js 中，字典可能被转换了，或者用户打字去掉了下划线。
-    const matches = autocompleteDict.filter(item => 
-      item.search.includes(valMatch) || item.word.toLowerCase().includes(valQuery)
-    ).slice(0, 50); // 向主页看齐，最大显示50条
-    
-    selectedIndex = -1;
-    renderDropdown(matches, valQuery); // 保持高亮原输入值
-  });
-
-  enInput.addEventListener('keydown', (e) => {
-    if (wrapper.style.display === 'flex') {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        selectedIndex = (selectedIndex + 1) % currentMatches.length;
-        renderDropdown(currentMatches, enInput.value.trim());
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        selectedIndex = (selectedIndex - 1 + currentMatches.length) % currentMatches.length;
-        renderDropdown(currentMatches, enInput.value.trim());
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        if (selectedIndex >= 0 && currentMatches[selectedIndex]) {
-          const m = currentMatches[selectedIndex];
-          enInput.value = m.word.replace(/_/g, ' ');
-          if (m.zhCN) zhInput.value = m.zhCN;
-          closeDropdown();
-          // 如果用户用方向键选中，只做填充并聚焦中文框，不自动提交
-          zhInput.focus();
-        } else {
-          closeDropdown();
-          if (!zhInput.value.trim()) zhInput.focus();
-          else submitTag();
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        closeDropdown();
-      }
-    } else {
-      if (e.key === 'Enter') {
-        if (!zhInput.value.trim() && enInput.value.trim()) zhInput.focus();
-        else submitTag();
-      }
-    }
-    
-    // 从当前滚动位置让选中项可见
-    setTimeout(() => {
-      if (wrapper.style.display === 'flex') {
-        const activeItem = dropdown.querySelector('.selected');
-        if (activeItem) {
-          activeItem.scrollIntoView({ block: 'nearest' });
-        }
-      }
-    }, 10);
-  });
-
-  zhInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submitTag();
-  });
-
-  submitBtn.onclick = submitTag;
-
-  document.addEventListener('mousedown', (e) => {
-    if (!wrapper.contains(e.target) && e.target !== enInput) closeDropdown();
-  });
-
-  async function submitTag() {
-    const displayEn = enInput.value.trim();
-    if (!displayEn) return;
-    if (isSpecialFavoritesActive()) return;
-    const canonicalEn = toCanonicalTagKey(displayEn);
-    if (!canonicalEn) return;
-    const zh = zhInput.value.trim();
-    
-    const currentCategory = customGroupsData.categories[activeCategoryIndex];
-    if (!currentCategory) return;
-    const currentGroup = currentCategory.groups[activeGroupIndex];
-    if (!currentGroup) return;
-
-    const existingLocation = findGlobalTagLocation(canonicalEn);
-    if (existingLocation) {
-      enInput.style.borderColor = '#e74c3c';
-      enInput.value = '';
-      // 这里直接提示已有位置，避免用户再去猜到底是哪个分组占用了该 tag
-      enInput.placeholder = `已存在于 ${formatTagLocation(existingLocation)}`;
-      setTimeout(() => {
-        enInput.style.borderColor = '';
-        enInput.placeholder = 'Input English Tag (e.g. sunny)';
-      }, 2000);
-      return;
-    }
-
-    const dictionaryData = await loadEffectiveDictionaryData();
-    const existingEntry = dictionaryData.entryMap?.get(canonicalEn) || null;
-    const nextZh = zh || (existingEntry ? (existingEntry.zhCN || '') : '');
-    queueDictionaryTagMeta(canonicalEn, nextZh);
-    currentGroup.tags.push({
-      en: canonicalEn,
-      zh: nextZh
-    });
-    currentGroup._modified = true;
-    currentCategory._modified = true;
-    
-    // 清空重置输入框，连发模式
-    enInput.value = '';
-    zhInput.value = '';
-    enInput.focus();
-    renderTagsGrid();
-    
-    // 让滚动条滑到底部
-    setTimeout(() => {
-      const gridContainer = document.querySelector('.tags-grid-container');
-      if (gridContainer) gridContainer.scrollTop = gridContainer.scrollHeight;
-    }, 50);
-  }
+  inlineAddController.start();
 }
-
 function deleteTag(tagIndex) {
-  const currentCategory = customGroupsData.categories[activeCategoryIndex];
-  if (!currentCategory) return;
-  const currentGroup = currentCategory.groups[activeGroupIndex];
-  if (!currentGroup) return;
-  currentGroup.tags.splice(tagIndex, 1);
-  currentGroup._modified = true;
-  currentCategory._modified = true;
-  renderTagsGrid();
+  return editController.deleteTag(tagIndex);
 }
 
-function escapeHtmlText(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+// 收藏与句子悬浮预览已迁移到独立控制器。
 
-function buildFavoritePreviewHtml(item) {
-  const preview = item?.preview || { sections: [] };
-  const sectionsHtml = (preview.sections || []).map(section => `
-    <div class="favorites-preview-section">
-      <div class="favorites-preview-label">${escapeHtmlText(section.label)}</div>
-      <div class="favorites-preview-text">${escapeHtmlText(section.text)}</div>
-    </div>
-  `).join('');
-
-  return `
-    <div class="favorites-preview-title">
-      <div>
-        <div>${escapeHtmlText(item.name)}</div>
-        <div class="favorites-preview-meta">${escapeHtmlText(groupTagsFavoritesUtils.formatTime ? groupTagsFavoritesUtils.formatTime(item.timestamp) : '')}</div>
-      </div>
-      <span class="favorite-type-badge ${escapeHtmlText(item.typeClass)}">${escapeHtmlText(item.typeLabel)}</span>
-    </div>
-    <div class="favorites-preview-body">
-      ${sectionsHtml || '<div class="favorites-preview-section"><div class="favorites-preview-text">暂无内容</div></div>'}
-    </div>
-  `;
-}
-
-function buildSentencePreviewHtml(item, isEdit) {
-  const zh = escapeHtmlText(item?.zh || '');
-  const en = escapeHtmlText(item?.en || '');
-  if (isEdit) {
-    const editableStyles = `outline: none; cursor: text; border-bottom: 1px dashed rgba(255,255,255,0.2); transition: border-color 0.2s, background-color 0.2s; padding: 2px 4px; margin: -2px -4px; border-radius: 4px;`;
-    const focusStyles = `onfocus="this.style.borderBottom='1px solid #818cf8'; this.style.backgroundColor='rgba(129, 140, 248, 0.1)';" onblur="this.style.borderBottom='1px dashed rgba(255,255,255,0.2)'; this.style.backgroundColor='transparent';"`;
-    return `
-      <div class="favorites-preview-title">
-        <div>
-          <div>句子预览 <span style="color:#818cf8; font-size:11px; margin-left:4px; font-weight:normal;">(点击文本直接修改)</span></div>
-          <div class="favorites-preview-meta">Sentence</div>
-        </div>
-        <span class="favorite-type-badge sentence-preview-badge" style="background:#4f46e5;">Editing</span>
-      </div>
-      <div class="favorites-preview-body">
-        <div class="favorites-preview-section">
-          <div class="favorites-preview-label">中文</div>
-          <div class="favorites-preview-text sentence-preview-edit-zh" contenteditable="true" style="${editableStyles}" ${focusStyles} spellcheck="false">${zh}</div>
-        </div>
-        <div class="favorites-preview-section">
-          <div class="favorites-preview-label">English</div>
-          <div class="favorites-preview-text sentence-preview-edit-en" contenteditable="true" style="${editableStyles}" ${focusStyles} spellcheck="false">${en}</div>
-        </div>
-      </div>
-    `;
-  }
-  return `
-    <div class="favorites-preview-title">
-      <div>
-        <div>句子预览</div>
-        <div class="favorites-preview-meta">Sentence</div>
-      </div>
-      <span class="favorite-type-badge sentence-preview-badge">Sentence</span>
-    </div>
-    <div class="favorites-preview-body">
-      <div class="favorites-preview-section">
-        <div class="favorites-preview-label">中文</div>
-        <div class="favorites-preview-text">${zh || '暂无内容'}</div>
-      </div>
-      <div class="favorites-preview-section">
-        <div class="favorites-preview-label">English</div>
-        <div class="favorites-preview-text">${en || 'No content'}</div>
-      </div>
-    </div>
-  `;
-}
-
-function positionFavoritePreviewPopover(anchorRect) {
-  if (!favoritePreviewPopover) return;
-  if (!anchorRect) return;
-  const offset = 2;
-  favoritePreviewPopover.style.maxWidth = '';
-  favoritePreviewPopover.style.maxHeight = '';
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const space = {
-    right: Math.max(0, viewportWidth - anchorRect.right - offset - 12),
-    left: Math.max(0, anchorRect.left - offset - 12),
-    bottom: Math.max(0, viewportHeight - anchorRect.bottom - offset - 12),
-    top: Math.max(0, anchorRect.top - offset - 12)
-  };
-  const naturalRect = favoritePreviewPopover.getBoundingClientRect();
-  const preferredOrder = ['right', 'left', 'bottom', 'top'].sort((a, b) => space[b] - space[a]);
-  let placement = preferredOrder[0];
-
-  for (const direction of preferredOrder) {
-    if ((direction === 'right' || direction === 'left') && space[direction] >= 220) {
-      placement = direction;
-      break;
-    }
-    if ((direction === 'bottom' || direction === 'top') && space[direction] >= 180) {
-      placement = direction;
-      break;
-    }
-  }
-
-  if (placement === 'right' || placement === 'left') {
-    favoritePreviewPopover.style.maxWidth = `${Math.max(220, space[placement])}px`;
-    favoritePreviewPopover.style.maxHeight = `${Math.max(160, viewportHeight - 24)}px`;
-  } else {
-    favoritePreviewPopover.style.maxWidth = `${Math.max(220, viewportWidth - 24)}px`;
-    favoritePreviewPopover.style.maxHeight = `${Math.max(160, space[placement])}px`;
-  }
-
-  const rect = favoritePreviewPopover.getBoundingClientRect();
-  const maxLeft = Math.max(12, viewportWidth - rect.width - 12);
-  const maxTop = Math.max(12, viewportHeight - rect.height - 12);
-
-  let left = 12;
-  let top = 12;
-
-  if (placement === 'right') {
-    left = clampPreviewPosition(anchorRect.right + offset, 12, maxLeft);
-    top = clampPreviewPosition(anchorRect.top + ((anchorRect.height - rect.height) / 2), 12, maxTop);
-  } else if (placement === 'left') {
-    left = clampPreviewPosition(anchorRect.left - rect.width - offset, 12, maxLeft);
-    top = clampPreviewPosition(anchorRect.top + ((anchorRect.height - rect.height) / 2), 12, maxTop);
-  } else if (placement === 'bottom') {
-    left = clampPreviewPosition(anchorRect.left + ((anchorRect.width - rect.width) / 2), 12, maxLeft);
-    top = clampPreviewPosition(anchorRect.bottom + offset, 12, maxTop);
-  } else {
-    left = clampPreviewPosition(anchorRect.left + ((anchorRect.width - rect.width) / 2), 12, maxLeft);
-    top = clampPreviewPosition(anchorRect.top - rect.height - offset, 12, maxTop);
-  }
-
-  favoritePreviewPopover.style.left = `${left}px`;
-  favoritePreviewPopover.style.top = `${top}px`;
-}
-
-function bindFavoritePreview(card, item) {
-  const updatePosition = () => positionFavoritePreviewPopover(card.getBoundingClientRect());
-
-  card.addEventListener('mouseenter', () => {
-    if (favoritePreviewHideTimer) {
-      clearTimeout(favoritePreviewHideTimer);
-      favoritePreviewHideTimer = null;
-    }
-    const popover = ensureFavoritePreviewPopover();
-    popover.innerHTML = buildFavoritePreviewHtml(item);
-    popover.classList.add('visible');
-    updatePosition();
-  });
-
-  card.addEventListener('mousemove', () => {
-    updatePosition();
-  });
-
-  card.addEventListener('mouseleave', () => {
-    scheduleHideFavoritePreviewPopover();
-  });
-}
-
-function bindSentencePreview(card, item, currentCategory, currentGroup, zhPart, enPart) {
-  const updatePosition = () => positionFavoritePreviewPopover(card.getBoundingClientRect());
-
-  card.addEventListener('mouseenter', () => {
-    if (favoritePreviewHideTimer) {
-      clearTimeout(favoritePreviewHideTimer);
-      favoritePreviewHideTimer = null;
-    }
-    const popover = ensureFavoritePreviewPopover();
-    popover.innerHTML = buildSentencePreviewHtml(item, isEditMode);
-    
-    if (isEditMode) {
-      const zhInput = popover.querySelector('.sentence-preview-edit-zh');
-      const enInput = popover.querySelector('.sentence-preview-edit-en');
-      if (zhInput) {
-        zhInput.addEventListener('input', (e) => {
-          const val = e.target.innerText;
-          item.zh = val;
-          if (zhPart) zhPart.textContent = val;
-          if (currentCategory) currentCategory._modified = true;
-          if (currentGroup) currentGroup._modified = true;
-        });
-        zhInput.addEventListener('keydown', (e) => e.stopPropagation());
-      }
-      if (enInput) {
-        enInput.addEventListener('input', (e) => {
-          const val = e.target.innerText;
-          item.en = val;
-          if (enPart) enPart.textContent = val;
-          if (currentCategory) currentCategory._modified = true;
-          if (currentGroup) currentGroup._modified = true;
-        });
-        enInput.addEventListener('keydown', (e) => e.stopPropagation());
-      }
-    }
-
-    popover.classList.add('visible');
-    updatePosition();
-  });
-
-  card.addEventListener('mousemove', () => {
-    updatePosition();
-  });
-
-  card.addEventListener('mouseleave', () => {
-    scheduleHideFavoritePreviewPopover();
-  });
-}
-
-function requestRestoreFavoriteSnapshot(snapshot) {
-  if (chrome?.runtime?.sendMessage) {
-    chrome.runtime.sendMessage({ type: 'RESTORE_HISTORY_SNAPSHOT', snapshot });
-    return;
-  }
-  window.parent.postMessage({ type: '__RESTORE_HISTORY__', snapshot }, '*');
-}
-
-function requestAppendFavoriteSnippet(snapshot, target) {
-  if (chrome?.runtime?.sendMessage) {
-    chrome.runtime.sendMessage({ type: 'APPEND_HISTORY_SNIPPET', snapshot, target });
-    return;
-  }
-  window.parent.postMessage({ type: '__APPEND_HISTORY_SNIPPET__', snapshot, target }, '*');
-}
-
-function openFavoriteActionModal(item) {
-  hideFavoritePreviewPopover();
-  const snapshot = cloneData(item.snapshot);
-  if (!snapshot) return;
-
-  if (item.type === 'full') {
-    showModal(`
-      <h3>恢复整条收藏</h3>
-      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认恢复 <strong>${escapeHtml(item.name)}</strong> 的完整提示词状态？</div>
-      <div class="modal-buttons">
-        <button class="modal-btn" id="modal-fav-cancel">取消</button>
-        <button class="modal-btn primary" id="modal-fav-restore">确认恢复</button>
-      </div>
-    `);
-    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
-    document.getElementById('modal-fav-restore').onclick = () => {
-      hideModal();
-      requestRestoreFavoriteSnapshot(snapshot);
-    };
-    return;
-  }
-
-  if (item.type === 'positive' || item.type === 'negative') {
-    const targetLabel = item.type === 'positive' ? '正面' : '负面';
-    showModal(`
-      <h3>${escapeHtml(item.name)}</h3>
-      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">选择对 ${targetLabel} 提示词执行的动作。</div>
-      <div class="modal-buttons">
-        <button class="modal-btn" id="modal-fav-cancel">取消</button>
-        <button class="modal-btn" id="modal-fav-append">追加到${targetLabel}</button>
-        <button class="modal-btn primary" id="modal-fav-restore">局部恢复${targetLabel}</button>
-      </div>
-    `);
-    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
-    document.getElementById('modal-fav-append').onclick = () => {
-      hideModal();
-      requestAppendFavoriteSnippet(snapshot, item.type === 'positive' ? 'positive' : 'negative');
-    };
-    document.getElementById('modal-fav-restore').onclick = () => {
-      hideModal();
-      requestRestoreFavoriteSnapshot(snapshot);
-    };
-    return;
-  }
-
-  if (item.type === 'character') {
-    showModal(`
-      <h3>${escapeHtml(item.name)}</h3>
-      <div style="color:#d1d5db;font-size:12px;line-height:1.6;">角色片段仅支持局部恢复到对应角色块。</div>
-      <div class="modal-buttons">
-        <button class="modal-btn" id="modal-fav-cancel">取消</button>
-        <button class="modal-btn primary" id="modal-fav-restore">局部恢复角色片段</button>
-      </div>
-    `);
-    document.getElementById('modal-fav-cancel').onclick = () => hideModal();
-    document.getElementById('modal-fav-restore').onclick = () => {
-      hideModal();
-      requestRestoreFavoriteSnapshot(snapshot);
-    };
-  }
-}
 
 function bindFavoriteDropOnGroupTab(button, groupId, groupIndex) {
   if (!isEditMode || !isSpecialFavoritesActive()) return;
@@ -2002,9 +1040,10 @@ function renderSpecialFavoritesGrid(currentCategory, currentGroup) {
     const zhPart = document.createElement('div');
     zhPart.className = 'tag-zh-part';
     zhPart.style.backgroundColor = '#374151';
+    const favoriteTypeClass = /^[a-z0-9_-]+$/i.test(item.typeClass || '') ? item.typeClass : 'partial';
     zhPart.innerHTML = `
-      <span>${escapeHtmlText(item.name)}</span>
-      <span class="favorite-type-badge ${escapeHtmlText(item.typeClass)}">${escapeHtmlText(item.typeLabel)}</span>
+      <span>${escapeHtml(item.name)}</span>
+      <span class="favorite-type-badge ${favoriteTypeClass}">${escapeHtml(item.typeLabel)}</span>
     `;
 
     const enPart = document.createElement('div');
@@ -2030,23 +1069,7 @@ function renderSpecialFavoritesGrid(currentCategory, currentGroup) {
       badge.textContent = '×';
       badge.onclick = (event) => {
         event.stopPropagation();
-        hideFavoritePreviewPopover();
-        if (!groupTagsFavoritesUtils.deleteFavoriteItem) return;
-        showModal(`
-          <h3>确认删除收藏片段</h3>
-          <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除 <strong>${escapeHtml(item.name)}</strong> 吗？这项修改在当前编辑态下可通过取消恢复。</div>
-          <div class="modal-buttons">
-            <button class="modal-btn" id="modal-favorite-delete-cancel">取消</button>
-            <button class="modal-btn danger" id="modal-favorite-delete-confirm">删除</button>
-          </div>
-        `);
-        document.getElementById('modal-favorite-delete-cancel').onclick = () => hideModal();
-        document.getElementById('modal-favorite-delete-confirm').onclick = async () => {
-          hideModal();
-          await groupTagsFavoritesUtils.deleteFavoriteItem(item.id);
-          customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-          renderTagsGrid();
-        };
+        editController.deleteFavoriteItem(item);
       };
       card.appendChild(badge);
     }
@@ -2205,6 +1228,7 @@ function renderSecondaryTabs() {
 
     const btn = document.createElement('button');
     btn.className = `tab-btn ${index === activeGroupIndex ? 'active' : ''}`;
+    btn.dataset.groupId = grp.id || '';
     if (isSpecialCategory) {
       btn.classList.add('special-favorites-group-tab');
     }
@@ -2311,24 +1335,7 @@ function renderSecondaryTabs() {
           del.textContent = '×';
           del.onclick = (event) => {
             event.stopPropagation();
-            hideFavoritePreviewPopover();
-            if (!groupTagsFavoritesUtils.deleteFavoriteFolder) return;
-            showModal(`
-              <h3>确认删除文件夹</h3>
-              <div style="color:#d1d5db;font-size:12px;line-height:1.6;">确认删除文件夹 <strong>${escapeHtml(grp.name)}</strong> 吗？文件夹内收藏会回到未归档分组，这项修改在当前编辑态下可通过取消恢复。</div>
-              <div class="modal-buttons">
-                <button class="modal-btn" id="modal-folder-delete-cancel">取消</button>
-                <button class="modal-btn danger" id="modal-folder-delete-confirm">删除</button>
-              </div>
-            `);
-            document.getElementById('modal-folder-delete-cancel').onclick = () => hideModal();
-            document.getElementById('modal-folder-delete-confirm').onclick = async () => {
-              hideModal();
-              await groupTagsFavoritesUtils.deleteFavoriteFolder(grp.id);
-              customGroupsData = await rebuildWithSpecialFavorites(stripSpecialFavoritesCategory(customGroupsData), { apply: false });
-              activeGroupIndex = Math.max(0, activeGroupIndex - 1);
-              renderSecondaryTabs();
-            };
+            deleteGroup(index);
           };
           btn.appendChild(del);
         }
@@ -2413,9 +1420,9 @@ function renderTagsGrid() {
           window.parent.postMessage({ type: '__REMOVE_TAG_FROM_PANEL__', tag: isSentence ? promptText : displayEn }, '*');
         } else if (isUsedOther) {
           card.style.transform = 'translateX(5px)';
-          setTimeout(() => card.style.transform = 'translateX(-5px)', 50);
-          setTimeout(() => card.style.transform = 'translateX(5px)', 100);
-          setTimeout(() => card.style.transform = 'translateX(0)', 150);
+          groupTagsScope.timeout(() => card.style.transform = 'translateX(-5px)', 50);
+          groupTagsScope.timeout(() => card.style.transform = 'translateX(5px)', 100);
+          groupTagsScope.timeout(() => card.style.transform = 'translateX(0)', 150);
         } else {
           window.parent.postMessage({
             type: '__APPEND_TAG_FROM_PANEL__',
@@ -2561,7 +1568,7 @@ function renderTagsGrid() {
 }
 
 // ========== 监听来自父窗口的消息（标签同步等） ==========
-window.addEventListener('message', (e) => {
+groupTagsScope.on(window, 'message', (e) => {
   if (e.data?.type === '__SYNC_ACTIVE_TAGS__') {
     const parseTags = (tagsArray) => {
       if (!Array.isArray(tagsArray)) return [];
@@ -2637,9 +1644,8 @@ async function init() {
     defaultGroupsData = normalizeGroupTagsData(defaultData).data;
     
     // 2. 从 chrome.storage.local 加载用户自定义数据
-    let stored = await new Promise(resolve => {
-      chrome.storage.local.get('groupTagsUserData', (data) => resolve(data.groupTagsUserData));
-    });
+    const storedData = await groupTagsStorage.get('groupTagsUserData');
+    let stored = storedData.groupTagsUserData;
     if (stored?.categories) {
       // 初始化时自动迁移旧格式 tag，并把翻译回填到主库规范
       const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
@@ -2670,7 +1676,11 @@ async function init() {
 
 init();
 
-chrome.storage.onChanged.addListener(async (changes, area) => {
+groupTagsScope.on(window, 'pagehide', () => {
+  groupTagsScope.dispose('pagehide');
+});
+
+groupTagsScope.chromeEvent(chrome.storage.onChanged, async (changes, area) => {
   if (area !== 'local' || !hasInitializedGroupTagsPanel) return;
   if (isEditMode) {
     // 编辑模式下不自动覆盖，避免把用户未保存的本地修改冲掉
@@ -2705,7 +1715,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 // ========== 按钮事件绑定 ==========
 
 // 颜色选择器
-dom.colorPicker.addEventListener('input', (e) => {
+groupTagsScope.on(dom.colorPicker, 'input', (e) => {
   if (isSpecialFavoritesActive()) return;
   const newColor = e.target.value;
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
@@ -2722,7 +1732,7 @@ dom.colorPicker.addEventListener('input', (e) => {
   applyVisibleCurrentGroupColor(newColor);
 });
 
-dom.colorPicker.addEventListener('change', (e) => {
+groupTagsScope.on(dom.colorPicker, 'change', (e) => {
   if (isSpecialFavoritesActive()) return;
   const newColor = e.target.value;
   const currentCategory = customGroupsData.categories[activeCategoryIndex];
@@ -2742,20 +1752,20 @@ dom.colorPicker.addEventListener('change', (e) => {
 });
 
 // Edit / Save / Cancel
-dom.btnEdit.addEventListener('click', () => enterEditMode());
-dom.btnExport.addEventListener('click', () => exportGroupTagsData());
-dom.btnImport.addEventListener('click', () => dom.importFileInput.click());
-dom.btnSave.addEventListener('click', () => finalizeEditMode(true));
-dom.btnCancel.addEventListener('click', () => finalizeEditMode(false));
-dom.importFileInput.addEventListener('change', (e) => {
+groupTagsScope.on(dom.btnEdit, 'click', () => enterEditMode());
+groupTagsScope.on(dom.btnExport, 'click', () => exportGroupTagsData());
+groupTagsScope.on(dom.btnImport, 'click', () => dom.importFileInput.click());
+groupTagsScope.on(dom.btnSave, 'click', () => finalizeEditMode(true));
+groupTagsScope.on(dom.btnCancel, 'click', () => finalizeEditMode(false));
+groupTagsScope.on(dom.importFileInput, 'change', (e) => {
   const [file] = e.target.files || [];
   importGroupTagsData(file);
 });
 
 // + 按钮（编辑模式下才可用）
-dom.btnAddCategory.addEventListener('click', () => {
+groupTagsScope.on(dom.btnAddCategory, 'click', () => {
   if (isEditMode) addCategory();
 });
-dom.btnAddGroup.addEventListener('click', () => {
+groupTagsScope.on(dom.btnAddGroup, 'click', () => {
   if (isEditMode) addGroup();
 });

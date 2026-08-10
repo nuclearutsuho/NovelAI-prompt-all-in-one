@@ -1,21 +1,29 @@
-// Background Service Worker for Wildcard Sync
-// 处理来自 sync.html 的存储请求 (Handle storage requests from sync.html)
+// 后台 Service Worker：负责跨页面消息、默认数据安装和同步脏标记。
+importScripts('lib/storage/extension-storage.js');
+
+const storageRepository = globalThis.NaiAioStorage.createRepository(chrome.storage.local, {
+    logger: console
+});
+
+storageRepository.ensureMigrated().catch(error => {
+    console.error('[Background] 扩展存储迁移失败:', error);
+});
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getWildcards') {
-        chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
-            sendResponse(data);
-        });
-        return true; // 异步响应 (Async response)
+        storageRepository.get(['wildcards', 'wildcardFolders'])
+            .then(sendResponse)
+            .catch(error => sendResponse({ error: String(error) }));
+        return true;
     }
 
     if (request.action === 'setWildcards') {
-        chrome.storage.local.set({
+        storageRepository.set({
             wildcards: request.wildcards,
             wildcardFolders: request.wildcardFolders
-        }, () => {
-            sendResponse({ success: true });
-        });
+        })
+            .then(() => sendResponse({ success: true }))
+            .catch(error => sendResponse({ success: false, error: String(error) }));
         return true;
     }
 
@@ -30,7 +38,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(async (details) => {
     if (details.reason === 'install') {
         try {
-            const data = await chrome.storage.local.get(['wildcards']);
+            const data = await storageRepository.get(['wildcards']);
             if (!data.wildcards || Object.keys(data.wildcards).length === 0) {
                 const defaultFiles = ['东方人物.txt', '画师1348-danbooru超过1000张图的.txt'];
                 const wildcards = {};
@@ -47,7 +55,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
                     }
                 }
                 if (Object.keys(wildcards).length > 0) {
-                    await chrome.storage.local.set({ wildcards });
+                    await storageRepository.set({ wildcards });
                     console.log('Default wildcards injected successfully.');
                 }
             }
@@ -93,7 +101,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 
     if (Object.keys(timeUpdates).length > 0) {
-        chrome.storage.local.set(timeUpdates);
+        storageRepository.set(timeUpdates).catch(error => {
+            console.error('[Background] 保存同步脏标记失败:', error);
+        });
     }
 });
 
@@ -104,13 +114,13 @@ chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'sync-heartbeat') return;
     
     activeSyncPorts.add(port);
-    chrome.storage.local.set({ syncPageActive: true });
+    storageRepository.set({ syncPageActive: true }).catch(() => {});
     
     port.onDisconnect.addListener(() => {
         activeSyncPorts.delete(port);
         // 只有当所有 sync 页面都关闭时，才将挂载状态标为 false
         if (activeSyncPorts.size === 0) {
-            chrome.storage.local.set({ syncPageActive: false });
+            storageRepository.set({ syncPageActive: false }).catch(() => {});
         }
     });
 });

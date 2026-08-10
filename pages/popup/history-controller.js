@@ -1,5 +1,7 @@
 export default function createHistoryController(deps = {}) {
   const {
+    storageRepository,
+    lifecycleScope,
     getBaseState = () => ({}),
     setBaseState = () => {},
     getCharacterState = () => ({}),
@@ -15,6 +17,13 @@ export default function createHistoryController(deps = {}) {
     syncAll = async () => {}
   } = deps;
 
+  if (!storageRepository?.readHistoryState || !storageRepository?.writeHistory) {
+    throw new TypeError('[History] 缺少扩展存储仓库');
+  }
+  if (!lifecycleScope?.timeout || !lifecycleScope?.cancelTimeout) {
+    throw new TypeError('[History] 缺少生命周期作用域');
+  }
+
   let historyScopeId = '';
   let lastRecordedFingerprint = null;
   let popupDebounceTimer = null;
@@ -28,8 +37,8 @@ export default function createHistoryController(deps = {}) {
   }
 
   function clearDebounceTimers() {
-    window.clearTimeout(popupDebounceTimer);
-    window.clearTimeout(webpageDebounceTimer);
+    if (popupDebounceTimer !== null) lifecycleScope.cancelTimeout(popupDebounceTimer);
+    if (webpageDebounceTimer !== null) lifecycleScope.cancelTimeout(webpageDebounceTimer);
     popupDebounceTimer = null;
     webpageDebounceTimer = null;
   }
@@ -171,8 +180,8 @@ export default function createHistoryController(deps = {}) {
     popupDebounceTimer = null;
     webpageDebounceTimer = null;
 
-    const data = await chrome.storage.local.get(['promptHistory', 'historyLimit']);
-    let history = data.promptHistory || [];
+    const historyState = await storageRepository.readHistoryState();
+    let history = historyState.history;
 
     const baseState = getBaseState() || {};
     const { characterPromptsData = [] } = getCharacterState() || {};
@@ -229,7 +238,7 @@ export default function createHistoryController(deps = {}) {
         activeTab: character.activeTab || 'positive'
       }))
     };
-    const limit = data.historyLimit || 100;
+    const limit = historyState.limit;
 
     history.unshift(snapshot);
 
@@ -240,7 +249,7 @@ export default function createHistoryController(deps = {}) {
     }
     history = [...ordinaryHistory, ...favorites].sort((a, b) => b.timestamp - a.timestamp);
 
-    await chrome.storage.local.set({ promptHistory: history });
+    await storageRepository.writeHistory(history);
   }
 
   function recordHistory(source = 'popup') {
@@ -250,17 +259,17 @@ export default function createHistoryController(deps = {}) {
     }
 
     if (source === 'popup') {
-      window.clearTimeout(webpageDebounceTimer);
-      window.clearTimeout(popupDebounceTimer);
-      popupDebounceTimer = window.setTimeout(() => {
+      if (webpageDebounceTimer !== null) lifecycleScope.cancelTimeout(webpageDebounceTimer);
+      if (popupDebounceTimer !== null) lifecycleScope.cancelTimeout(popupDebounceTimer);
+      popupDebounceTimer = lifecycleScope.timeout(() => {
         commitSnapshot();
       }, POPUP_DEBOUNCE_MS);
       return Promise.resolve();
     }
 
     if (popupDebounceTimer) return Promise.resolve();
-    window.clearTimeout(webpageDebounceTimer);
-    webpageDebounceTimer = window.setTimeout(() => {
+    if (webpageDebounceTimer !== null) lifecycleScope.cancelTimeout(webpageDebounceTimer);
+    webpageDebounceTimer = lifecycleScope.timeout(() => {
       commitSnapshot();
     }, WEBPAGE_DEBOUNCE_MS);
     return Promise.resolve();

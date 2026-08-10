@@ -111,6 +111,8 @@ function extractTranslatedText(responseJson) {
 
 export default function createAiTranslateController(deps = {}) {
   const {
+    storageRepository,
+    lifecycleScope,
     getLocalizedText = (key, fallback = '') => fallback || key,
     showToast = () => {},
     normalizeTargetContext = (targetContext) => targetContext,
@@ -120,6 +122,13 @@ export default function createAiTranslateController(deps = {}) {
     refreshPendingVisuals = () => {},
     recordAnnotationChange = () => {}
   } = deps;
+
+  if (!storageRepository?.get || !storageRepository?.set) {
+    throw new TypeError('[AI Translate] 缺少扩展存储仓库');
+  }
+  if (!lifecycleScope?.timeout || !lifecycleScope?.interval) {
+    throw new TypeError('[AI Translate] 缺少生命周期作用域');
+  }
 
   let aiTranslateConfigState = null;
   let aiPendingVisualTimer = null;
@@ -132,12 +141,12 @@ export default function createAiTranslateController(deps = {}) {
   }
 
   async function loadConfig() {
-    const stored = (await chrome.storage.local.get(AI_TRANSLATE_STORAGE_KEY))[AI_TRANSLATE_STORAGE_KEY];
+    const stored = (await storageRepository.get(AI_TRANSLATE_STORAGE_KEY))[AI_TRANSLATE_STORAGE_KEY];
     const normalized = normalizeAiTranslateConfig(stored);
     aiTranslateConfigState = normalized;
 
     if (!stored || JSON.stringify(stored) !== JSON.stringify(normalized)) {
-      await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: normalized });
+      await storageRepository.set({ [AI_TRANSLATE_STORAGE_KEY]: normalized });
     }
 
     return normalized;
@@ -145,7 +154,7 @@ export default function createAiTranslateController(deps = {}) {
 
   async function saveConfig(config) {
     aiTranslateConfigState = normalizeAiTranslateConfig(config);
-    await chrome.storage.local.set({ [AI_TRANSLATE_STORAGE_KEY]: aiTranslateConfigState });
+    await storageRepository.set({ [AI_TRANSLATE_STORAGE_KEY]: aiTranslateConfigState });
     return aiTranslateConfigState;
   }
 
@@ -278,7 +287,7 @@ export default function createAiTranslateController(deps = {}) {
   function syncPendingVisualTimer() {
     if (!hasActivePendingRequests()) {
       if (aiPendingVisualTimer !== null) {
-        window.clearInterval(aiPendingVisualTimer);
+        lifecycleScope.cancelInterval(aiPendingVisualTimer);
         aiPendingVisualTimer = null;
       }
       return;
@@ -287,9 +296,9 @@ export default function createAiTranslateController(deps = {}) {
     refreshPendingVisuals();
 
     if (aiPendingVisualTimer !== null) return;
-    aiPendingVisualTimer = window.setInterval(() => {
+    aiPendingVisualTimer = lifecycleScope.interval(() => {
       if (!hasActivePendingRequests()) {
-        window.clearInterval(aiPendingVisualTimer);
+        lifecycleScope.cancelInterval(aiPendingVisualTimer);
         aiPendingVisualTimer = null;
         return;
       }
@@ -526,7 +535,7 @@ export default function createAiTranslateController(deps = {}) {
 
   async function runAiCompletion(sourceText, profile, { controller = null, systemPrompt = DEFAULT_AI_SYSTEM_PROMPT } = {}) {
     const requestController = controller || new AbortController();
-    const timer = window.setTimeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
+    const timer = lifecycleScope.timeout(() => requestController.abort(), AI_TRANSLATE_REQUEST_TIMEOUT_MS);
 
     try {
       const headers = {
@@ -564,7 +573,7 @@ export default function createAiTranslateController(deps = {}) {
 
       return completionText;
     } finally {
-      window.clearTimeout(timer);
+      lifecycleScope.cancelTimeout(timer);
     }
   }
 
@@ -1038,8 +1047,8 @@ export default function createAiTranslateController(deps = {}) {
     ].filter(Boolean);
 
     const scheduleSave = () => {
-      window.clearTimeout(settingsSaveTimer);
-      settingsSaveTimer = window.setTimeout(() => {
+      if (settingsSaveTimer !== null) lifecycleScope.cancelTimeout(settingsSaveTimer);
+      settingsSaveTimer = lifecycleScope.timeout(() => {
         persistAiTranslateProfileForm().catch((error) => {
           console.error('[AI Translate] 保存配置失败:', error);
         });
@@ -1048,7 +1057,7 @@ export default function createAiTranslateController(deps = {}) {
 
     const flushPendingSave = async () => {
       if (settingsSaveTimer !== null) {
-        window.clearTimeout(settingsSaveTimer);
+        lifecycleScope.cancelTimeout(settingsSaveTimer);
         settingsSaveTimer = null;
       }
       await persistAiTranslateProfileForm();
@@ -1119,11 +1128,11 @@ export default function createAiTranslateController(deps = {}) {
       aiPendingRequestMap.delete(requestId);
     }
     if (aiPendingVisualTimer !== null) {
-      window.clearInterval(aiPendingVisualTimer);
+      lifecycleScope.cancelInterval(aiPendingVisualTimer);
       aiPendingVisualTimer = null;
     }
     if (settingsSaveTimer !== null) {
-      window.clearTimeout(settingsSaveTimer);
+      lifecycleScope.cancelTimeout(settingsSaveTimer);
       settingsSaveTimer = null;
     }
   }

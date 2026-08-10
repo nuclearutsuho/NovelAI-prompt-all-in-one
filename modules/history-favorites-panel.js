@@ -6,6 +6,19 @@ console.log('[Wildcard] History Modal module loaded');
   // ═══════════════════════════════════════════════════════════════
 
 (function initHistoryModal() {
+    const runtime = globalThis.NaiAioRuntime;
+    if (!runtime) {
+      console.error('[Wildcard] 运行时生命周期内核未加载，历史面板停止初始化。');
+      return;
+    }
+    const historyScope = runtime.acquire('content:history');
+    const storageApi = globalThis.NaiAioStorage;
+    if (!storageApi?.createRepository) {
+      console.error('[Wildcard] 扩展存储仓库未加载，历史面板停止初始化。');
+      historyScope.dispose('missing-storage-repository');
+      return;
+    }
+    const historyStorage = storageApi.createRepository(chrome.storage.local, { logger: console });
     const MODAL_ID = 'nai-history-modal';
     
     function getGroupTagsDataUtils() {
@@ -618,6 +631,7 @@ console.log('[Wildcard] History Modal module loaded');
       el.id = 'nai-history-modal-style';
       el.textContent = STYLE;
       document.head.appendChild(el);
+      historyScope.ownNode(el);
     }
 
     // ───── 工具函数 ─────────────────────────────────────────────
@@ -1238,32 +1252,22 @@ console.log('[Wildcard] History Modal module loaded');
     // ───── 从 chrome.storage 读写 ────────────────────────────────
     // 本模块运行在扩展隔离环境，历史数据不再通过官网页面的 postMessage 暴露。
     async function getHistoryData() {
-      const data = await chrome.storage.local.get([
-        'promptHistory',
-        'historyLimit',
-        'groupColorMap',
-        'groupTranslationMap',
-        'enableGrouping'
-      ]);
-
-      globalEnableGrouping = data.enableGrouping !== undefined ? data.enableGrouping : true;
-      return {
-        history: Array.isArray(data.promptHistory) ? data.promptHistory : [],
-        limit: Number.isFinite(Number(data.historyLimit)) ? Number(data.historyLimit) : 100,
-        groupColorMap: data.groupColorMap && typeof data.groupColorMap === 'object' ? data.groupColorMap : {},
-        groupTranslationMap: data.groupTranslationMap && typeof data.groupTranslationMap === 'object' ? data.groupTranslationMap : {},
-        enableGrouping: globalEnableGrouping
-      };
+      const data = await historyStorage.readHistoryState();
+      globalEnableGrouping = data.enableGrouping;
+      return data;
     }
 
     function saveHistoryData(history) {
       if (!Array.isArray(history)) return;
-      chrome.storage.local.set({ promptHistory: history });
+      historyStorage.writeHistory(history).catch(error => {
+        console.error('[Wildcard] 保存历史记录失败:', error);
+      });
     }
 
     function saveLimitData(limit) {
-      const normalizedLimit = Math.max(10, Math.min(1000, Number.parseInt(limit, 10) || 100));
-      chrome.storage.local.set({ historyLimit: normalizedLimit });
+      historyStorage.writeHistoryLimit(limit).catch(error => {
+        console.error('[Wildcard] 保存历史上限失败:', error);
+      });
     }
 
     // ───── Modal 主体 ──────────────────────────────────────────
@@ -1442,6 +1446,7 @@ console.log('[Wildcard] History Modal module loaded');
 
       backdrop.appendChild(container);
       document.body.appendChild(backdrop);
+      historyScope.ownNode(backdrop);
 
       // 关闭
       backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
@@ -1511,7 +1516,7 @@ console.log('[Wildcard] History Modal module loaded');
       });
 
       // ESC 关闭
-      document.addEventListener('keydown', e => {
+      historyScope.on(document, 'keydown', e => {
         if (e.key === 'Escape' && document.getElementById('nai-history-backdrop')?.classList.contains('visible')) {
           closeModal();
         }
@@ -1728,7 +1733,7 @@ console.log('[Wildcard] History Modal module loaded');
             e.stopPropagation();
             dropdown.classList.toggle('visible');
           };
-          document.addEventListener('click', () => dropdown.classList.remove('visible'), { once: true });
+          historyScope.on(document, 'click', () => dropdown.classList.remove('visible'), { once: true });
 
           moveWrap.appendChild(moveBtn);
           moveWrap.appendChild(dropdown);
@@ -2508,7 +2513,7 @@ console.log('[Wildcard] History Modal module loaded');
     }
 
     // ───── 监听打开指令 ─────────────────────────────────────────
-    window.addEventListener('message', e => {
+    historyScope.on(window, 'message', e => {
       if (e.source !== window) return;
       if (e.data?.type === '__OPEN_HISTORY_MODAL__') {
         openModal();

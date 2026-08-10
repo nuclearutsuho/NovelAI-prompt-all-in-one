@@ -1,5 +1,6 @@
 export default function createPromptSyncController(deps = {}) {
   const {
+    lifecycleScope,
     isEmbeddedPopup = false,
     popupHostSessionId = '',
     getActiveTab = async () => null,
@@ -24,6 +25,10 @@ export default function createPromptSyncController(deps = {}) {
     onLocalSync = () => {},
     onRemoteStateApplied = () => {}
   } = deps;
+
+  if (!lifecycleScope?.timeout || !lifecycleScope?.cancelTimeout || !lifecycleScope?.chromeEvent) {
+    throw new TypeError('[Prompt Sync] 缺少生命周期作用域');
+  }
 
   let hasReceivedInitialData = false;
   let hasReceivedInitialChars = false;
@@ -74,7 +79,7 @@ export default function createPromptSyncController(deps = {}) {
 
   function clearPromptRetryTimer() {
     if (promptRetryTimer !== null) {
-      window.clearTimeout(promptRetryTimer);
+      lifecycleScope.cancelTimeout(promptRetryTimer);
       promptRetryTimer = null;
     }
   }
@@ -139,7 +144,7 @@ export default function createPromptSyncController(deps = {}) {
     requestPrompt();
     clearPromptRetryTimer();
     if (retries > 0) {
-      promptRetryTimer = window.setTimeout(() => {
+      promptRetryTimer = lifecycleScope.timeout(() => {
         promptRetryTimer = null;
         if (!hasReceivedInitialData) {
           requestPromptWithRetry(retries - 1, delayMs);
@@ -427,14 +432,16 @@ export default function createPromptSyncController(deps = {}) {
 
   function init() {
     if (runtimeListener) return;
-    runtimeListener = (msg, sender) => handleRuntimeMessage(msg, sender);
-    chrome.runtime.onMessage.addListener(runtimeListener);
+    runtimeListener = lifecycleScope.chromeEvent(
+      chrome.runtime.onMessage,
+      (msg, sender) => handleRuntimeMessage(msg, sender)
+    );
   }
 
   function destroy() {
     clearPromptRetryTimer();
     if (runtimeListener) {
-      chrome.runtime.onMessage.removeListener(runtimeListener);
+      runtimeListener();
       runtimeListener = null;
     }
     hasReceivedInitialData = false;

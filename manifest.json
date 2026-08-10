@@ -24,6 +24,8 @@
         "https://novelai.net/image/*"
       ],
       "js": [
+        "lib/runtime/lifecycle.js",
+        "lib/storage/extension-storage.js",
         "lib/message-protocol.js",
         "lib/Sortable.umd.js",
         "lib/group-tags-data.js",
@@ -36,7 +38,9 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "lib/runtime/lifecycle.js",
         "lib/injected/novelai-compat.js",
+        "lib/injected/prompt-sync-controller.js",
         "lib/injected/prompt-storage-shim.js",
         "injector.js",
         "modules/auto-clicker.js",

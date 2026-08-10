@@ -1,6 +1,20 @@
 // ============================================================
 import { DEFAULT_LANG, getI18nDict, getI18nText } from '../lib/i18n/index.js';
 import { localSyncService } from '../lib/LocalSyncService.js';
+import createSyncDbRepository from './sync/sync-db-repository.js';
+import createSnapshotController from './sync/snapshot-controller.js';
+import createFileTreeController from './sync/file-tree-controller.js';
+import createEditorSearchController from './sync/editor-search-controller.js';
+import createOrganizerCore from './sync/organizer-core.js';
+
+const syncRuntime = globalThis.NaiAioRuntime;
+const syncStorageApi = globalThis.NaiAioStorage;
+if (!syncRuntime?.acquire || !syncStorageApi?.createRepository) {
+    throw new Error('[Sync] 运行时内核或扩展存储仓库未加载');
+}
+const syncScope = syncRuntime.acquire('extension:sync-page');
+const syncStorage = syncStorageApi.createRepository(chrome.storage.local, { logger: console });
+localSyncService.setStorageRepository(syncStorage);
 
 // 向后台注册心跳长连接，让 popup 等其他组件感知到同步页面已打开
 const syncHeartbeat = chrome.runtime.connect({ name: 'sync-heartbeat' });
@@ -12,13 +26,14 @@ const syncHeartbeat = chrome.runtime.connect({ name: 'sync-heartbeat' });
 // ============================
 // Section 1: Constants & State
 // ============================
-const DIR_HANDLE_KEY = 'wildcardDirHandle';
-const DB_NAME = 'WildcardSyncDB';
-const DB_VERSION = 3;
-const HANDLE_STORE = 'handles';
-const SNAPSHOT_STORE = 'snapshots';
 const SNAPSHOT_DIR = '.snapshots';
-const MAX_AUTO_SNAPSHOTS = 20;
+
+const syncDbRepository = createSyncDbRepository();
+const {
+    saveDirHandle,
+    getDirHandle,
+    removeDirHandle
+} = syncDbRepository;
 
 let currentFile = null;       // key of the file being edited
 let localContent = '';        // last saved content in editor
@@ -26,11 +41,6 @@ let editorView = null;        // CodeMirror EditorView instance
 let autocompleteDict = null;  // parsed dictionary for autocomplete
 let autocompleteMetaMap = new Map();
 const groupTagsDataUtils = window.GroupTagsDataUtils || {};
-let expandedFolders = new Set(); // track expanded folders in tree
-let selectedFolder = null;    // currently selected folder for creation
-let draggedItem = null;       // item being dragged
-let snapshotSettings = { maxSnapshots: 20, confirmDelete: true, debounceTime: 10 };
-let selectedSnapshots = new Set();
 let boundDirHandle = null;
 let currentLang = DEFAULT_LANG;
 let currentTopUiState = 'unbound';
@@ -183,6 +193,34 @@ const diffSummary = document.getElementById('diffSummary');
 const diffContainer = document.getElementById('diffContainer');
 const closeDiffBtn = document.getElementById('closeDiffBtn');
 
+const snapshotController = createSnapshotController({
+    repository: syncDbRepository,
+    storage: syncStorage,
+    scope: syncScope,
+    elements: {
+        snapshotList,
+        noSnapshots,
+        batchDeleteBtn,
+        batchExportBtn,
+        selectAllSnapshots,
+        diffSummary,
+        diffContainer,
+        diffModal
+    },
+    t,
+    tf,
+    log,
+    showToast,
+    confirm: customConfirm,
+    escapeHtml,
+    refreshFileTree
+});
+
+// LocalSyncService 发现大面积删除时，通过同一控制器创建防灾快照。
+localSyncService.registerSnapshotCallback((reason, type) => (
+    snapshotController.createSnapshot(reason, type)
+));
+
 function updateBottomToggleText() {
     toggleBottom.textContent = bottomExpanded ? t('toggle_bottom_collapse') : t('toggle_bottom_expand');
 }
@@ -208,7 +246,7 @@ function applyStaticTranslations(lang = currentLang) {
 
     updateBottomToggleText();
 
-    if (typeof updateBatchButtons === 'function') updateBatchButtons();
+    snapshotController.updateBatchButtons();
     if (typeof updateTopUI === 'function') updateTopUI(boundDirHandle?.name || null, currentTopUiState);
     if (editorView) updateLineInfo(editorView.state);
     if (typeof updateDictStatus === 'function') updateDictStatus();
@@ -217,14 +255,14 @@ function applyStaticTranslations(lang = currentLang) {
 async function initI18n() {
     let lang = resolveDefaultLang();
     if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        const data = await new Promise(resolve => chrome.storage.local.get('language', resolve));
+        const data = await syncStorage.get('language');
         if (data.language) lang = data.language;
     }
 
     applyStaticTranslations(lang);
 
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-        chrome.storage.onChanged.addListener((changes, area) => {
+        syncScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
             if (area === 'local' && changes.language) {
                 applyStaticTranslations(changes.language.newValue || resolveDefaultLang());
             }
@@ -261,52 +299,6 @@ function customConfirm(message) {
     });
 }
 
-// ============================
-// Section 4: IndexedDB
-// ============================
-function openSyncDB() {
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
-        req.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains(HANDLE_STORE)) db.createObjectStore(HANDLE_STORE);
-            if (!db.objectStoreNames.contains(SNAPSHOT_STORE)) db.createObjectStore(SNAPSHOT_STORE, { keyPath: 'id' });
-        };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function saveDirHandle(handle) {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(HANDLE_STORE, 'readwrite');
-        tx.objectStore(HANDLE_STORE).put(handle, DIR_HANDLE_KEY);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-async function getDirHandle() {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(HANDLE_STORE, 'readonly');
-        const req = tx.objectStore(HANDLE_STORE).get(DIR_HANDLE_KEY);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function removeDirHandle() {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(HANDLE_STORE, 'readwrite');
-        tx.objectStore(HANDLE_STORE).delete(DIR_HANDLE_KEY);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
 async function verifyPermission(handle, request = true) {
     if (!handle) return false;
     try {
@@ -319,741 +311,40 @@ async function verifyPermission(handle, request = true) {
 // ============================
 // Section 5: Snapshot System
 // ============================
-async function saveSnapshot(snapshot) {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(SNAPSHOT_STORE, 'readwrite');
-        tx.objectStore(SNAPSHOT_STORE).put(snapshot);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-async function listSnapshots() {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(SNAPSHOT_STORE, 'readonly');
-        const req = tx.objectStore(SNAPSHOT_STORE).getAll();
-        req.onsuccess = () => {
-            const list = req.result || [];
-            list.sort((a, b) => b.timestamp - a.timestamp);
-            resolve(list);
-        };
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function getSnapshot(id) {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(SNAPSHOT_STORE, 'readonly');
-        const req = tx.objectStore(SNAPSHOT_STORE).get(id);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function deleteSnapshotFromDB(id) {
-    const db = await openSyncDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(SNAPSHOT_STORE, 'readwrite');
-        tx.objectStore(SNAPSHOT_STORE).delete(id);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-function computeDiff(oldWildcards, newWildcards) {
-    const oldKeys = new Set(Object.keys(oldWildcards || {}));
-    const newKeys = new Set(Object.keys(newWildcards || {}));
-    const added = [], removed = [], modified = [];
-    for (const k of newKeys) {
-        if (!oldKeys.has(k)) added.push(k);
-        else if (oldWildcards[k] !== newWildcards[k]) modified.push(k);
-    }
-    for (const k of oldKeys) { if (!newKeys.has(k)) removed.push(k); }
-    return { added, removed, modified };
-}
-
-async function createSnapshot(label, type = 'auto') {
-    const data = await new Promise(r => chrome.storage.local.get(['wildcards', 'wildcardFolders'], r));
-    const wildcards = data.wildcards || {};
-    const folders = data.wildcardFolders || [];
-
-    // Compute diff with previous snapshot
-    const allSnaps = await listSnapshots();
-    const prev = allSnaps.length > 0 ? allSnaps[0] : null;
-    const diff = computeDiff(prev ? prev.wildcards : {}, wildcards);
-
-    const snapshot = {
-        id: `snap_${Date.now()}`,
-        timestamp: Date.now(),
-        label,
-        type,
-        wildcards: { ...wildcards },
-        wildcardFolders: [...folders],
-        diff
-    };
-
-    await saveSnapshot(snapshot);
-
-    // Auto-cleanup: keep max N auto snapshots
-    const autoSnaps = allSnaps.filter(s => s.type === 'auto');
-    if (autoSnaps.length >= snapshotSettings.maxSnapshots) {
-        const toDelete = autoSnaps.slice(snapshotSettings.maxSnapshots - 1);
-        for (const old of toDelete) {
-            await deleteSnapshotFull(old.id);
-        }
-    }
-
-    log(tf('log_snapshot_created', { label, type: t(`snapshot_type_${type}`, type) }), 'success');
-    await renderSnapshotList();
-    return snapshot;
-}
-
-// ============================
-// 注册核心引擎的防灾拦截图腾
-// 当 LocalSyncService 在对比本地文件发现大面积被删时，触发自动兜底快照
-// ============================
-localSyncService.registerSnapshotCallback(async (reason, type) => {
-    // 转发到底层的快照创建器（它会自动连带存储此时的 wildcards 全貌）
-    await createSnapshot(reason, type);
-});
-
-async function loadSnapshotSettings() {
-    const data = await new Promise(r => chrome.storage.local.get('snapshotSettings', r));
-    if (data.snapshotSettings) {
-        snapshotSettings = { ...snapshotSettings, ...data.snapshotSettings };
-    }
-}
-
-async function saveSnapshotSettings() {
-    await new Promise(r => chrome.storage.local.set({ snapshotSettings }, r));
-}
-
-// ... existing saveSnapshotToLocal ...
-
-async function saveSnapshotToLocal(rootHandle, snapshot) {
-    const snapDir = await rootHandle.getDirectoryHandle(SNAPSHOT_DIR, { create: true });
-    const idDir = await snapDir.getDirectoryHandle(snapshot.id, { create: true });
-
-    // Write metadata.json
-    const metaFile = await idDir.getFileHandle('metadata.json', { create: true });
-    const metaWritable = await metaFile.createWritable();
-    await metaWritable.write(JSON.stringify({
-        id: snapshot.id,
-        timestamp: snapshot.timestamp,
-        label: snapshot.label,
-        type: snapshot.type,
-        diff: snapshot.diff,
-        wildcardFolders: snapshot.wildcardFolders
-    }, null, 2));
-    await metaWritable.close();
-
-    // Write wildcard files
-    for (const [key, content] of Object.entries(snapshot.wildcards)) {
-        const parts = key.split('/');
-        const fileName = parts.pop() + '.txt';
-        let targetDir = idDir;
-        for (const part of parts) {
-            targetDir = await targetDir.getDirectoryHandle(part, { create: true });
-        }
-        const fh = await targetDir.getFileHandle(fileName, { create: true });
-        const w = await fh.createWritable();
-        await w.write(content);
-        await w.close();
-    }
-}
-
-async function deleteSnapshotFull(id) {
-    // Delete from IndexedDB
-    await deleteSnapshotFromDB(id);
-}
-
-async function restoreSnapshot(id) {
-    const snap = await getSnapshot(id);
-    if (!snap) return showToast(t('toast_snapshot_missing'), 'error');
-
-    // Auto snapshot before restoring
-    await createSnapshot(t('snapshot_label_before_restore'), 'auto');
-
-    await new Promise(r => chrome.storage.local.set({
-        wildcards: snap.wildcards,
-        wildcardFolders: snap.wildcardFolders
-    }, r));
-
-    log(tf('log_snapshot_restored', { label: snap.label }), 'success');
-    showToast(t('toast_snapshot_restored'), 'success');
-    refreshFileTree();
-}
-
-async function renderSnapshotList() {
-    const list = await listSnapshots();
-    snapshotList.innerHTML = '';
-    noSnapshots.style.display = list.length ? 'none' : 'block';
-
-    // Validate selectedSnapshots
-    const currentIds = new Set(list.map(s => s.id));
-    for (const id of selectedSnapshots) {
-        if (!currentIds.has(id)) selectedSnapshots.delete(id);
-    }
-    updateBatchButtons();
-
-    for (const snap of list) {
-        const li = document.createElement('li');
-        li.className = 'snapshot-item';
-        if (selectedSnapshots.has(snap.id)) li.classList.add('selected');
-
-        const time = new Date(snap.timestamp).toLocaleString();
-        const tagClass = snap.type === 'auto' ? 'auto' : 'manual';
-
-        // Generate Diff Tags
-        let diffHtml = '';
-        if (snap.diff) {
-            const allChanges = [];
-            snap.diff.added.forEach(f => allChanges.push({ type: 'added', name: f, icon: '+' }));
-            snap.diff.removed.forEach(f => allChanges.push({ type: 'removed', name: f, icon: '-' }));
-            snap.diff.modified.forEach(f => allChanges.push({ type: 'modified', name: f, icon: '~' }));
-
-            if (allChanges.length > 0) {
-                // Show up to 100 tags, then use "more"
-                const maxTags = 100;
-                const showTags = allChanges.slice(0, maxTags);
-                const remaining = allChanges.length - maxTags;
-
-                diffHtml = '<div class="snapshot-diff-container">';
-                showTags.forEach(item => {
-                    // Extract just filename for display if path is long
-                    const dispName = item.name.split('/').pop();
-                    diffHtml += `<span class="diff-file-tag ${item.type}" title="${escapeHtml(item.name)}">${item.icon} ${escapeHtml(dispName)}</span>`;
-                });
-                if (remaining > 0) {
-                    diffHtml += `<span class="diff-more-tag" title="${escapeHtml(tf('snapshot_more_files_title', { count: remaining }))}">${escapeHtml(tf('snapshot_more_files', { count: remaining }))}</span>`;
-                }
-                diffHtml += '</div>';
-            } else {
-                diffHtml = `<div class="snapshot-diff-container"><span class="diff-more-tag">${escapeHtml(t('snapshot_no_changes'))}</span></div>`;
-            }
-        }
-
-        const snapshotId = escapeHtml(String(snap.id || ''));
-
-        li.innerHTML = `
-            <div class="snapshot-select">
-                <input type="checkbox" class="snap-checkbox" data-id="${snapshotId}" ${selectedSnapshots.has(snap.id) ? 'checked' : ''}>
-            </div>
-            <div class="snapshot-content">
-                <div class="snapshot-header">
-                    <span class="snapshot-time">${escapeHtml(time)}</span>
-                    <span class="snapshot-tag-type ${tagClass}">${escapeHtml(t(`snapshot_type_${snap.type}`, snap.type))}</span>
-                    <span class="snapshot-label">${escapeHtml(snap.label || '')}</span>
-                </div>
-                ${diffHtml}
-            </div>
-            <div class="snapshot-actions">
-                <button class="btn-sm" data-action="diff" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_compare_title'))}">🔍</button>
-                <button class="btn-sm btn-success" data-action="restore" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_restore_title'))}">↩</button>
-                <button class="btn-sm" data-action="export" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_export_json_title'))}">💾</button>
-                <button class="btn-sm btn-danger" data-action="delete" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_delete_title'))}">✕</button>
-            </div>
-        `;
-        snapshotList.appendChild(li);
-    }
-
-    // Event delegation... (kept same logic, just re-attaching)
-    snapshotList.onclick = async (e) => {
-        // Handle checkbox
-        if (e.target.classList.contains('snap-checkbox')) {
-            const id = e.target.dataset.id;
-            if (e.target.checked) selectedSnapshots.add(id);
-            else selectedSnapshots.delete(id);
-            updateBatchButtons();
-            // Toggle visual selected state
-            const item = e.target.closest('.snapshot-item');
-            if (item) {
-                if (e.target.checked) item.classList.add('selected');
-                else item.classList.remove('selected');
-            }
-            return;
-        }
-
-        const btn = e.target.closest('button[data-action]');
-        if (!btn) return;
-        const action = btn.dataset.action;
-        const id = btn.dataset.id;
-
-        if (action === 'restore') {
-            if (await customConfirm(t('confirm_restore_snapshot'))) {
-                await restoreSnapshot(id);
-            }
-        } else if (action === 'delete') {
-            if (snapshotSettings.confirmDelete && !await customConfirm(t('confirm_delete_snapshot'))) return;
-            await deleteSnapshotFull(id);
-            log(tf('log_snapshot_deleted', { id }), 'info');
-            await renderSnapshotList();
-        } else if (action === 'export') {
-            await exportSnapshots([id]);
-        } else if (action === 'diff') {
-            await showDiff(id);
-        }
-    };
-}
-
-function updateBatchButtons() {
-    const count = selectedSnapshots.size;
-    batchDeleteBtn.disabled = count === 0;
-    batchExportBtn.disabled = count === 0;
-    batchDeleteBtn.textContent = `${t('batch_delete')}${count ? ` (${count})` : ''}`;
-    batchExportBtn.textContent = `${t('batch_export')}${count ? ` (${count})` : ''}`;
-
-    // Update selectAll
-    const checkboxes = document.querySelectorAll('.snap-checkbox');
-    if (checkboxes.length > 0) {
-        selectAllSnapshots.checked = count === checkboxes.length;
-        selectAllSnapshots.indeterminate = count > 0 && count < checkboxes.length;
-    } else {
-        selectAllSnapshots.checked = false;
-        selectAllSnapshots.indeterminate = false;
-    }
-}
-
-async function exportSnapshots(ids) {
-    for (const id of ids) {
-        const snap = await getSnapshot(id);
-        if (!snap) continue;
-        const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${snap.label}_${new Date(snap.timestamp).toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-    }
-    log(tf('log_exported_snapshots', { count: ids.length }), 'success');
-}
-
-async function deleteSnapshots(ids) {
-    if (snapshotSettings.confirmDelete && !await customConfirm(tf('confirm_delete_snapshots', { count: ids.length }))) return;
-
-    let count = 0;
-    for (const id of ids) {
-        await deleteSnapshotFull(id);
-        count++;
-    }
-    log(tf('log_deleted_snapshots', { count }), 'success');
-    selectedSnapshots.clear();
-    await renderSnapshotList();
-}
-
-async function showDiff(id) {
-    const snap = await getSnapshot(id);
-    if (!snap) return showToast(t('toast_snapshot_missing'), 'error');
-
-    // Get current data
-    const currentData = await new Promise(r => chrome.storage.local.get('wildcards', r));
-    const currentWildcards = currentData.wildcards || {};
-
-    // Calculate diff using full content
-    const diff = computeDiff(snap.wildcards, currentWildcards);
-
-    diffSummary.innerHTML = `
-        <span style="margin-right:10px;">${tf('diff_summary', { label: snap.label })}</span>
-        <span class="diff-added">+${diff.added.length}</span>
-        <span class="diff-removed">-${diff.removed.length}</span>
-        <span class="diff-modified">~${diff.modified.length}</span>
-    `;
-
-    diffContainer.innerHTML = '';
-
-    if (diff.added.length === 0 && diff.removed.length === 0 && diff.modified.length === 0) {
-        diffContainer.textContent = t('diff_identical');
-    } else {
-        const createItem = (key, type, icon) => {
-            const div = document.createElement('div');
-            div.style.padding = '4px';
-            div.style.marginBottom = '2px';
-            div.className = `diff-${type}`;
-            div.style.cursor = 'pointer';
-            div.textContent = `${icon} ${key}`;
-            div.onclick = () => {
-                // Show file diff Detail (simple)
-                const oldContent = snap.wildcards[key] || '';
-                const newContent = currentWildcards[key] || '';
-                alert(tf('diff_alert_template', { key, oldContent, newContent }));
-            };
-            return div;
-        };
-
-        diff.added.forEach(k => diffContainer.appendChild(createItem(k, 'added', '+')));
-        diff.removed.forEach(k => diffContainer.appendChild(createItem(k, 'removed', '-')));
-        diff.modified.forEach(k => diffContainer.appendChild(createItem(k, 'modified', '~')));
-    }
-
-    diffModal.classList.add('show');
-}
-
-// ============================
-// Section 6: Sync (Export/Import with Delete)
-// ============================
-
-// Recursively scan local directory, returns { files: Map<key, content>, folders: string[] }
-async function scanLocalDir(handle, prefix = '', skipDirs = [SNAPSHOT_DIR]) {
-    const files = new Map();
-    const folders = [];
-
-    for await (const entry of handle.values()) {
-        if (entry.kind === 'directory') {
-            if (skipDirs.includes(entry.name)) continue;
-            const folderPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-            folders.push(folderPath);
-            const subDir = await handle.getDirectoryHandle(entry.name);
-            const sub = await scanLocalDir(subDir, folderPath, skipDirs);
-            for (const [k, v] of sub.files) files.set(k, v);
-            for (const f of sub.folders) folders.push(f);
-        } else if (entry.kind === 'file' && entry.name.endsWith('.txt')) {
-            const file = await entry.getFile();
-            const baseName = entry.name.replace(/\.txt$/i, '');
-            const key = prefix ? `${prefix}/${baseName}` : baseName;
-            files.set(key, await file.text());
-        }
-    }
-    return { files, folders };
-}
-
-// Recursively create nested folders
-async function ensureDir(rootHandle, pathParts) {
-    let current = rootHandle;
-    for (const part of pathParts) {
-        current = await current.getDirectoryHandle(part, { create: true });
-    }
-    return current;
-}
-
-// Recursively remove empty directories (bottom-up)
-async function removeEmptyDirs(handle, allowedDirs = new Set(), prefix = '', skipDirs = [SNAPSHOT_DIR]) {
-    for await (const entry of handle.values()) {
-        if (entry.kind === 'directory' && !skipDirs.includes(entry.name)) {
-            const folderPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-            const subDir = await handle.getDirectoryHandle(entry.name);
-            await removeEmptyDirs(subDir, allowedDirs, folderPath, skipDirs);
-
-            // Check if directory is now empty
-            let isEmpty = true;
-            for await (const _ of subDir.values()) { isEmpty = false; break; }
-
-            // Delete only if empty AND not in valid wildcardFolders
-            if (isEmpty && !allowedDirs.has(folderPath)) {
-                try {
-                    await handle.removeEntry(entry.name);
-                } catch (e) {
-                    // Ignore errors (e.g. system files preventing deletion)
-                }
-            }
-        }
-    }
-}
-
-// [已移除] doExport / doImport 已被 LocalSyncService 的实时双向同步完全取代
+// 保留精简门面，避免文件同步流程感知快照模块的内部结构。
+const createSnapshot = (label, type = 'auto') => snapshotController.createSnapshot(label, type);
+const renderSnapshotList = () => snapshotController.renderList();
 
 // ============================
 // Section 7: File Tree & Drag-and-Drop
 // ============================
-function buildTreeData(wildcards, folders) {
-    const root = { name: '', children: {}, files: [] };
-    for (const f of folders) {
-        const parts = f.split('/');
-        let node = root;
-        for (const part of parts) {
-            if (!node.children[part]) node.children[part] = { name: part, children: {}, files: [] };
-            node = node.children[part];
-        }
+const fileTreeController = createFileTreeController({
+    storage: syncStorage,
+    localSyncService,
+    scope: syncScope,
+    elements: { fileTree, newItemName },
+    t,
+    tf,
+    log,
+    showToast,
+    confirmDelete: customConfirm,
+    confirmOverwrite: confirm,
+    escapeHtml,
+    openFile,
+    closeEditor,
+    getCurrentFile: () => currentFile,
+    onCurrentFileMoved(nextPath) {
+        currentFile = nextPath;
+        fileNameInput.value = nextPath.split('/').pop();
     }
-    for (const key of Object.keys(wildcards)) {
-        const parts = key.split('/');
-        const fileName = parts.pop();
-        let node = root;
-        for (const part of parts) {
-            if (!node.children[part]) node.children[part] = { name: part, children: {}, files: [] };
-            node = node.children[part];
-        }
-        node.files.push({ key, name: fileName });
-    }
-    return root;
-}
-
-function handleDragStart(e, type, path) {
-    e.dataTransfer.setData('application/wildcard-type', type);
-    e.dataTransfer.setData('application/wildcard-path', path);
-    e.dataTransfer.effectAllowed = 'move';
-    draggedItem = { type, path };
-}
-
-function handleDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const target = e.currentTarget;
-    target.classList.add('drag-over');
-}
-
-function handleDragLeave(e) {
-    e.currentTarget.classList.remove('drag-over');
-}
-
-async function handleDrop(e, targetFolder) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.classList.remove('drag-over');
-
-    const type = e.dataTransfer.getData('application/wildcard-type');
-    const oldPath = e.dataTransfer.getData('application/wildcard-path');
-
-    if (!type || !oldPath) return;
-
-    // Avoid moving into self or child
-    if (type === 'folder' && (targetFolder === oldPath || targetFolder.startsWith(oldPath + '/'))) {
-        return showToast(t('toast_move_into_self'), 'warn');
-    }
-
-    // New path construction
-    const name = oldPath.split('/').pop();
-    const newPath = targetFolder ? `${targetFolder}/${name}` : name;
-
-    if (newPath === oldPath) return; // No change
-
-    const moveTypeLabel = t(`move_type_${type}`, type);
-    log(tf('log_move_start', { type: moveTypeLabel, oldPath, newPath }), 'info');
-
-    // Perform move logic
-    chrome.storage.local.get(['wildcards', 'wildcardFolders'], async data => {
-        const wildcards = data.wildcards || {};
-        const folders = data.wildcardFolders || [];
-
-        let modified = false;
-
-        if (type === 'file') {
-            if (wildcards[newPath]) {
-                if (!confirm(tf('confirm_overwrite_file', { key: newPath }))) return;
-            }
-            // 物理移动
-            await localSyncService.moveFile(oldPath + '.txt', newPath + '.txt', wildcards[oldPath]);
-            wildcards[newPath] = wildcards[oldPath];
-            delete wildcards[oldPath];
-            modified = true;
-        } else if (type === 'folder') {
-            // Check if destination folder already exists
-            const existingFolder = folders.includes(newPath);
-            // Move all files/folders inside
-            const oldPrefix = oldPath + '/';
-            const newPrefix = newPath + '/';
-
-            // Update folders
-            const newFolders = folders.map(f => {
-                if (f === oldPath) return newPath;
-                if (f.startsWith(oldPrefix)) return newPrefix + f.slice(oldPrefix.length);
-                return f;
-            });
-
-            // Update files
-            const newWildcards = {};
-            let conflict = false;
-            Object.keys(wildcards).forEach(k => {
-                if (k.startsWith(oldPrefix)) {
-                    const newK = newPrefix + k.slice(oldPrefix.length);
-                    if (wildcards[newK] && !confirm(tf('confirm_overwrite_file', { key: newK }))) conflict = true;
-                    newWildcards[newK] = wildcards[k];
-                } else {
-                    newWildcards[k] = wildcards[k];
-                }
-            });
-
-            if (conflict) return;
-
-            // Apply changes (filtering out old keys)
-            chrome.storage.local.set({
-                wildcardFolders: newFolders,
-                wildcards: newWildcards
-            }, () => {
-                refreshFileTree();
-                log(tf('log_move_completed', { oldPath, newPath }), 'success');
-            });
-            return; // Exit early as we process folders differently above
-        }
-
-        if (modified) {
-            chrome.storage.local.set({ wildcards, wildcardFolders: folders }, () => {
-                refreshFileTree();
-                if (currentFile === oldPath) {
-                    currentFile = newPath;
-                    fileNameInput.value = newPath.split('/').pop();
-                }
-                log(tf('log_move_completed', { oldPath, newPath }), 'success');
-            });
-        }
-    });
-}
-
-function renderTreeNode(node, path = '', depth = 0) {
-    const fragment = document.createDocumentFragment();
-
-    const folderNames = Object.keys(node.children).sort();
-    for (const folderName of folderNames) {
-        const child = node.children[folderName];
-        const folderPath = path ? `${path}/${folderName}` : folderName;
-        const isExpanded = expandedFolders.has(folderPath);
-        const isSelected = selectedFolder === folderPath;
-
-        const item = document.createElement('div');
-        item.className = `tree-item ${isSelected ? 'selected' : ''}`;
-        item.style.paddingLeft = `${16 + depth * 14}px`;
-        item.draggable = true;
-        item.innerHTML = `
-            <span class="icon">${isExpanded ? '📂' : '📁'}</span>
-            <span class="name">${escapeHtml(folderName)}</span>
-            <div class="actions">
-                <button data-folder-delete="${escapeHtml(folderPath)}" title="${escapeHtml(t('action_delete'))}">✕</button>
-            </div>
-        `;
-
-        // Click to expand/collapse + select
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('button')) return;
-            // Toggle expand
-            if (expandedFolders.has(folderPath)) expandedFolders.delete(folderPath);
-            else expandedFolders.add(folderPath);
-            // Select folder
-            selectedFolder = folderPath;
-            refreshFileTree();
-        });
-
-        // Drag events
-        item.addEventListener('dragstart', (e) => handleDragStart(e, 'folder', folderPath));
-        item.addEventListener('dragover', handleDragOver);
-        item.addEventListener('dragleave', handleDragLeave);
-        item.addEventListener('drop', (e) => handleDrop(e, folderPath));
-
-        fragment.appendChild(item);
-
-        const childContainer = document.createElement('div');
-        childContainer.className = `tree-folder-children${isExpanded ? '' : ' collapsed'}`;
-        childContainer.appendChild(renderTreeNode(child, folderPath, depth + 1));
-        fragment.appendChild(childContainer);
-    }
-
-    const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
-    for (const file of files) {
-        const item = document.createElement('div');
-        item.className = `tree-item${currentFile === file.key ? ' active' : ''}`;
-        item.style.paddingLeft = `${16 + depth * 14}px`;
-        item.draggable = true;
-        item.innerHTML = `
-            <span class="icon">📄</span>
-            <span class="name">${escapeHtml(file.name)}</span>
-            <div class="actions">
-                <button data-file-delete="${escapeHtml(file.key)}" title="${escapeHtml(t('action_delete'))}">✕</button>
-            </div>
-        `;
-
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('button')) return;
-            openFile(file.key);
-            // Select parent folder implicitly or stay as is? 
-            // Better to let user explicitly select folders for creation context.
-        });
-
-        // Drag events
-        item.addEventListener('dragstart', (e) => handleDragStart(e, 'file', file.key));
-        // Files can't be drop targets for folders, but could drag onto them to mean "into same folder"? 
-        // Standard behavior is dropping ONTO folders.
-
-        fragment.appendChild(item);
-    }
-
-    return fragment;
-}
+});
 
 function refreshFileTree() {
-    chrome.storage.local.get(['wildcards', 'wildcardFolders'], data => {
-        const wildcards = data.wildcards || {};
-        const folders = data.wildcardFolders || [];
-        const tree = buildTreeData(wildcards, folders);
-        fileTree.innerHTML = '';
-
-        // Root droppable area
-        const rootDrop = document.createElement('div');
-        rootDrop.style.minHeight = '100%';
-        rootDrop.addEventListener('dragover', handleDragOver);
-        rootDrop.addEventListener('dragleave', handleDragLeave);
-        rootDrop.addEventListener('drop', (e) => handleDrop(e, '')); // Drop to root with empty path
-
-        // Clicking empty area deselects folder
-        rootDrop.addEventListener('click', (e) => {
-            if (e.target === rootDrop) {
-                selectedFolder = null;
-                refreshFileTree();
-            }
-        });
-
-        rootDrop.appendChild(renderTreeNode(tree));
-        fileTree.appendChild(rootDrop);
-
-        // Update placeholder to show where file will be created
-        if (selectedFolder) {
-            newItemName.placeholder = tf('placeholder_new_item_in_folder', { folderName: selectedFolder.split('/').pop() });
-        } else {
-            newItemName.placeholder = t('placeholder_new_item_root');
-        }
-
-        // Attach delete handlers (same as before)
-        rootDrop.querySelectorAll('[data-file-delete]').forEach(btn => { /* ... existing delete logic ... */ });
-        // ... (Due to space, I'm keeping the previous delete logic but need to re-bind it here)
-        attachDeleteHandlers();
-    });
+    return fileTreeController.refresh();
 }
-
-function attachDeleteHandlers() {
-    fileTree.querySelectorAll('[data-file-delete]').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const key = btn.dataset.fileDelete;
-            if (!await customConfirm(tf('confirm_delete_file', { key }))) return;
-            chrome.storage.local.get('wildcards', async d => {
-                const map = d.wildcards || {};
-                delete map[key];
-                await localSyncService.deleteFile(key + '.txt');
-                chrome.storage.local.set({ wildcards: map }, () => {
-                    if (currentFile === key) closeEditor();
-                    log(tf('log_file_deleted', { key }), 'info');
-                    refreshFileTree();
-                });
-            });
-        });
-    });
-
-    fileTree.querySelectorAll('[data-folder-delete]').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const folder = btn.dataset.folderDelete;
-            if (!await customConfirm(tf('confirm_delete_folder', { folder }))) return;
-            chrome.storage.local.get(['wildcards', 'wildcardFolders'], async d => {
-                const map = d.wildcards || {};
-                const folders = d.wildcardFolders || [];
-                const newMap = {};
-                Object.keys(map).forEach(k => { if (!k.startsWith(folder + '/')) newMap[k] = map[k]; });
-                const newFolders = folders.filter(f => f !== folder && !f.startsWith(folder + '/'));
-                await localSyncService.deleteFolder(folder);
-                chrome.storage.local.set({ wildcards: newMap, wildcardFolders: newFolders }, () => {
-                    if (currentFile && currentFile.startsWith(folder + '/')) closeEditor();
-                    expandedFolders.delete(folder);
-                    log(tf('log_folder_deleted', { folder }), 'info');
-                    refreshFileTree();
-                });
-            });
-        });
-    });
-}
-
 
 // ============================
+
 // Section 8: Wildcard Organizer
 // ============================
 function escapeHtml(value = '') {
@@ -1062,62 +353,64 @@ function escapeHtml(value = '') {
     return el.innerHTML;
 }
 
-function normalizeOrganizerLine(line = '') {
-    return String(line || '')
-        .trim()
-        .replace(/\s*,\s*/g, ', ')
-        .replace(/[ \t]{2,}/g, ' ');
+const organizerCore = createOrganizerCore({
+    normalizeTagKey: value => groupTagsDataUtils.normalizeTagKey
+        ? groupTagsDataUtils.normalizeTagKey(value)
+        : String(value || '').trim().toLocaleLowerCase(),
+    getDictionaryMeta: getOrganizerDictionaryMetaByTag,
+    isTagItem: item => groupTagsDataUtils.isTagGroupItem
+        ? groupTagsDataUtils.isTagGroupItem(item)
+        : true,
+    getPromptText: item => groupTagsDataUtils.getGroupItemPromptText
+        ? groupTagsDataUtils.getGroupItemPromptText(item)
+        : (item?.en || ''),
+    getTranslationText: item => groupTagsDataUtils.getGroupItemTranslationText
+        ? groupTagsDataUtils.getGroupItemTranslationText(item)
+        : (item?.zh || ''),
+    logger: console
+});
+
+const normalizeOrganizerLine = organizerCore.normalizeLine;
+const createOrganizerPinnedItem = organizerCore.createPinnedItem;
+const inferPinnedItemType = organizerCore.inferPinnedItemType;
+const serializePinnedItems = organizerCore.serializePinnedItems;
+const parsePinnedItems = organizerCore.parsePinnedItems;
+const splitOrganizerTags = organizerCore.splitTags;
+const parseOrganizerToken = organizerCore.parseToken;
+const getOrganizerParsedDictionaryMeta = organizerCore.getParsedDictionaryMeta;
+const buildOrganizerGroupTagsTagSet = organizerCore.buildGroupTagsIndex;
+const buildOrganizerModel = organizerCore.buildModel;
+const buildOrganizerLightweightModel = organizerCore.buildLightweightModel;
+
+function getPinnedMatchIndex(coreTag = '', pinnedItems = organizerPinnedItemsCache) {
+    return organizerCore.getPinnedMatchIndex(coreTag, pinnedItems);
 }
 
-function createOrganizerPinnedItem(value = '', type = 'exact') {
-    const normalizedValue = String(value || '').trim();
-    if (!normalizedValue) return null;
-    const normalizedType = type === 'prefix' ? 'prefix' : 'exact';
-    const normalizedMatchValue = normalizedType === 'exact' && groupTagsDataUtils.normalizeTagKey
-        ? groupTagsDataUtils.normalizeTagKey(normalizedValue)
-        : normalizedValue.toLocaleLowerCase();
-    return {
-        type: normalizedType,
-        value: normalizedValue,
-        normalizedValue: normalizedMatchValue
-    };
+function reorderLineTagsByPriority(line = '', pinnedItems = organizerPinnedItemsCache) {
+    return organizerCore.reorderLineTagsByPriority(line, pinnedItems);
 }
 
-function inferPinnedItemType(value = '') {
-    const normalized = String(value || '').trim();
-    if (!normalized) return null;
-    if (normalized.endsWith(':') || normalized.endsWith('_')) return 'prefix';
-    return 'exact';
+function buildLinePinnedPriorityMeta(line = '', pinnedItems = organizerPinnedItemsCache) {
+    return organizerCore.buildLinePinnedPriorityMeta(line, pinnedItems);
 }
 
-function serializePinnedItems(items = []) {
-    return JSON.stringify((items || []).map(item => ({
-        type: item.type === 'prefix' ? 'prefix' : 'exact',
-        value: String(item.value || '').trim()
-    })));
+function comparePinnedPriorityMeta(left, right) {
+    return organizerCore.comparePinnedPriorityMeta(left, right);
 }
 
-function parsePinnedItems(raw = '[]') {
-    try {
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return [];
-        return parsed
-            .map(item => createOrganizerPinnedItem(item?.value, item?.type))
-            .filter(Boolean);
-    } catch (error) {
-        console.warn('parsePinnedItems failed:', error);
-        return [];
-    }
+function getSortedOrganizerEntries(entries = [], mode = 'original') {
+    return organizerCore.getSortedEntries(entries, mode, organizerPinnedItemsCache);
 }
+
 
 function scheduleSaveOrganizerPinnedItems() {
-    if (organizerPinnedSaveTimer) clearTimeout(organizerPinnedSaveTimer);
-    organizerPinnedSaveTimer = setTimeout(async () => {
+    if (organizerPinnedSaveTimer) syncScope.cancelTimeout(organizerPinnedSaveTimer);
+    organizerPinnedSaveTimer = syncScope.timeout(async () => {
         organizerPinnedSaveTimer = null;
         try {
-            await new Promise(resolve => chrome.storage.local.set({
+            await syncStorage.set({
                 organizerPinnedItems: serializePinnedItems(organizerPinnedItemsCache)
-            }, resolve));
+            });
         } catch (error) {
             console.warn('saveOrganizerPinnedItems failed:', error);
         }
@@ -1126,7 +419,7 @@ function scheduleSaveOrganizerPinnedItems() {
 
 async function loadOrganizerPriorityRules() {
     try {
-        const data = await new Promise(resolve => chrome.storage.local.get('organizerPinnedItems', resolve));
+        const data = await syncStorage.get('organizerPinnedItems');
         if (typeof data.organizerPinnedItems === 'string') {
             organizerPinnedItemsCache = parsePinnedItems(data.organizerPinnedItems);
         }
@@ -1207,87 +500,7 @@ function toggleOrganizerPinnedItem(value = '', type = inferPinnedItemType(value)
     return addOrganizerPinnedItem(value, type) ? 'added' : 'noop';
 }
 
-function isOrganizerWrappedToken(text = '', left = '(', right = ')') {
-    if (!text.startsWith(left) || !text.endsWith(right)) return false;
-    let depth = 0;
-    for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        if (char === left) depth++;
-        if (char === right) {
-            depth--;
-            if (depth === 0 && i < text.length - 1) return false;
-        }
-    }
-    return depth === 0;
-}
 
-function splitOrganizerTags(line = '') {
-    const parts = [];
-    let current = '';
-    let roundDepth = 0;
-    let squareDepth = 0;
-    let braceDepth = 0;
-
-    for (const char of String(line || '')) {
-        if (char === ',' && roundDepth === 0 && squareDepth === 0 && braceDepth === 0) {
-            if (current.trim()) parts.push(current.trim());
-            current = '';
-            continue;
-        }
-
-        current += char;
-        if (char === '(') roundDepth++;
-        else if (char === ')') roundDepth = Math.max(0, roundDepth - 1);
-        else if (char === '[') squareDepth++;
-        else if (char === ']') squareDepth = Math.max(0, squareDepth - 1);
-        else if (char === '{') braceDepth++;
-        else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
-    }
-
-    if (current.trim()) parts.push(current.trim());
-    return parts;
-}
-
-function stripNovelAiWeightWrapper(token = '') {
-    let current = String(token || '').trim();
-    let extractedWeight = 1;
-    let hasExplicitWeight = false;
-    let changed = true;
-
-    while (changed) {
-        changed = false;
-
-        const weightedMatch = current.match(/^([+-]?\d+(?:\.\d+)?)::([\s\S]*?)::$/);
-        if (weightedMatch) {
-            current = weightedMatch[2].trim();
-            if (!hasExplicitWeight) {
-                extractedWeight = parseFloat(weightedMatch[1]);
-                hasExplicitWeight = Number.isFinite(extractedWeight);
-                if (!hasExplicitWeight) extractedWeight = 1;
-            }
-            changed = true;
-        }
-    }
-
-    return {
-        text: current,
-        weight: extractedWeight,
-        hasExplicitWeight
-    };
-}
-
-function getOrganizerWrapperWeight(wrapperType = '') {
-    switch (wrapperType) {
-        case 'curly':
-            return 1.1;
-        case 'paren':
-            return 1.05;
-        case 'square':
-            return 0.9;
-        default:
-            return 1;
-    }
-}
 
 function getOrganizerDictionaryMetaByTag(tag = '') {
     const normalized = String(tag || '').trim().toLocaleLowerCase();
@@ -1306,169 +519,7 @@ function getOrganizerDictionaryMetaByTag(tag = '') {
     return null;
 }
 
-function canonicalizeOrganizerTagByDictionary(tag = '') {
-    const normalized = String(tag || '').trim().toLocaleLowerCase();
-    if (!normalized) return '';
 
-    const prefixedMatchers = [
-        { pattern: /^artist:(.+)$/, colorCode: '1' },
-        { pattern: /^character:(.+)$/, colorCode: '4' }
-    ];
-
-    for (const matcher of prefixedMatchers) {
-        const match = normalized.match(matcher.pattern);
-        if (!match) continue;
-        const bareTag = match[1].trim();
-        const bareMeta = getOrganizerDictionaryMetaByTag(bareTag);
-        if (bareMeta?.colorCode === matcher.colorCode) return bareTag;
-    }
-
-    const canonicalKey = groupTagsDataUtils.normalizeTagKey
-        ? groupTagsDataUtils.normalizeTagKey(normalized)
-        : normalized;
-    if (canonicalKey) return canonicalKey;
-
-    return normalized;
-}
-
-function parseOrganizerToken(token = '') {
-    let current = String(token || '').trim();
-    if (!current) return null;
-    let extractedWeight = 1;
-    let wrapperWeight = 1;
-    const wrappers = [];
-
-    let changed = true;
-    while (changed) {
-        changed = false;
-        const strippedWeight = stripNovelAiWeightWrapper(current);
-        current = strippedWeight.text;
-        if (strippedWeight.hasExplicitWeight) extractedWeight = strippedWeight.weight;
-        if (isOrganizerWrappedToken(current, '{', '}')) {
-            current = current.slice(1, -1).trim();
-            wrapperWeight *= getOrganizerWrapperWeight('curly');
-            wrappers.push('curly');
-            changed = true;
-        } else if (isOrganizerWrappedToken(current, '(', ')')) {
-            current = current.slice(1, -1).trim();
-            wrapperWeight *= getOrganizerWrapperWeight('paren');
-            wrappers.push('paren');
-            changed = true;
-        } else if (isOrganizerWrappedToken(current, '[', ']')) {
-            current = current.slice(1, -1).trim();
-            wrapperWeight *= getOrganizerWrapperWeight('square');
-            wrappers.push('square');
-            changed = true;
-        }
-    }
-
-    const strippedWeight = stripNovelAiWeightWrapper(current);
-    current = strippedWeight.text;
-    if (strippedWeight.hasExplicitWeight) extractedWeight = strippedWeight.weight;
-
-    const weightedMatch = current.match(/^(.*):([0-9]+(?:\.[0-9]+)?)$/);
-    if (weightedMatch) {
-        current = weightedMatch[1].trim();
-        const fallbackWeight = parseFloat(weightedMatch[2]);
-        if (Number.isFinite(fallbackWeight)) extractedWeight = fallbackWeight;
-    }
-
-    const rawCoreTag = current.toLocaleLowerCase();
-    const canonicalTag = canonicalizeOrganizerTagByDictionary(rawCoreTag);
-    return {
-        rawToken: String(token || '').trim(),
-        rawCoreTag,
-        canonicalTag,
-        explicitWeight: extractedWeight,
-        wrapperWeight,
-        weight: extractedWeight * wrapperWeight,
-        wrappers,
-        explicitPrefixGroup: getExplicitPrefixGroup(rawCoreTag)
-    };
-}
-
-function extractOrganizerCoreTag(token = '') {
-    return parseOrganizerToken(token)?.canonicalTag || '';
-}
-
-function getExplicitPrefixGroup(tag = '') {
-    const normalized = String(tag || '').trim().toLocaleLowerCase();
-    const match = normalized.match(/^([a-z0-9_]+:)[^:\s].*$/i);
-    return match ? match[1] : '';
-}
-
-function getOrganizerParsedDictionaryMeta(parsedToken = null) {
-    if (!parsedToken) return null;
-
-    const candidateKeys = [];
-    const pushKey = (value) => {
-        const normalized = String(value || '').trim().toLocaleLowerCase();
-        if (!normalized || candidateKeys.includes(normalized)) return;
-        candidateKeys.push(normalized);
-    };
-
-    pushKey(parsedToken.canonicalTag);
-    pushKey(parsedToken.rawCoreTag);
-
-    const rawCoreTag = String(parsedToken.rawCoreTag || '').trim().toLocaleLowerCase();
-    const artistMatch = rawCoreTag.match(/^artist:(.+)$/);
-    if (artistMatch) pushKey(artistMatch[1].trim());
-    const characterMatch = rawCoreTag.match(/^character:(.+)$/);
-    if (characterMatch) pushKey(characterMatch[1].trim());
-
-    for (const key of candidateKeys) {
-        const meta = getOrganizerDictionaryMetaByTag(key);
-        if (meta) return { key, ...meta };
-    }
-
-    return null;
-}
-
-function buildOrganizerGroupTagsTagSet(groupTagsData = null) {
-    const tagSet = new Set();
-    const membershipMap = new Map();
-    const translationMap = new Map();
-    const categories = Array.isArray(groupTagsData?.categories) ? groupTagsData.categories : [];
-
-    categories.forEach(category => {
-        const categoryId = String(category?.id || category?.name || '').trim();
-        const categoryName = String(category?.name || category?.id || '未命名分类').trim() || '未命名分类';
-        const groups = Array.isArray(category?.groups) ? category.groups : [];
-        groups.forEach(group => {
-            const groupId = String(group?.id || group?.name || '').trim();
-            const groupName = String(group?.name || group?.id || '未命名分组').trim() || '未命名分组';
-            const categoryKey = categoryId || categoryName;
-            const groupKey = `${categoryKey}::${groupId || groupName}`;
-            const tags = Array.isArray(group?.tags) ? group.tags : [];
-            tags.forEach(item => {
-                if (groupTagsDataUtils.isTagGroupItem && !groupTagsDataUtils.isTagGroupItem(item)) return;
-                const promptText = groupTagsDataUtils.getGroupItemPromptText
-                    ? groupTagsDataUtils.getGroupItemPromptText(item)
-                    : (item?.en || '');
-                const normalizedKey = groupTagsDataUtils.normalizeTagKey
-                    ? groupTagsDataUtils.normalizeTagKey(promptText)
-                    : String(promptText || '').trim().toLocaleLowerCase();
-                if (!normalizedKey) return;
-                tagSet.add(normalizedKey);
-                const translationText = groupTagsDataUtils.getGroupItemTranslationText
-                    ? groupTagsDataUtils.getGroupItemTranslationText(item)
-                    : (item?.zh || '');
-                if (translationText && !translationMap.has(normalizedKey)) {
-                    translationMap.set(normalizedKey, String(translationText).trim());
-                }
-                if (!membershipMap.has(normalizedKey)) membershipMap.set(normalizedKey, []);
-                membershipMap.get(normalizedKey).push({
-                    categoryKey,
-                    categoryTitle: categoryName,
-                    groupKey,
-                    groupTitle: groupName
-                });
-            });
-        });
-    });
-
-    return { tagSet, membershipMap, translationMap };
-}
 
 async function loadOrganizerGroupTagsIndex({ force = false } = {}) {
     if (organizerGroupTagsLoadPromise && !force) return organizerGroupTagsLoadPromise;
@@ -1478,7 +529,7 @@ async function loadOrganizerGroupTagsIndex({ force = false } = {}) {
         organizerGroupTagsLoadError = false;
 
         try {
-            let storedGroupTagsData = (await chrome.storage.local.get('groupTagsUserData')).groupTagsUserData;
+            let storedGroupTagsData = (await syncStorage.get('groupTagsUserData')).groupTagsUserData;
             if (storedGroupTagsData?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
                 try {
                     const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
@@ -1894,189 +945,7 @@ function renderOrganizerCategorySections(container, groups = [], emptyText = '')
     `;
 }
 
-function getPinnedMatchIndex(coreTag = '', pinnedItems = organizerPinnedItemsCache) {
-    const normalizedTag = String(coreTag || '').trim().toLocaleLowerCase();
-    if (!normalizedTag || !pinnedItems.length) return Number.POSITIVE_INFINITY;
 
-    for (let i = 0; i < pinnedItems.length; i++) {
-        const item = pinnedItems[i];
-        if (item.type === 'exact' && normalizedTag === item.normalizedValue) return i;
-        if (item.type === 'prefix' && normalizedTag.startsWith(item.normalizedValue)) return i;
-    }
-    return Number.POSITIVE_INFINITY;
-}
-
-function reorderLineTagsByPriority(line = '', pinnedItems = organizerPinnedItemsCache) {
-    const tokens = splitOrganizerTags(line);
-    if (tokens.length <= 1 || !pinnedItems.length) return normalizeOrganizerLine(line);
-
-    const enrichedTokens = tokens.map((token, index) => ({
-        token: token.trim(),
-        index,
-        matchIndex: getPinnedMatchIndex(parseOrganizerToken(token)?.canonicalTag, pinnedItems)
-    }));
-
-    enrichedTokens.sort((a, b) => {
-        const aMatched = Number.isFinite(a.matchIndex);
-        const bMatched = Number.isFinite(b.matchIndex);
-        if (aMatched && bMatched) return a.matchIndex - b.matchIndex || a.index - b.index;
-        if (aMatched) return -1;
-        if (bMatched) return 1;
-        return a.index - b.index;
-    });
-
-    return enrichedTokens.map(item => item.token).join(', ');
-}
-
-function buildLinePinnedPriorityMeta(line = '', pinnedItems = organizerPinnedItemsCache) {
-    const matchedIndices = [];
-    const seen = new Set();
-    const weightMap = new Map();
-
-    splitOrganizerTags(line).forEach(token => {
-        const parsedToken = parseOrganizerToken(token);
-        const matchIndex = getPinnedMatchIndex(parsedToken?.canonicalTag, pinnedItems);
-        if (!Number.isFinite(matchIndex) || seen.has(matchIndex)) return;
-        seen.add(matchIndex);
-        matchedIndices.push(matchIndex);
-        weightMap.set(matchIndex, Math.max(weightMap.get(matchIndex) || Number.NEGATIVE_INFINITY, parsedToken?.weight ?? 1));
-    });
-
-    splitOrganizerTags(line).forEach(token => {
-        const parsedToken = parseOrganizerToken(token);
-        const matchIndex = getPinnedMatchIndex(parsedToken?.canonicalTag, pinnedItems);
-        if (!Number.isFinite(matchIndex)) return;
-        weightMap.set(matchIndex, Math.max(weightMap.get(matchIndex) || Number.NEGATIVE_INFINITY, parsedToken?.weight ?? 1));
-    });
-
-    matchedIndices.sort((a, b) => a - b);
-
-    return {
-        matchedIndices,
-        matchedWeights: matchedIndices.map(index => weightMap.get(index) ?? 1),
-        firstMatchIndex: matchedIndices.length ? matchedIndices[0] : Number.POSITIVE_INFINITY,
-        matchedCount: matchedIndices.length
-    };
-}
-
-function comparePinnedPriorityMeta(aMeta, bMeta) {
-    const aMatched = Number.isFinite(aMeta.firstMatchIndex);
-    const bMatched = Number.isFinite(bMeta.firstMatchIndex);
-    if (aMatched && !bMatched) return -1;
-    if (!aMatched && bMatched) return 1;
-    if (!aMatched && !bMatched) return 0;
-
-    const maxLen = Math.max(aMeta.matchedIndices.length, bMeta.matchedIndices.length);
-    for (let i = 0; i < maxLen; i++) {
-        const aVal = aMeta.matchedIndices[i];
-        const bVal = bMeta.matchedIndices[i];
-        if (aVal === undefined && bVal === undefined) break;
-        if (aVal === undefined) return 1;
-        if (bVal === undefined) return -1;
-        if (aVal !== bVal) return aVal - bVal;
-
-        const aWeight = aMeta.matchedWeights[i] ?? 1;
-        const bWeight = bMeta.matchedWeights[i] ?? 1;
-        if (aWeight !== bWeight) return bWeight - aWeight;
-    }
-
-    if (aMeta.matchedCount !== bMeta.matchedCount) return bMeta.matchedCount - aMeta.matchedCount;
-    return 0;
-}
-
-function buildOrganizerModel(text = '') {
-    const source = String(text || '').replace(/\r\n/g, '\n');
-    const rawLines = source.split('\n');
-    const nonEmptyEntries = [];
-    let blankLines = 0;
-
-    rawLines.forEach((rawLine, index) => {
-        const trimmed = rawLine.trim();
-        if (!trimmed) {
-            blankLines++;
-            return;
-        }
-
-        const normalized = normalizeOrganizerLine(trimmed);
-        const tokenCount = splitOrganizerTags(trimmed).length;
-        nonEmptyEntries.push({
-            lineNumber: index + 1,
-            raw: rawLine,
-            text: trimmed,
-            normalized,
-            tokenCount,
-            charCount: normalized.length
-        });
-    });
-
-    const duplicateMap = new Map();
-    nonEmptyEntries.forEach(entry => {
-        const key = entry.normalized.toLocaleLowerCase();
-        duplicateMap.set(key, (duplicateMap.get(key) || 0) + 1);
-    });
-
-    nonEmptyEntries.forEach(entry => {
-        entry.duplicateCount = duplicateMap.get(entry.normalized.toLocaleLowerCase()) || 1;
-    });
-
-    const duplicateGroups = Array.from(duplicateMap.values()).filter(count => count > 1).length;
-    return {
-        entries: nonEmptyEntries,
-        stats: {
-            totalLines: rawLines.length,
-            nonEmptyLines: nonEmptyEntries.length,
-            blankLines,
-            uniqueLines: duplicateMap.size,
-            duplicateLines: Math.max(0, nonEmptyEntries.length - duplicateMap.size),
-            duplicateGroups
-        }
-    };
-}
-
-function getSortedOrganizerEntries(entries = [], mode = 'original') {
-    const list = [...entries];
-    const compareText = (a, b) => a.normalized.localeCompare(b.normalized, undefined, { numeric: true, sensitivity: 'base' });
-
-    switch (mode) {
-        case 'alphaAsc':
-            list.sort((a, b) => compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'alphaDesc':
-            list.sort((a, b) => compareText(b, a) || a.lineNumber - b.lineNumber);
-            break;
-        case 'tokenAsc':
-            list.sort((a, b) => a.tokenCount - b.tokenCount || compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'tokenDesc':
-            list.sort((a, b) => b.tokenCount - a.tokenCount || compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'lengthAsc':
-            list.sort((a, b) => a.charCount - b.charCount || compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'lengthDesc':
-            list.sort((a, b) => b.charCount - a.charCount || compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'duplicatesFirst':
-            list.sort((a, b) => b.duplicateCount - a.duplicateCount || compareText(a, b) || a.lineNumber - b.lineNumber);
-            break;
-        case 'pinnedPriority':
-            const pinnedPriorityMetaCache = new Map();
-            list.forEach(entry => {
-                pinnedPriorityMetaCache.set(entry.lineNumber, buildLinePinnedPriorityMeta(entry.text, organizerPinnedItemsCache));
-            });
-            list.sort((a, b) => {
-                const aMeta = pinnedPriorityMetaCache.get(a.lineNumber);
-                const bMeta = pinnedPriorityMetaCache.get(b.lineNumber);
-                return comparePinnedPriorityMeta(aMeta, bMeta) || a.lineNumber - b.lineNumber;
-            });
-            break;
-        default:
-            list.sort((a, b) => a.lineNumber - b.lineNumber);
-            break;
-    }
-
-    return list;
-}
 
 function updateOrganizerToggleText() {
     toggleOrganizerBtn.textContent = organizerVisible ? '隐藏整理' : '整理视图';
@@ -2169,7 +1038,8 @@ function saveOrganizerLayoutState() {
         currentView: currentView,
         dictShowChanges: typeof dictShowChanges !== 'undefined' ? dictShowChanges : false
     };
-    chrome.storage.local.set({ organizerLayoutState: state });
+    syncStorage.set({ organizerLayoutState: state })
+        .catch(error => console.error('[Sync] 保存布局状态失败:', error));
 }
 
 function scrollEditorToLine(lineNumber) {
@@ -2219,8 +1089,8 @@ function scheduleOrganizerRefresh(options = {}) {
     organizerPendingRefresh.list = organizerPendingRefresh.list || request.list;
     organizerPendingRefresh.summary = organizerPendingRefresh.summary || request.summary;
 
-    if (organizerRefreshTimer) clearTimeout(organizerRefreshTimer);
-    organizerRefreshTimer = setTimeout(() => {
+    if (organizerRefreshTimer) syncScope.cancelTimeout(organizerRefreshTimer);
+    organizerRefreshTimer = syncScope.timeout(() => {
         organizerRefreshTimer = null;
         const nextRefresh = { ...organizerPendingRefresh };
         organizerPendingRefresh = {
@@ -2412,52 +1282,7 @@ function renderOrganizerSummarySection(model) {
     `;
 }
 
-function buildOrganizerLightweightModel(text = '') {
-    const source = String(text || '').replace(/\r\n/g, '\n');
-    const rawLines = source.split('\n');
-    const entries = [];
-    let blankLines = 0;
 
-    rawLines.forEach((rawLine, index) => {
-        const trimmed = rawLine.trim();
-        if (!trimmed) {
-            blankLines++;
-            return;
-        }
-
-        const normalized = normalizeOrganizerLine(trimmed);
-        entries.push({
-            lineNumber: index + 1,
-            raw: rawLine,
-            text: trimmed,
-            normalized,
-            tokenCount: 1,
-            charCount: normalized.length
-        });
-    });
-
-    const duplicateMap = new Map();
-    entries.forEach(entry => {
-        const key = entry.normalized.toLocaleLowerCase();
-        duplicateMap.set(key, (duplicateMap.get(key) || 0) + 1);
-    });
-
-    entries.forEach(entry => {
-        entry.duplicateCount = duplicateMap.get(entry.normalized.toLocaleLowerCase()) || 1;
-    });
-
-    return {
-        entries,
-        stats: {
-            totalLines: rawLines.length,
-            nonEmptyLines: entries.length,
-            blankLines,
-            uniqueLines: duplicateMap.size,
-            duplicateLines: Math.max(0, entries.length - duplicateMap.size),
-            duplicateGroups: Array.from(duplicateMap.values()).filter(count => count > 1).length
-        }
-    };
-}
 
 function syncOrganizerLargeFileState() {
     const lineCount = currentFile && editorView ? (editorView.state.doc.lines || 0) : 0;
@@ -2777,35 +1602,14 @@ function applyOrganizerTransformation({ dedupe = false, normalizeOnly = false, p
 // ============================
 // Section 8: CodeMirror Editor & Web Worker
 // ============================
-let searchWorker = null;
-let pendingSearches = new Map();
-let searchIdCounter = 0;
-
-function initWorker() {
-    if (searchWorker) return;
-    try {
-        const workerUrl = chrome.runtime.getURL('worker.js');
-        searchWorker = new Worker(workerUrl);
-        searchWorker.onmessage = (e) => {
-            const { type, id, results, count } = e.data;
-            if (type === 'ready') {
-                log(tf('log_search_ready', { count }), 'success');
-            } else if (type === 'searchResults') {
-                const resolve = pendingSearches.get(id);
-                if (resolve) {
-                    resolve(results);
-                    pendingSearches.delete(id);
-                }
-            }
-        };
-        searchWorker.onerror = (err) => {
-            console.error('Worker Error:', err);
-            log(t('log_search_error'), 'error');
-        };
-    } catch (e) {
-        log(tf('log_search_start_failed', { message: e.message }), 'error');
-    }
-}
+const editorSearchController = createEditorSearchController({
+    scope: syncScope,
+    workerUrl: chrome.runtime.getURL('worker.js'),
+    log,
+    t,
+    tf
+});
+const tagCompletions = editorSearchController.createCompletionSource(50);
 
 function initEditor() {
     const {
@@ -2814,49 +1618,6 @@ function initEditor() {
         searchKeymap, highlightSelectionMatches, autocompletion, completionKeymap, acceptCompletion,
         bracketMatching, oneDark
     } = CM;
-
-    async function tagCompletions(context) {
-        // Init worker if not ready (fallback logic needed? No, loadDictionary handles it)
-        if (!searchWorker) return null;
-
-        const line = context.state.doc.lineAt(context.pos);
-        const textBefore = line.text.slice(0, context.pos - line.from);
-        const lastSep = Math.max(textBefore.lastIndexOf(','), textBefore.lastIndexOf('\n'));
-        const wordStart = lastSep + 1;
-        const word = textBefore.slice(wordStart).trim().toLowerCase();
-
-        // User requested 1-char search support via Worker
-        if (word.length < 1) return null;
-
-        const from = line.from + wordStart + (textBefore.slice(wordStart).length - textBefore.slice(wordStart).trimStart().length);
-
-        return new Promise(resolve => {
-            const id = ++searchIdCounter;
-
-            // Timeout safety (if worker hangs, though unlikely for linear scan of 150k)
-            const timeoutId = setTimeout(() => {
-                pendingSearches.delete(id);
-                resolve(null);
-            }, 1000);
-
-            pendingSearches.set(id, (results) => {
-                clearTimeout(timeoutId);
-                if (!results || results.length === 0) resolve(null);
-                else {
-                    const options = results.map(entry => ({
-                        label: entry.tag,
-                        detail: entry.zhCN || '',
-                        apply: entry.tag,
-                        boost: entry.popCount || 0
-                    }));
-                    // Worker already sorts
-                    resolve({ from, options, filter: false });
-                }
-            });
-
-            searchWorker.postMessage({ type: 'search', payload: { id, query: word, limit: 50 } });
-        });
-    }
 
     const extensions = [
         lineNumbers(), highlightActiveLineGutter(), history(), drawSelection(), bracketMatching(), highlightActiveLine(), highlightSelectionMatches(),
@@ -2943,52 +1704,51 @@ async function openFile(key) {
             if (!await customConfirm(t('confirm_force_switch'))) return;
         }
     }
-    chrome.storage.local.get('wildcards', data => {
-        try {
-            const map = data.wildcards || {};
-            if (!(key in map)) {
-                showToast(t('toast_file_missing'), 'error');
-                refreshFileTree(); // Sync tree state
-                return;
-            }
-            currentFile = key;
-            localContent = map[key] || '';
-            const fileName = key.includes('/') ? key.split('/').pop() : key;
-            fileNameInput.value = fileName;
-
-            editorHeader.style.display = 'flex';
-            editorPlaceholder.style.display = 'none';
-            editorWorkspace.style.display = 'flex';
-            editorStatusbar.style.display = 'flex';
-            extChangeBanner.classList.remove('show');
-
-            if (!editorView) initEditor();
-
-            // Safe dispatch
-            editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: localContent } });
-
-            saveStatus.textContent = '';
-            saveStatus.className = '';
-            if (discardChangesBtn) discardChangesBtn.disabled = true;
-            updateLineInfo(editorView.state);
-            syncOrganizerLargeFileState();
-            syncOrganizerLargeFileSortMode({ notify: false });
-            invalidateOrganizerAnalysisCache();
-            scheduleOrganizerRefresh({ analysis: true, candidates: true, list: true, summary: true });
-        } catch (e) {
-            log(tf('log_open_file_failed', { message: e.message }), 'error');
-            showToast(t('toast_open_file_error'), 'error');
-            // Recovery: Destroy potentially corrupted editor
-            if (editorView) {
-                try { editorView.destroy(); } catch (err) { }
-                editorView = null;
-                editorContainer.innerHTML = '';
-            }
-        } finally {
-            refreshFileTree(); // Always refresh to ensure UI state is consistent
-            saveOrganizerLayoutState(); // 持久化记录当前打开的文件
+    try {
+        const data = await syncStorage.get('wildcards');
+        const map = data.wildcards || {};
+        if (!(key in map)) {
+            showToast(t('toast_file_missing'), 'error');
+            refreshFileTree(); // 同步文件树状态
+            return;
         }
-    });
+        currentFile = key;
+        localContent = map[key] || '';
+        const fileName = key.includes('/') ? key.split('/').pop() : key;
+        fileNameInput.value = fileName;
+
+        editorHeader.style.display = 'flex';
+        editorPlaceholder.style.display = 'none';
+        editorWorkspace.style.display = 'flex';
+        editorStatusbar.style.display = 'flex';
+        extChangeBanner.classList.remove('show');
+
+        if (!editorView) initEditor();
+
+        // 编辑器只在读取成功后更新，避免加载失败时留下半初始化界面。
+        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: localContent } });
+
+        saveStatus.textContent = '';
+        saveStatus.className = '';
+        if (discardChangesBtn) discardChangesBtn.disabled = true;
+        updateLineInfo(editorView.state);
+        syncOrganizerLargeFileState();
+        syncOrganizerLargeFileSortMode({ notify: false });
+        invalidateOrganizerAnalysisCache();
+        scheduleOrganizerRefresh({ analysis: true, candidates: true, list: true, summary: true });
+    } catch (e) {
+        log(tf('log_open_file_failed', { message: e.message }), 'error');
+        showToast(t('toast_open_file_error'), 'error');
+        // 读取或渲染失败时销毁编辑器，下一次打开可从干净状态恢复。
+        if (editorView) {
+            try { editorView.destroy(); } catch (err) { }
+            editorView = null;
+            editorContainer.innerHTML = '';
+        }
+    } finally {
+        refreshFileTree();
+        saveOrganizerLayoutState();
+    }
 }
 
 function closeEditor() {
@@ -3006,38 +1766,45 @@ function closeEditor() {
     refreshFileTree();
 }
 
-function saveCurrentFile() {
+async function saveCurrentFile() {
     if (!currentFile || !editorView) return;
     const content = editorView.state.doc.toString();
     const newName = fileNameInput.value.trim().replace(/\s+/g, '_').replace(/_+/g, '_');
     if (!newName) return showToast(t('toast_enter_file_name'), 'error');
-    chrome.storage.local.get(['wildcards', 'wildcardFolders'], async data => {
+    try {
+        const data = await syncStorage.get(['wildcards', 'wildcardFolders']);
         const map = data.wildcards || {};
         const oldParts = currentFile.split('/');
         oldParts.pop();
         const newKey = oldParts.length > 0 ? `${oldParts.join('/')}/${newName}` : newName;
         if (newKey !== currentFile && map[newKey]) return showToast(tf('toast_file_exists', { name: newKey }), 'error');
         
-        // 核心接入：写回物理硬盘
-        const writeSuccess = await localSyncService.safeWriteFile(newKey + '.txt', content);
-        if (!writeSuccess) {
-            return showToast('保存失败或遇到冲突拦截', 'error');
+        // 只有已绑定目录时才执行物理写入；重命名通过事务式 moveFile 完成，
+        // 删除源文件失败时会恢复目标文件，不提前修改浏览器存储。
+        if (localSyncService.boundDirHandle) {
+            const writeSuccess = newKey === currentFile
+                ? await localSyncService.safeWriteFile(`${newKey}.txt`, content)
+                : await localSyncService.moveFile(`${currentFile}.txt`, `${newKey}.txt`, content);
+            if (!writeSuccess) {
+                return showToast('保存失败或遇到冲突拦截', 'error');
+            }
         }
 
         if (newKey !== currentFile) {
             delete map[currentFile];
-            await localSyncService.deleteFile(currentFile + '.txt');
         }
         
         map[newKey] = content;
         localContent = content;
         currentFile = newKey;
-        chrome.storage.local.set({ wildcards: map }, () => {
-            markSaved();
-            log(tf('log_saved', { key: newKey }), 'success');
-            refreshFileTree();
-        });
-    });
+        await syncStorage.set({ wildcards: map });
+        markSaved();
+        log(tf('log_saved', { key: newKey }), 'success');
+        refreshFileTree();
+    } catch (error) {
+        log(tf('log_save_failed', { message: error.message }), 'error');
+        showToast(t('toast_save_failed'), 'error');
+    }
 }
 
 // ============================
@@ -3088,10 +1855,7 @@ async function loadDictionary() {
         log(tf('log_dictionary_loaded', { count: autocompleteDict.length }), 'success');
 
         // Send to worker
-        initWorker();
-        if (searchWorker) {
-            searchWorker.postMessage({ type: 'init', payload: autocompleteDict });
-        }
+        editorSearchController.initializeDictionary(autocompleteDict);
     } catch (e) {
         log(tf('log_dictionary_failed', { message: e.message }), 'error');
         autocompleteDict = [];
@@ -3208,7 +1972,7 @@ function updateDashboardStats(stats) {
 }
 
 // 每 60 秒自动刷新看板的相对时间
-setInterval(refreshDashboardUI, 60000);
+syncScope.interval(refreshDashboardUI, 60000);
 
 
 document.querySelectorAll('.bottom-tab').forEach(tab => {
@@ -3249,7 +2013,7 @@ resizeHandle.addEventListener('mousedown', (e) => {
     document.body.style.userSelect = 'none';
     e.preventDefault();
 });
-document.addEventListener('mousemove', (e) => {
+syncScope.on(document, 'mousemove', (e) => {
     if (isResizing) {
         const newWidth = Math.min(Math.max(e.clientX, 180), window.innerWidth * 0.5);
         sidebar.style.width = newWidth + 'px';
@@ -3275,7 +2039,7 @@ document.addEventListener('mousemove', (e) => {
         bottomPanel.style.maxHeight = 'none'; // release max-height restriction
     }
 });
-document.addEventListener('mouseup', () => {
+syncScope.on(document, 'mouseup', () => {
     // 先快照「是否正在拖拽」，再清零标记，最后根据快照决定是否保存
     const wasDragging = isResizing || isResizingRight || isResizingPinDrawer || isResizingBottom;
 
@@ -3349,47 +2113,60 @@ if (resizeHandleBottom) {
     });
 }
 
-newFileBtn.addEventListener('click', () => {
+newFileBtn.addEventListener('click', async () => {
     let raw = newItemName.value.trim();
     let name = raw.replace(/\s+/g, '_').replace(/_+/g, '_');
     if (!name) return showToast(t('toast_enter_file_name'), 'error');
 
     // Handle creation in selected folder
+    const selectedFolder = fileTreeController.getSelectedFolder();
     const fullName = selectedFolder ? `${selectedFolder}/${name}` : name;
 
-    chrome.storage.local.get('wildcards', async data => {
+    try {
+        const data = await syncStorage.get('wildcards');
         const map = data.wildcards || {};
         if (map[fullName]) return showToast(tf('toast_file_exists', { name: fullName }), 'error');
         map[fullName] = '';
-        await localSyncService.safeWriteFile(fullName + '.txt', '');
-        chrome.storage.local.set({ wildcards: map }, () => {
-            newItemName.value = '';
-            log(tf('log_created_file', { key: fullName }), 'info');
-            refreshFileTree();
-            openFile(fullName);
-        });
-    });
+        const wroteFile = await localSyncService.safeWriteFile(fullName + '.txt', '');
+        if (localSyncService.boundDirHandle && !wroteFile) {
+            throw new Error(`无法创建本地文件 ${fullName}`);
+        }
+        await syncStorage.set({ wildcards: map });
+        newItemName.value = '';
+        log(tf('log_created_file', { key: fullName }), 'info');
+        refreshFileTree();
+        await openFile(fullName);
+    } catch (error) {
+        log(tf('log_create_file_failed', { message: error.message }), 'error');
+    }
 });
 
-newFolderBtn.addEventListener('click', () => {
+newFolderBtn.addEventListener('click', async () => {
     let raw = newItemName.value.trim();
     let name = raw.replace(/\s+/g, '_').replace(/_+/g, '_');
     if (!name) return showToast(t('toast_enter_folder_name'), 'error');
 
     // Handle creation in selected folder
+    const selectedFolder = fileTreeController.getSelectedFolder();
     const fullName = selectedFolder ? `${selectedFolder}/${name}` : name;
 
-    chrome.storage.local.get('wildcardFolders', data => {
+    try {
+        const data = await syncStorage.get('wildcardFolders');
         const folders = data.wildcardFolders || [];
         if (folders.includes(fullName)) return showToast(tf('toast_folder_exists', { name: fullName }), 'error');
+        const createdFolder = await localSyncService.createFolder(fullName);
+        if (localSyncService.boundDirHandle && !createdFolder) {
+            throw new Error(`无法创建本地文件夹 ${fullName}`);
+        }
         folders.push(fullName);
-        chrome.storage.local.set({ wildcardFolders: folders }, () => {
-            newItemName.value = '';
-            expandedFolders.add(fullName);
-            log(tf('log_created_folder', { folder: fullName }), 'info');
-            refreshFileTree();
-        });
-    });
+        await syncStorage.set({ wildcardFolders: folders });
+        newItemName.value = '';
+        fileTreeController.expandFolder(fullName);
+        log(tf('log_created_folder', { folder: fullName }), 'info');
+        refreshFileTree();
+    } catch (error) {
+        log(tf('log_create_folder_failed', { message: error.message }), 'error');
+    }
 });
 
 linkBtn.addEventListener('click', async () => {
@@ -3768,7 +2545,7 @@ saveBtn.addEventListener('click', saveCurrentFile);
 reloadFileBtn.addEventListener('click', () => { if (currentFile) openFile(currentFile); });
 dismissBannerBtn.addEventListener('click', () => { extChangeBanner.classList.remove('show'); });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+syncScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
     if (area !== 'local') return;
     
     // 同步资源树 UI 与通配符
@@ -3802,7 +2579,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+syncScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
     if (area !== 'local') return;
     if (!changes.groupTagsUserData) return;
     loadOrganizerGroupTagsIndex({ force: true });
@@ -3810,7 +2587,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // JSON 资源智能节流回推（3秒防抖）
 let jsonSyncDebounceTimer = null;
-chrome.storage.onChanged.addListener((changes, area) => {
+syncScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
     if (area !== 'local' || !boundDirHandle || localSyncService.isSyncing) return;
     
     // 监听专属防抖脏信号，避免被底层引擎刷入的 _lastModified 干扰循环
@@ -3823,9 +2600,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
         if (changes.sync_pending_grouptags && changes.sync_pending_grouptags.newValue) document.getElementById('badge-grouptags')?.classList.add('pending');
         if (changes.sync_pending_userdict && changes.sync_pending_userdict.newValue) document.getElementById('badge-userdict')?.classList.add('pending');
 
-        clearTimeout(jsonSyncDebounceTimer);
-        const delayMs = (snapshotSettings.debounceTime || 10) * 1000;
-        jsonSyncDebounceTimer = setTimeout(() => {
+        if (jsonSyncDebounceTimer !== null) syncScope.cancelTimeout(jsonSyncDebounceTimer);
+        const delayMs = snapshotController.getSettings().debounceTime * 1000;
+        jsonSyncDebounceTimer = syncScope.timeout(() => {
+            jsonSyncDebounceTimer = null;
             if (boundDirHandle && !localSyncService.isSyncing) {
                 // 触发底层的全维安全同步引擎，它带有 15 份快照和防呆机制
                 localSyncService.scanAndPullChanges({ silent: true }).then(handleSyncResult);
@@ -3834,40 +2612,39 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 });
 
-// Snapshot Toolbar Events
-selectAllSnapshots.addEventListener('change', (e) => {
-    const checkboxes = document.querySelectorAll('.snap-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = e.target.checked;
-        const id = cb.dataset.id;
-        if (e.target.checked) selectedSnapshots.add(id);
-        else selectedSnapshots.delete(id);
-    });
-    updateBatchButtons();
+// 快照工具栏事件统一委托给快照控制器。
+syncScope.on(selectAllSnapshots, 'change', event => {
+    snapshotController.selectAll(event.target.checked);
 });
 
-batchDeleteBtn.addEventListener('click', () => deleteSnapshots(Array.from(selectedSnapshots)));
-batchExportBtn.addEventListener('click', () => exportSnapshots(Array.from(selectedSnapshots)));
+syncScope.on(batchDeleteBtn, 'click', () => {
+    snapshotController.deleteSnapshots(snapshotController.getSelectedIds());
+});
+syncScope.on(batchExportBtn, 'click', () => {
+    snapshotController.exportSnapshots(snapshotController.getSelectedIds());
+});
 
 // Settings Modal Events
-snapshotSettingsBtn.addEventListener('click', () => {
-    settingMaxSnapshots.value = snapshotSettings.maxSnapshots;
-    settingConfirmDelete.checked = snapshotSettings.confirmDelete;
+syncScope.on(snapshotSettingsBtn, 'click', () => {
+    const settings = snapshotController.getSettings();
+    settingMaxSnapshots.value = settings.maxSnapshots;
+    settingConfirmDelete.checked = settings.confirmDelete;
     snapSettingsModal.classList.add('show');
 });
 
-saveSnapSettingsBtn.addEventListener('click', async () => {
+syncScope.on(saveSnapSettingsBtn, 'click', async () => {
     const max = parseInt(settingMaxSnapshots.value, 10);
     if (isNaN(max) || max < 1) return showToast(t('toast_enter_valid_number'), 'error');
 
-    snapshotSettings.maxSnapshots = max;
-    snapshotSettings.confirmDelete = settingConfirmDelete.checked;
-    await saveSnapshotSettings();
+    await snapshotController.saveSettings({
+        maxSnapshots: max,
+        confirmDelete: settingConfirmDelete.checked
+    });
     showToast(t('toast_settings_saved'), 'success');
     snapSettingsModal.classList.remove('show');
 });
 
-closeSnapSettingsBtn.addEventListener('click', () => snapSettingsModal.classList.remove('show'));
+syncScope.on(closeSnapSettingsBtn, 'click', () => snapSettingsModal.classList.remove('show'));
 
 function repositionQuickPopover() {
     if (!syncQuickPopover.classList.contains('show')) return;
@@ -3878,11 +2655,11 @@ function repositionQuickPopover() {
 }
 
 // Sync Settings Modal Events (Scheme 2 Popover)
-syncSettingsBtn.addEventListener('click', (e) => {
+syncScope.on(syncSettingsBtn, 'click', (e) => {
     e.stopPropagation();
     const isShow = syncQuickPopover.classList.contains('show');
     if (!isShow) {
-        const val = snapshotSettings.debounceTime || 10;
+        const val = snapshotController.getSettings().debounceTime;
         settingSyncDebounceRange.value = val;
         settingSyncDebounceInput.value = val;
         syncQuickPopover.classList.add('show');
@@ -3892,16 +2669,17 @@ syncSettingsBtn.addEventListener('click', (e) => {
     }
 });
 
-settingSyncDebounceRange.addEventListener('input', () => {
+syncScope.on(settingSyncDebounceRange, 'input', () => {
     settingSyncDebounceInput.value = settingSyncDebounceRange.value;
 });
 
-settingSyncDebounceRange.addEventListener('change', async () => {
-    snapshotSettings.debounceTime = parseInt(settingSyncDebounceRange.value, 10);
-    await saveSnapshotSettings();
+syncScope.on(settingSyncDebounceRange, 'change', async () => {
+    await snapshotController.saveSettings({
+        debounceTime: parseInt(settingSyncDebounceRange.value, 10)
+    });
 });
 
-settingSyncDebounceInput.addEventListener('input', () => {
+syncScope.on(settingSyncDebounceInput, 'input', () => {
     let val = parseInt(settingSyncDebounceInput.value, 10);
     if (!isNaN(val)) {
         if (val < 1) val = 1;
@@ -3910,26 +2688,25 @@ settingSyncDebounceInput.addEventListener('input', () => {
     }
 });
 
-settingSyncDebounceInput.addEventListener('change', async () => {
+syncScope.on(settingSyncDebounceInput, 'change', async () => {
     let val = parseInt(settingSyncDebounceInput.value, 10);
     if (isNaN(val) || val < 1) val = 1;
     if (val > 60) val = 60;
     settingSyncDebounceInput.value = val;
     settingSyncDebounceRange.value = val;
-    snapshotSettings.debounceTime = val;
-    await saveSnapshotSettings();
+    await snapshotController.saveSettings({ debounceTime: val });
 });
 
 // Window and Layout Events for Popover Tracking
-window.addEventListener('resize', repositionQuickPopover);
-window.addEventListener('resize', () => applyOrganizerPinDrawerHeight(organizerPinDrawerHeight));
+syncScope.on(window, 'resize', repositionQuickPopover);
+syncScope.on(window, 'resize', () => applyOrganizerPinDrawerHeight(organizerPinDrawerHeight));
 document.querySelector('.topbar').addEventListener('scroll', repositionQuickPopover);
 
 // Diff Modal Events
 closeDiffBtn.addEventListener('click', () => diffModal.classList.remove('show'));
 // Close modals on outside click
 // Close modals/popovers on outside click
-window.addEventListener('click', (e) => {
+syncScope.on(window, 'click', (e) => {
     if (syncQuickPopover.classList.contains('show') && !syncQuickPopover.contains(e.target)) {
         syncQuickPopover.classList.remove('show');
     }
@@ -4020,7 +2797,7 @@ async function loadDictForEditor() {
             dictOverlay = normalizedOverlay.overlay || {};
             dictNewEntries = normalizedOverlay.newEntries || [];
         } else {
-            const stored = await new Promise(r => chrome.storage.local.get('dictOverlay', r));
+            const stored = await syncStorage.get('dictOverlay');
             if (stored.dictOverlay) {
                 try {
                     const parsed = JSON.parse(stored.dictOverlay);
@@ -4112,7 +2889,7 @@ async function saveDictOverlay() {
         dictNewEntries = normalized.newEntries || [];
     } else {
         const data = JSON.stringify({ overlay: dictOverlay, newEntries: dictNewEntries });
-        await new Promise(r => chrome.storage.local.set({ dictOverlay: data }, r));
+        await syncStorage.set({ dictOverlay: data });
     }
     if (groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary) {
         await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
@@ -4545,8 +3322,9 @@ async function init() {
     await initI18n();
     log(t('log_initializing'), 'info');
     
-    // 恢复布局持久化状态 (通过延迟确保 DOM 变量已载入)
-    chrome.storage.local.get('organizerLayoutState', (data) => {
+    // DOM 已完成模块初始化，可按顺序恢复布局，避免异步回调和后续渲染互相覆盖。
+    try {
+        const data = await syncStorage.get('organizerLayoutState');
         const layoutState = data.organizerLayoutState;
         if (layoutState && organizerPanel) {
             // 强力恢复宽度：设置 width 后再设置 flex-basis 以覆盖 CSS clamp
@@ -4581,16 +3359,16 @@ async function init() {
                 // 恢复「只看变更」筛选状态
                 if (layoutState.dictShowChanges && dictToggleChangesBtn) {
                     // 等待字典加载完成后再触发
-                    const waitForDict = setInterval(() => {
+                    const waitForDict = syncScope.interval(() => {
                         if (dictLoaded) {
-                            clearInterval(waitForDict);
+                            syncScope.cancelInterval(waitForDict);
                             if (!dictShowChanges) {
                                 dictToggleChangesBtn.click();
                             }
                         }
                     }, 100);
                     // 安全超时，5秒后放弃
-                    setTimeout(() => clearInterval(waitForDict), 5000);
+                    syncScope.timeout(() => syncScope.cancelInterval(waitForDict), 5000);
                 }
             }
         } else {
@@ -4598,7 +3376,12 @@ async function init() {
             updateOrganizerToggleText();
             setOrganizerVisibility(true);
         }
-    });
+    } catch (error) {
+        console.error('[Sync] 恢复布局状态失败:', error);
+        applyOrganizerPinDrawerHeight(ORGANIZER_PIN_DRAWER_DEFAULT_HEIGHT);
+        updateOrganizerToggleText();
+        setOrganizerVisibility(true);
+    }
 
     renderOrganizerPreview();
 
@@ -4637,7 +3420,7 @@ async function init() {
         return;
     }
 
-    await loadSnapshotSettings();
+    await snapshotController.loadSettings();
     await loadOrganizerPriorityRules();
 
     // Restore bound directory
@@ -4673,10 +3456,10 @@ async function init() {
     log(t('log_init_complete'), 'success');
 }
 
-document.addEventListener('DOMContentLoaded', init);
+syncScope.on(document, 'DOMContentLoaded', init, { once: true });
 
 // 生命周期：当用户切回浏览器窗口时，静默自本地拉取更新
-window.addEventListener('focus', async () => {
+syncScope.on(window, 'focus', async () => {
     if (boundDirHandle && !localSyncService.isSyncing && currentTopUiState === 'bound') {
         const res = await localSyncService.scanAndPullChanges({ silent: true });
         await handleSyncResult(res);
@@ -4709,8 +3492,17 @@ if (organizerPinnedInput) {
     }
 }
 
-window.addEventListener('beforeunload', (event) => {
+syncScope.on(window, 'beforeunload', (event) => {
     if (!hasUnsavedEditorChanges()) return;
     event.preventDefault();
     event.returnValue = '';
+});
+
+syncScope.on(window, 'pagehide', () => {
+    try {
+        syncHeartbeat.disconnect();
+    } catch (_) {
+        // Port 可能已经由浏览器自动断开。
+    }
+    syncScope.dispose('pagehide');
 });

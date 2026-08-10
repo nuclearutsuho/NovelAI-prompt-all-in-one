@@ -1,5 +1,7 @@
 export default function createGroupTagsController(deps = {}) {
   const {
+    storageRepository,
+    lifecycleScope,
     getLocalizedText = (_key, fallback = '') => fallback,
     showToast = () => {},
     getActiveTab = async () => null,
@@ -14,6 +16,13 @@ export default function createGroupTagsController(deps = {}) {
     loadPopupDict = () => ({})
   } = deps;
 
+  if (!storageRepository?.get || !storageRepository?.set) {
+    throw new TypeError('[Group Tags] 缺少扩展存储仓库');
+  }
+  if (!lifecycleScope?.on || !lifecycleScope?.chromeEvent) {
+    throw new TypeError('[Group Tags] 缺少生命周期作用域');
+  }
+
   const groupTagsDataUtils = window.GroupTagsDataUtils || {};
   const EMPTY_GROUP_TAGS_DATA = { categories: [] };
   const GROUP_ITEM_TYPE_TAG = 'tag';
@@ -25,6 +34,8 @@ export default function createGroupTagsController(deps = {}) {
   let activeEditorTarget = normalizeActiveTarget(getExternalActiveTarget()) || { type: 'base', mode: 'positive' };
   let storageChangeListener = null;
   let pickerKeydownListener = null;
+  let removeStorageChangeListener = () => {};
+  let removePickerKeydownListener = () => {};
   let uiBound = false;
 
   const groupTagsPickerState = {
@@ -204,7 +215,7 @@ export default function createGroupTagsController(deps = {}) {
   }
 
   async function loadEffectiveGroupTagsData() {
-    let storedGroupTagsData = (await chrome.storage.local.get('groupTagsUserData')).groupTagsUserData;
+    let storedGroupTagsData = (await storageRepository.get('groupTagsUserData')).groupTagsUserData;
     if (storedGroupTagsData?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
       const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
       storedGroupTagsData = migrated.data || storedGroupTagsData;
@@ -353,7 +364,7 @@ export default function createGroupTagsController(deps = {}) {
         closeGroupTagsPicker(null);
       }
     };
-    document.addEventListener('keydown', pickerKeydownListener);
+    removePickerKeydownListener = lifecycleScope.on(document, 'keydown', pickerKeydownListener);
 
     updateGroupTagsPickerStaticText();
   }
@@ -603,7 +614,7 @@ export default function createGroupTagsController(deps = {}) {
     } else {
       const colorMap = buildGroupTagsColorMap(groupTagsData);
       const translationMap = buildGroupTagsTranslationMap(groupTagsData);
-      await chrome.storage.local.set({
+      await storageRepository.set({
         groupTagsUserData: groupTagsData,
         groupColorMap: colorMap,
         groupTranslationMap: translationMap
@@ -714,14 +725,16 @@ export default function createGroupTagsController(deps = {}) {
     }
 
     if (msg.type === 'SYNC_GROUP_COLORS' && msg.colorMap) {
-      chrome.storage.local.set({ groupColorMap: msg.colorMap });
+      storageRepository.set({ groupColorMap: msg.colorMap })
+        .catch(error => console.error('[Group Tags] 保存颜色映射失败:', error));
       currentGroupColorMap = msg.colorMap || {};
       applyEditorMapsToTargets(true);
       return true;
     }
 
     if (msg.type === 'SYNC_GROUP_TRANSLATIONS' && msg.translationMap) {
-      chrome.storage.local.set({ groupTranslationMap: msg.translationMap });
+      storageRepository.set({ groupTranslationMap: msg.translationMap })
+        .catch(error => console.error('[Group Tags] 保存翻译映射失败:', error));
       currentGroupTranslationMap = msg.translationMap || {};
       applyEditorMapsToTargets(true);
       return true;
@@ -761,7 +774,7 @@ export default function createGroupTagsController(deps = {}) {
   }
 
   async function init() {
-    const data = await chrome.storage.local.get(['groupColorMap', 'groupTranslationMap']);
+    const data = await storageRepository.get(['groupColorMap', 'groupTranslationMap']);
     currentGroupColorMap = data.groupColorMap || {};
     currentGroupTranslationMap = data.groupTranslationMap || {};
     // 初始化完成后立即刷新所有编辑器，保证 popup 打开时就拿到正确映射。
@@ -769,7 +782,7 @@ export default function createGroupTagsController(deps = {}) {
 
     if (!storageChangeListener) {
       storageChangeListener = (changes, area) => handleStorageChange(changes, area);
-      chrome.storage.onChanged.addListener(storageChangeListener);
+      removeStorageChangeListener = lifecycleScope.chromeEvent(chrome.storage.onChanged, storageChangeListener);
     }
   }
 
@@ -789,11 +802,11 @@ export default function createGroupTagsController(deps = {}) {
 
   function destroy() {
     if (storageChangeListener) {
-      chrome.storage.onChanged.removeListener(storageChangeListener);
+      removeStorageChangeListener();
       storageChangeListener = null;
     }
     if (pickerKeydownListener) {
-      document.removeEventListener('keydown', pickerKeydownListener);
+      removePickerKeydownListener();
       pickerKeydownListener = null;
     }
     closeGroupTagsPicker(null);

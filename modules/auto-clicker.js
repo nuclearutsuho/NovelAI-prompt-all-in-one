@@ -2,6 +2,12 @@
 // NovelAI 自定义连点器 — 插件版（独立浮窗）
 // 原作: Takoro (v2.8)，移植改编为 Chrome 插件模块
 (() => {
+  const runtime = globalThis.NaiAioRuntime;
+  if (!runtime) {
+    console.error('[AutoClicker] 运行时生命周期内核未加载，停止初始化。');
+    return;
+  }
+  const autoClickerScope = runtime.acquire('page:auto-clicker');
   console.log('[AutoClicker] 模块加载中...');
 
   // ─── XPath / 选择器定义 ────────────────────────────────────────
@@ -150,25 +156,25 @@
     // 我们设定：在用户主动触发历史区滚轮或点击等操作后的 1000ms 内，所有新出现的图均当作历史图。
     let historyMaskTimeout = null;
     function maskHistory() {
-      clearTimeout(historyMaskTimeout);
-      historyMaskTimeout = setTimeout(() => { historyMaskTimeout = null; }, 200);
+      if (historyMaskTimeout !== null) autoClickerScope.cancelTimeout(historyMaskTimeout);
+      historyMaskTimeout = autoClickerScope.timeout(() => { historyMaskTimeout = null; }, 200);
     }
 
     // 监听历史记录操作：点击右侧、在右侧滚动、或键盘方向键切换
-    document.addEventListener('mousedown', (e) => {
+    autoClickerScope.on(document, 'mousedown', (e) => {
       // 目标是具体的历史缩略图，或者发生在屏幕右侧 25% 区域内的点击
       if (e.target.closest('[aria-label="choose image"]') || e.clientX > window.innerWidth * 0.75) {
         maskHistory();
       }
     }, { capture: true }); // 用 capture 提前捕获
 
-    document.addEventListener('wheel', (e) => {
+    autoClickerScope.on(document, 'wheel', (e) => {
       if (e.clientX > window.innerWidth * 0.75) {
         maskHistory();
       }
     }, { passive: true, capture: true });
 
-    document.addEventListener('keydown', (e) => {
+    autoClickerScope.on(document, 'keydown', (e) => {
       const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
       if (!isInput && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         maskHistory();
@@ -208,12 +214,12 @@
             if (node.nodeType !== 1) continue;
             if (node.tagName === 'IMG') {
               if (node.complete) checkImg(node);
-              else node.addEventListener('load', () => checkImg(node), { once: true });
+              else autoClickerScope.on(node, 'load', () => checkImg(node), { once: true });
             }
             if (node.querySelectorAll) {
               for (const img of node.querySelectorAll('img')) {
                 if (img.complete) checkImg(img);
-                else img.addEventListener('load', () => checkImg(img), { once: true });
+                else autoClickerScope.on(img, 'load', () => checkImg(img), { once: true });
               }
             }
           }
@@ -221,12 +227,12 @@
           // 已有 img 元素的 src 属性被更新（NovelAI 复用 img 元素的典型方式）
           const img = m.target;
           if (img.complete) checkImg(img);
-          else img.addEventListener('load', () => checkImg(img), { once: true });
+          else autoClickerScope.on(img, 'load', () => checkImg(img), { once: true });
         }
       }
     });
 
-    obs.observe(document.body, {
+    autoClickerScope.observe(obs, document.body, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -303,7 +309,7 @@
     for (const waiter of imageWaiters) {
       if (waiter.done) continue;
       waiter.done = true;
-      clearTimeout(waiter.timeoutId);
+      autoClickerScope.cancelTimeout(waiter.timeoutId);
       waiter.resolve(false);
     }
     imageWaiters.clear();
@@ -315,14 +321,14 @@
       if (waiter.done) continue;
       if (waiter.token !== runToken) {
         waiter.done = true;
-        clearTimeout(waiter.timeoutId);
+        autoClickerScope.cancelTimeout(waiter.timeoutId);
         waiter.resolve(false);
         imageWaiters.delete(waiter);
         continue;
       }
       if (imageCount > waiter.prevCount) {
         waiter.done = true;
-        clearTimeout(waiter.timeoutId);
+        autoClickerScope.cancelTimeout(waiter.timeoutId);
         waiter.resolve(true);
         imageWaiters.delete(waiter);
       }
@@ -338,7 +344,7 @@
     for (const waiter of imageWaiters) {
       if (waiter.done) continue;
       waiter.done = true;
-      clearTimeout(waiter.timeoutId);
+      autoClickerScope.cancelTimeout(waiter.timeoutId);
       waiter.resolve(false);  // 返回 false 表示没有拿到新图片
       imageWaiters.delete(waiter);
     }
@@ -347,7 +353,7 @@
   function waitForNewImage(prevCount, timeoutMs, token) {
     return new Promise(resolve => {
       const waiter = { prevCount, token, resolve, timeoutId: null, done: false };
-      waiter.timeoutId = setTimeout(() => {
+      waiter.timeoutId = autoClickerScope.timeout(() => {
         if (waiter.done) return;
         waiter.done = true;
         imageWaiters.delete(waiter);
@@ -356,7 +362,8 @@
       imageWaiters.add(waiter);
 
       if (imageCount > prevCount) {
-        clearTimeout(waiter.timeoutId);
+        waiter.done = true;
+        autoClickerScope.cancelTimeout(waiter.timeoutId);
         imageWaiters.delete(waiter);
         resolve(true);
       }
@@ -364,8 +371,9 @@
   }
 
   function scheduleNext(delayMs, token) {
-    if (interval) clearTimeout(interval);
-    interval = setTimeout(() => {
+    if (interval !== null) autoClickerScope.cancelTimeout(interval);
+    interval = autoClickerScope.timeout(() => {
+      interval = null;
       if (isRunning && token === runToken) runAutoClicker();
     }, delayMs);
   }
@@ -375,7 +383,7 @@
     isRunning = false;
     runToken += 1;
     ignoreAnlasWarning = false;
-    if (interval) clearTimeout(interval);
+    if (interval !== null) autoClickerScope.cancelTimeout(interval);
     interval = null;
     cancelPendingWaits();
     disableBackgroundKeepAlive();
@@ -720,7 +728,7 @@
     updateLoopCounter();
     console.log(`[AutoClicker] Ran ${currentLoop}/${maxLoops > 0 ? maxLoops : 'inf'}`);
 
-    setTimeout(resetSeed, 500);
+    autoClickerScope.timeout(resetSeed, 500);
 
     if (!isRunning || token !== runToken) return;
 
@@ -774,7 +782,7 @@
         }
 
         // 等待重试间隔
-        await new Promise(r => setTimeout(r, RETRY_INTERVAL));
+        await new Promise(resolve => autoClickerScope.timeout(resolve, RETRY_INTERVAL));
         if (!isRunning || token !== runToken) break;
 
         // 重置错误标志并重新点击生成
@@ -908,6 +916,7 @@
         }
       `;
       document.head.appendChild(style);
+      autoClickerScope.ownNode(style);
     }
 
     function styleBtn(el, extraStyles = {}) {
@@ -930,6 +939,7 @@
       userSelect: 'none', zIndex: '9999'
     });
     document.body.appendChild(container);
+    autoClickerScope.ownNode(container);
 
     // 1. 启停按钮 (Always，从 Hover 区域剥离)
     const btnStart = document.createElement('button');
@@ -949,12 +959,12 @@
     // ── 仅中部悬停展开逻辑 ──
     let collapseTimeout;
     middleWrapper.addEventListener('mouseenter', () => {
-      clearTimeout(collapseTimeout);
+      if (collapseTimeout !== undefined) autoClickerScope.cancelTimeout(collapseTimeout);
       container.classList.add('expanded');
     });
     middleWrapper.addEventListener('mouseleave', () => {
-      clearTimeout(collapseTimeout);
-      collapseTimeout = setTimeout(() => {
+      if (collapseTimeout !== undefined) autoClickerScope.cancelTimeout(collapseTimeout);
+      collapseTimeout = autoClickerScope.timeout(() => {
         const active = document.activeElement;
         // 如果输入框还在焦点状态，不收起
         if (active && active.tagName === 'INPUT' && middleWrapper.contains(active)) return;
@@ -965,8 +975,8 @@
     // 模糊焦点时需基于 middleWrapper 状态判断
     function bindCollapseCheck(inp) {
       inp.addEventListener('blur', () => {
-        clearTimeout(collapseTimeout);
-        collapseTimeout = setTimeout(() => {
+        if (collapseTimeout !== undefined) autoClickerScope.cancelTimeout(collapseTimeout);
+        collapseTimeout = autoClickerScope.timeout(() => {
           if (!middleWrapper.matches(':hover')) container.classList.remove('expanded');
         }, 600);
       });
@@ -1014,8 +1024,8 @@
     let devClickTimer = null;
     inputLoops.addEventListener('click', () => {
       devClickCount++;
-      clearTimeout(devClickTimer);
-      devClickTimer = setTimeout(() => { devClickCount = 0; }, 600); // 600ms 内完成 10 次
+      if (devClickTimer !== null) autoClickerScope.cancelTimeout(devClickTimer);
+      devClickTimer = autoClickerScope.timeout(() => { devClickCount = 0; }, 600); // 600ms 内完成 10 次
       if (devClickCount >= 10) {
         devClickCount = 0;
         devMode = !devMode; // 切换开发者模式
@@ -1132,7 +1142,7 @@
         }
       } else {
         runToken += 1;
-        if (interval) clearTimeout(interval);
+        if (interval !== null) autoClickerScope.cancelTimeout(interval);
         interval = null;
         cancelPendingWaits();
         currentLoop = 0; imageCount = 0; lastPendingGenerateTime = 0; lastGenerateRecordAt = 0;
@@ -1180,10 +1190,10 @@
     btnCustom.addEventListener('click', async () => {
       if (!(await checkAnlas())) return;
       XPATH_I2I_LIST.forEach(xpath => { const el = xpathNode(xpath); if (el) triggerClick(el); });
-      setTimeout(() => {
+      autoClickerScope.timeout(() => {
         triggerClick(findGenerateButton());
       }, 600);
-      setTimeout(() => resetSeed(), 1000);
+      autoClickerScope.timeout(() => resetSeed(), 1000);
     });
 
     inputInterval.addEventListener('change', () => {
@@ -1213,6 +1223,8 @@
 
     // ─── 全局拖拽逻辑（直接做在 container 上） ─────────────────
     let isDragging = false, initX, initY, startLeft, startTop;
+    let removeMouseMove = null;
+    let removeMouseUp = null;
     container.addEventListener('mousedown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
       e.preventDefault();
@@ -1227,8 +1239,10 @@
       initX = e.clientX; initY = e.clientY;
       startLeft = parseInt(container.style.left, 10) || 0;
       startTop  = parseInt(container.style.top,  10) || 0;
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      removeMouseMove?.();
+      removeMouseUp?.();
+      removeMouseMove = autoClickerScope.on(document, 'mousemove', onMouseMove);
+      removeMouseUp = autoClickerScope.on(document, 'mouseup', onMouseUp);
     });
 
     function onMouseMove(e) {
@@ -1242,8 +1256,10 @@
 
     function onMouseUp() {
       isDragging = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      removeMouseMove?.();
+      removeMouseUp?.();
+      removeMouseMove = null;
+      removeMouseUp = null;
     }
 
     /** 确保浮窗在窗口边界内 */
@@ -1256,7 +1272,7 @@
       container.style.left = Math.max(0, Math.min(left, maxLeft)) + 'px';
       container.style.top  = Math.max(0, Math.min(top,  maxTop )) + 'px';
     }
-    window.addEventListener('resize', ensureInBounds);
+    autoClickerScope.on(window, 'resize', ensureInBounds);
 
     startImageObserver();
     console.log('[AutoClicker] 浮窗已完善为悬停胶囊设计');
@@ -1280,7 +1296,7 @@
   let latestHideAutoClicker = false;
 
   // 监听来自 bridge.js 的配置信息
-  window.addEventListener('message', e => {
+  autoClickerScope.on(window, 'message', e => {
     if (e.source !== window) return;
     const { type, hideAutoClicker, autoClickerI18n: i18n } = e.data || {};
     if (type === '__WILDCARD_INIT__' || type === '__WILDCARD_UPDATE__') {
@@ -1325,10 +1341,10 @@
     }
   });
 
-  const initTimer = setInterval(() => {
+  const initTimer = autoClickerScope.interval(() => {
     const btn = xpathNode(XPATH_GENERATE);
     if (btn) {
-      clearInterval(initTimer);
+      autoClickerScope.cancelInterval(initTimer);
       console.log('[AutoClicker] 检测到生成按钮，初始化浮窗');
       createComponent();
       
@@ -1339,5 +1355,11 @@
       console.log('[AutoClicker] 等待生成按钮...');
     }
   }, 3000);
+
+  autoClickerScope.add(() => {
+    stopAutoClicker('runtime disposed');
+    cancelPendingWaits();
+    disableBackgroundKeepAlive();
+  });
 
 })();

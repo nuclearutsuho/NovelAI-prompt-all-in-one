@@ -7,6 +7,15 @@ import createAiTranslateController from './popup/ai-translate-controller.js';
 import createGroupTagsController from './popup/group-tags-controller.js';
 import createHistoryController from './popup/history-controller.js';
 import createPromptSyncController from './popup/prompt-sync-controller.js';
+import createSyncStatusController from './popup/sync-status-controller.js';
+
+const popupRuntime = globalThis.NaiAioRuntime;
+const popupStorageApi = globalThis.NaiAioStorage;
+if (!popupRuntime?.acquire || !popupStorageApi?.createRepository) {
+  throw new Error('[Popup] 运行时内核或扩展存储仓库未加载');
+}
+const popupScope = popupRuntime.acquire('extension:popup');
+const popupStorage = popupStorageApi.createRepository(chrome.storage.local, { logger: console });
 
 let editor;
 let autocomplete;
@@ -36,166 +45,7 @@ let aiTranslateController = null;
 let groupTagsController = null;
 let historyController = null;
 let promptSyncController = null;
-
-/**
- * Phase 14: 同步看板状态管理器 (Popup 侧)
- * 负责驱动主界面同步按钮悬浮窗中的 4 枚资源徽章
- */
-const SyncStatusManager = {
-  init() {
-    this.container = document.getElementById('sync-status-container');
-    this.badges = {
-      wildcards: document.getElementById('popover-badge-wildcards'),
-      favorites: document.getElementById('popover-badge-favorites'),
-      grouptags: document.getElementById('popover-badge-grouptags'),
-      userdict: document.getElementById('popover-badge-userdict')
-    };
-    this.libraryBtn = document.getElementById('btn-library');
-    this.currentScale = 1.0;
-    
-    // 初始加载缓存快照与缩放比例
-    chrome.storage.local.get(['sync_stats_cache', 'syncPageActive', 'sync_popover_scale'], (d) => {
-      this.cachedStats = d.sync_stats_cache || {};
-      this.updateUI(this.cachedStats);
-      this.updateReadyState(!!d.syncPageActive);
-      
-      // 应用持久化的缩放比例
-      if (d.sync_popover_scale) {
-        this.currentScale = d.sync_popover_scale;
-        this.applyScale();
-      }
-    });
-
-    // 绑定滚轮缩放逻辑
-    if (this.libraryBtn) {
-      this.libraryBtn.addEventListener('wheel', (e) => {
-        // 允许在按键上通过滚轮调整比例
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.05 : 0.05;
-        const nextScale = Math.min(Math.max(0.5, this.currentScale + delta), 3.0);
-        
-        if (nextScale !== this.currentScale) {
-          this.currentScale = nextScale;
-          this.applyScale();
-          this.saveScale();
-        }
-      }, { passive: false });
-    }
-
-    // 监听全域存储变更，实现跨页面状态共鸣
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local') return;
-      
-      // 1. 计数快照/物理时间变更 (由同步页发起持久化)
-      if (changes.sync_stats_cache) {
-        this.cachedStats = changes.sync_stats_cache.newValue || {};
-        this.updateUI(this.cachedStats);
-      }
-      
-      // 2. 存活状态变更
-      if (changes.syncPageActive) {
-        this.updateReadyState(!!changes.syncPageActive.newValue);
-      }
-
-      // 3. 琥珀色挂起状态触发 (检测专属安全挂起标志，避免死循环)
-      if (changes.sync_pending_favorites && changes.sync_pending_favorites.newValue) this.setPending('favorites');
-      if (changes.sync_pending_grouptags && changes.sync_pending_grouptags.newValue) this.setPending('grouptags');
-      if (changes.sync_pending_userdict && changes.sync_pending_userdict.newValue) this.setPending('userdict');
-
-      // 4. 绿色涟漪触发 (由任意页面落盘成功后广播)
-      if (changes.last_sync_event) {
-        const ev = changes.last_sync_event.newValue;
-        if (ev && ev.id) this.triggerPing(ev.id);
-      }
-    });
-
-    // 每 60 秒自动刷新相对时间文字
-    setInterval(() => this.updateUI(this.cachedStats), 60000);
-  },
-
-  applyScale() {
-    if (this.container) {
-      this.container.style.setProperty('--sync-popover-scale', this.currentScale.toFixed(2));
-    }
-  },
-
-  saveScale() {
-    if (this._saveTimer) clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => {
-      chrome.storage.local.set({ sync_popover_scale: this.currentScale });
-    }, 500);
-  },
-
-  formatTime(ts) {
-    if (!ts) return '--';
-    const diff = Math.floor((Date.now() - ts) / 1000);
-    if (diff < 30) return '刚刚';
-    if (diff < 60) return '1m';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-    return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
-  },
-
-  updateUI(stats) {
-    if (!stats) return;
-    this.cachedStats = stats;
-    
-    // Phase 14.5: Check if it's completely empty
-    const isEmpty = Object.keys(stats).length === 0;
-    if (this.container) {
-      if (isEmpty) {
-        this.container.classList.add('is-empty');
-      } else {
-        this.container.classList.remove('is-empty');
-      }
-    }
-
-    if (!isEmpty) {
-      for (const [id, data] of Object.entries(stats)) {
-        const badge = this.badges[id];
-        if (!badge) continue;
-        const statusEl = badge.querySelector('.popover-badge-status');
-        if (statusEl) {
-          const unit = id === 'wildcards' ? ' 个' : (id === 'favorites' ? ' 条' : ' 词');
-          const count = typeof data === 'object' ? data.count : (data || 0);
-          const lastSync = typeof data === 'object' ? data.lastModified : null;
-          
-          // 合并显示: 158 个 | 3m
-          statusEl.textContent = `${count}${unit} | ${this.formatTime(lastSync)}`;
-        }
-        badge.classList.remove('pending');
-      }
-      // 数据更新说明防抖期的同步已经落地，解除主按钮的黄色挂起状态
-      if (this.libraryBtn) {
-        this.libraryBtn.classList.remove('sync-pending');
-      }
-    }
-  },
-
-  updateReadyState(isReady) {
-    // 移除 empty state 判定，只作用于 badges
-    Object.values(this.badges).forEach(b => {
-      if (!b) return;
-      isReady ? b.classList.add('ready') : b.classList.remove('ready');
-    });
-  },
-
-  setPending(id) {
-    const badge = this.badges[id];
-    if (badge) badge.classList.add('pending');
-    if (this.libraryBtn) this.libraryBtn.classList.add('sync-pending');
-  },
-
-  triggerPing(id) {
-    const badge = this.badges[id];
-    if (badge) {
-      badge.classList.remove('pending');
-      badge.classList.remove('pinging');
-      void badge.offsetWidth; // 触发 reflow 重新播放动画
-      badge.classList.add('pinging');
-    }
-  }
-};
+let syncStatusController = null;
 
 /**
  * Toolbar Configuration Manager
@@ -253,7 +103,7 @@ const ToolbarConfigManager = {
       });
     }
 
-    const data = await chrome.storage.local.get(['toolbarConfig']);
+    const data = await popupStorage.get(['toolbarConfig']);
     const defaultConfig = {
       order: ['fav', 'copy', 'annotate', 'weight', 'dynWeight', 'insertDynSeparator', 'seqStep', 'smartGroup', 'retranslate', 'toggle', 'link', 'newline', 'del'],
       stickyIds: ['del'],
@@ -406,7 +256,7 @@ const ToolbarConfigManager = {
   },
 
   save() {
-    chrome.storage.local.set({ toolbarConfig: this.config });
+    popupStorage.set({ toolbarConfig: this.config }).catch(() => {});
     this.updateEditors();
   },
 
@@ -589,13 +439,13 @@ function getSafeToastMeta(type) {
 function dismissPopupToast(immediate = false) {
   const root = document.getElementById('popup-toast-root');
   const toastEl = root?.querySelector('.popup-toast');
-  clearTimeout(popupToastTimer);
+  if (popupToastTimer !== null) popupScope.cancelTimeout(popupToastTimer);
   popupToastTimer = null;
 
   if (!toastEl) return;
   const removeToast = () => {
     if (popupToastFrame !== null) {
-      cancelAnimationFrame(popupToastFrame);
+      popupScope.cancelFrame(popupToastFrame);
       popupToastFrame = null;
     }
     toastEl.remove();
@@ -607,7 +457,7 @@ function dismissPopupToast(immediate = false) {
   }
 
   toastEl.classList.remove('visible');
-  window.setTimeout(removeToast, 180);
+  popupScope.timeout(removeToast, 180);
 }
 
 function showPopupToast(type, message) {
@@ -642,12 +492,12 @@ function showPopupToast(type, message) {
   }
 
   root.appendChild(toastEl);
-  popupToastFrame = requestAnimationFrame(() => {
+  popupToastFrame = popupScope.frame(() => {
     popupToastFrame = null;
     toastEl.classList.add('visible');
   });
 
-  popupToastTimer = window.setTimeout(() => {
+  popupToastTimer = popupScope.timeout(() => {
     popupToastTimer = null;
     dismissPopupToast();
   }, meta.duration);
@@ -848,17 +698,19 @@ function removeTagFromGroupTarget(target, tag) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+popupScope.on(document, 'DOMContentLoaded', async () => {
   await initUI();
   await initData();
   initCommunication();
-});
+}, { once: true });
 
-window.addEventListener('pagehide', () => {
+popupScope.on(window, 'pagehide', () => {
   aiTranslateController?.destroy();
   groupTagsController?.destroy();
   historyController?.destroy();
   promptSyncController?.destroy();
+  syncStatusController?.dispose();
+  popupScope.dispose('pagehide');
 });
 
 function applyRuntimeStateToEditors() {
@@ -910,7 +762,7 @@ async function saveSequentialStepSetting(key, value) {
   if (normalizedValue > 1) nextSettings[key] = normalizedValue;
   else delete nextSettings[key];
   applySequentialStepSettingsToEditors(nextSettings);
-  await chrome.storage.local.set({ sequentialStepSettings: nextSettings });
+  await popupStorage.set({ sequentialStepSettings: nextSettings });
 }
 
 async function saveSequentialCounter(name, value) {
@@ -999,7 +851,7 @@ function shouldIgnoreRuntimeMessage(msg) {
 }
 
 async function initData() {
-  const data = await chrome.storage.local.get(['promptHistory', 'sequentialStepSettings']);
+  const data = await popupStorage.get(['promptHistory', 'sequentialStepSettings']);
   const activeTab = await getActiveTab();
   const historyScopeId = isEmbeddedPopup && popupHostSessionId
     ? `host:${popupHostSessionId}`
@@ -1030,12 +882,12 @@ async function initData() {
     }
   }
   // 初始化时读取当前状态
-  chrome.storage.local.get(['syncPageActive'], (d) => {
-    updateSyncLiveIndicator(!!d.syncPageActive);
-  });
+  popupStorage.get(['syncPageActive'])
+    .then(d => updateSyncLiveIndicator(!!d.syncPageActive))
+    .catch(() => updateSyncLiveIndicator(false));
 
   // Listen for storage changes to keep counters in sync and hot-reload dictionary
-  chrome.storage.onChanged.addListener((changes, area) => {
+  popupScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
     if (area === 'local') {
       if ((changes.dictOverlay || changes.wildcards || changes.wildcardFolders || changes.wildcardUsageStats) && autocomplete) {
         // Hot-reload dictionary and wildcards
@@ -1057,10 +909,12 @@ async function initData() {
     }
   });
 
-  // 【Phase 14】初始化主界面同步看板管理器
-  if (typeof SyncStatusManager !== 'undefined') {
-    SyncStatusManager.init();
-  }
+  syncStatusController = createSyncStatusController({
+    runtime: popupRuntime,
+    storageRepository: popupStorage,
+    storageChangedEvent: chrome.storage.onChanged
+  });
+  await syncStatusController.init();
 }
 
 // === Character Prompts Logic ===
@@ -1354,7 +1208,7 @@ function createCharacterEditor(index, initialPos = '', initialNeg = '', initialT
       if (e.shiftKey && btnAiTranslate) {
         btnAiTranslate.click();
       } else {
-        setTimeout(() => { if (input.value.trim()) addTag(); }, 100);
+        popupScope.timeout(() => { if (input.value.trim()) addTag(); }, 100);
       }
     }
   });
@@ -1400,10 +1254,15 @@ function rebuildCharacterPromptsUI() {
 async function initUI() {
   await ToolbarConfigManager.init();
   // Autocomplete
-  autocomplete = new Autocomplete();
+  autocomplete = new Autocomplete({
+    storageRepository: popupStorage,
+    lifecycleScope: popupScope
+  });
   autocomplete.load();
   if (!aiTranslateController) {
     aiTranslateController = createAiTranslateController({
+      storageRepository: popupStorage,
+      lifecycleScope: popupScope,
       getLocalizedText,
       showToast: showPopupToast,
       normalizeTargetContext: normalizeAiTargetContext,
@@ -1418,6 +1277,8 @@ async function initUI() {
 
   if (!groupTagsController) {
     groupTagsController = createGroupTagsController({
+      storageRepository: popupStorage,
+      lifecycleScope: popupScope,
       getLocalizedText,
       showToast: showPopupToast,
       getActiveTab,
@@ -1436,6 +1297,8 @@ async function initUI() {
 
   if (!historyController) {
     historyController = createHistoryController({
+      storageRepository: popupStorage,
+      lifecycleScope: popupScope,
       getBaseState: getBasePromptSyncState,
       setBaseState: setBasePromptSyncState,
       getCharacterState: getCharacterPromptSyncState,
@@ -1456,6 +1319,7 @@ async function initUI() {
 
   if (!promptSyncController) {
     promptSyncController = createPromptSyncController({
+      lifecycleScope: popupScope,
       isEmbeddedPopup,
       popupHostSessionId,
       getActiveTab,
@@ -1518,7 +1382,7 @@ async function initUI() {
         });
       }
     });
-    chrome.storage.local.set({ lastResolution: { width: w, height: h } });
+    popupStorage.set({ lastResolution: { width: w, height: h } }).catch(() => {});
   }
 
   function syncMultiResStorage() {
@@ -1528,7 +1392,7 @@ async function initUI() {
     // 原因：NovelAI 网页将输入框的值通过 CSS aspect-ratio 全局绑定到所有预览卡片。
     // 若修改网页输入框，所有已生成的预览图都会被强制拉伸到新比例，导致视觉错乱。
     // 多选模式下通过 fetch/XHR 拦截层静默改写请求参数，与网页 UI 完全解耦。
-    chrome.storage.local.set({ multiResConfig: config });
+    popupStorage.set({ multiResConfig: config }).catch(() => {});
     
     // 更新触发按钮的文本
     const dict = getPopupDict();
@@ -1603,7 +1467,7 @@ async function initUI() {
   });
 
   // Close panel on outside click
-  document.addEventListener('click', (e) => {
+  popupScope.on(document, 'click', (e) => {
     if (!e.target.closest('.res-multi-select-container')) {
       resPanel.style.display = 'none';
     }
@@ -1665,7 +1529,7 @@ async function initUI() {
     sendResolutionUpdate(parseInt(resWidth.value, 10), parseInt(resHeight.value, 10));
   });
 
-  chrome.storage.local.get(['lastResolution', 'multiResConfig'], (data) => {
+  popupStorage.get(['lastResolution', 'multiResConfig']).then(data => {
     if (data.multiResConfig) {
       multiResAll = data.multiResConfig.all || multiResAll;
       multiResActive = data.multiResConfig.active || [];
@@ -1689,6 +1553,9 @@ async function initUI() {
     if (multiResActive.length === 0) resTrigger.textContent = `${noneLabel} ⏷`;
     else if (multiResActive.length === 1) resTrigger.textContent = multiResActive[0].replace('x', ' × ') + ' ⏷';
     else resTrigger.textContent = `${selectedLabel} ⏷`;
+  }).catch(error => {
+    console.error('[Popup] 读取分辨率配置失败:', error);
+    renderResList();
   });
 
   // Tabs
@@ -1799,6 +1666,8 @@ async function initUI() {
   if (resizer && charSection) {
     let startY = 0;
     let startHeight = 0;
+    let removeMouseMove = null;
+    let removeMouseUp = null;
 
     const onMouseMove = (e) => {
       // Calculate delta relative to movement UPWARD
@@ -1811,10 +1680,12 @@ async function initUI() {
       document.body.style.cursor = '';
       resizer.classList.remove('active');
       charSection.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      removeMouseMove?.();
+      removeMouseUp?.();
+      removeMouseMove = null;
+      removeMouseUp = null;
       // Save user preference
-      chrome.storage.local.set({ charSectionHeight: charSection.style.height });
+      popupStorage.set({ charSectionHeight: charSection.style.height }).catch(() => {});
     };
 
     resizer.addEventListener('mousedown', (e) => {
@@ -1824,8 +1695,10 @@ async function initUI() {
       document.body.style.cursor = 'row-resize';
       resizer.classList.add('active');
       charSection.classList.add('resizing');
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      removeMouseMove?.();
+      removeMouseUp?.();
+      removeMouseMove = popupScope.on(document, 'mousemove', onMouseMove);
+      removeMouseUp = popupScope.on(document, 'mouseup', onMouseUp);
     });
 
     if (btnMinChar) {
@@ -1834,12 +1707,12 @@ async function initUI() {
         const isMinimized = charSection.classList.toggle('minimized');
         btnMinChar.textContent = isMinimized ? '+' : '_';
         resizer.classList.toggle('disabled', isMinimized);
-        chrome.storage.local.set({ charSectionMinimized: isMinimized });
+        popupStorage.set({ charSectionMinimized: isMinimized }).catch(() => {});
       });
     }
     
     // Initialize saved state
-    chrome.storage.local.get(['charSectionHeight', 'charSectionMinimized'], (data) => {
+    popupStorage.get(['charSectionHeight', 'charSectionMinimized']).then(data => {
         if (data.charSectionHeight) {
             charSection.style.height = data.charSectionHeight;
         }
@@ -1848,28 +1721,28 @@ async function initUI() {
             if (btnMinChar) btnMinChar.textContent = '+';
             resizer.classList.add('disabled');
         }
-    });
+    }).catch(() => {});
   }
 
   // Global split button close logic
-  document.addEventListener('click', (e) => {
+  popupScope.on(document, 'click', (e) => {
     if (!e.target.closest('.split-btn-group')) {
       document.querySelectorAll('.split-dropdown').forEach(d => d.style.display = 'none');
     }
   });
 
   // Shared generic function for Split Button
-  window.setupDrawSplitButton = function(groupEl, inputEl, getEditorFn) {
+  const setupDrawSplitButton = function(groupEl, inputEl, getEditorFn) {
     if (!groupEl) return;
     const mainBtn = groupEl.querySelector('.split-main');
     const arrowBtn = groupEl.querySelector('.split-arrow');
     const dropdown = groupEl.querySelector('.split-dropdown');
     const items = dropdown.querySelectorAll('.split-dropdown-item');
 
-    chrome.storage.local.get(['drawSplitMode'], (data) => {
+    popupStorage.get(['drawSplitMode']).then(data => {
       const mode = data.drawSplitMode || 'wildcard';
       updateSplitUI(mode);
-    });
+    }).catch(() => updateSplitUI('wildcard'));
 
     function updateSplitUI(action) {
       const targetItem = Array.from(items).find(item => item.dataset.action === action) || items[0];
@@ -1937,7 +1810,7 @@ async function initUI() {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         const action = item.dataset.action;
-        chrome.storage.local.set({ drawSplitMode: action });
+        popupStorage.set({ drawSplitMode: action }).catch(() => {});
         
         document.querySelectorAll('.split-btn-group').forEach(group => {
             const mBtn = group.querySelector('.split-main');
@@ -1972,6 +1845,7 @@ async function initUI() {
       });
     });
   };
+  popupScope.patch(window, 'setupDrawSplitButton', setupDrawSplitButton);
 
   // Input Area
   const input = document.getElementById('quick-input');
@@ -2042,7 +1916,7 @@ async function initUI() {
         btnAiTranslate.click();
       } else {
         // Small timeout to allow autocomplete to process first if it's active
-        setTimeout(() => {
+        popupScope.timeout(() => {
           if (input.value.trim()) addTag();
         }, 100);
       }
@@ -2148,7 +2022,7 @@ async function initUI() {
       loopCapReason4: dict.ac_loop_cap_reason4 || fallbackDict.ac_loop_cap_reason4 || 'You can start a new loop manually once the task is completed.',
       loopCapOk: dict.ac_loop_cap_ok || fallbackDict.ac_loop_cap_ok || 'I Understand'
     };
-    chrome.storage.local.set({ autoClickerI18n: acI18n });
+    popupStorage.set({ autoClickerI18n: acI18n }).catch(() => {});
 
     // 刷新多选分辨率按钮文字
     if (typeof syncMultiResStorage === 'function') syncMultiResStorage();
@@ -2157,7 +2031,7 @@ async function initUI() {
 
   const setLanguage = (lang) => {
     applyTranslations(lang);
-    chrome.storage.local.set({ language: lang });
+    popupStorage.set({ language: lang }).catch(() => {});
   };
 
   // Language Toggle
@@ -2173,7 +2047,7 @@ async function initUI() {
   });
 
   // Load language preference
-  chrome.storage.local.get('language', (data) => {
+  popupStorage.get('language').then(data => {
     if (data.language) {
       applyTranslations(data.language);
     } else {
@@ -2187,6 +2061,9 @@ async function initUI() {
       }
       setLanguage(defaultLang);
     }
+  }).catch(error => {
+    console.error('[Popup] 读取语言配置失败:', error);
+    applyTranslations(DEFAULT_LANG);
   });
 
   // Observe width for responsive short-text mode
@@ -2217,6 +2094,7 @@ async function initUI() {
       }
     }
   });
+  popupScope.trackObserver(resizeObserver);
   resizeObserver.observe(document.body);
 
   // Settings Persistence
@@ -2234,7 +2112,7 @@ async function initUI() {
   ];
 
   // Load Settings
-  chrome.storage.local.get(settings, (data) => {
+  popupStorage.get(settings).then(data => {
     settings.forEach(key => {
       const el = document.getElementById(key);
       if (el) {
@@ -2251,7 +2129,7 @@ async function initUI() {
             val = false;
           }
           // 在首次初始化时立刻存储默认值，确保整个应用能够同步
-          chrome.storage.local.set({ [key]: val });
+          popupStorage.set({ [key]: val }).catch(() => {});
         }
         el.checked = !!val;
 
@@ -2282,16 +2160,16 @@ async function initUI() {
         // 由于 manifest 中没有 tabs 权限，无法用 chrome.tabs.query 按 URL 检索。
         // 改用 sync.html 自身写入的 syncPageActive 标记来判断是否已有活跃页面。
         if (key === 'autoOpenSync' && el.checked) {
-          chrome.storage.local.get('syncPageActive', (result) => {
+          popupStorage.get('syncPageActive').then(result => {
             if (!result.syncPageActive) {
               const syncUrl = chrome.runtime.getURL("pages/sync.html");
               chrome.tabs.create({ url: syncUrl, active: false });
             }
-          });
+          }).catch(error => console.error('[Popup] 读取同步页面状态失败:', error));
         }
 
         el.addEventListener('change', () => {
-          chrome.storage.local.set({ [key]: el.checked });
+          popupStorage.set({ [key]: el.checked }).catch(() => {});
           if (key === 'settingSyncPulse') {
             document.body.classList.toggle('disable-pulse', !el.checked);
           }
@@ -2331,7 +2209,7 @@ async function initUI() {
     } else {
       applyTagEditorDensity(50);
     }
-  });
+  }).catch(error => console.error('[Popup] 读取设置失败:', error));
 
   // Settings Modal
   const btnSettings = document.getElementById('btn-settings');
@@ -2384,7 +2262,7 @@ async function initUI() {
     if (!tabs.length) return;
 
     // Load last active tab
-    chrome.storage.local.get(['lastActiveSettingsTab'], (res) => {
+    popupStorage.get(['lastActiveSettingsTab']).then(res => {
       const activeTabId = res.lastActiveSettingsTab || 'pane-general';
       
       const applyTab = (targetId) => {
@@ -2405,10 +2283,10 @@ async function initUI() {
           const targetId = btn.getAttribute('data-target');
           if (!targetId) return;
           applyTab(targetId);
-          chrome.storage.local.set({ lastActiveSettingsTab: targetId });
+          popupStorage.set({ lastActiveSettingsTab: targetId }).catch(() => {});
         };
       });
-    });
+    }).catch(error => console.error('[Popup] 读取设置页签状态失败:', error));
   };
 
   btnSettings.addEventListener('click', () => {
@@ -2531,7 +2409,7 @@ async function initUI() {
     let recordingBtn = null; // 当前正在录制的按钮
 
     // 从 chrome.storage 加载快捷键
-    chrome.storage.local.get('hotkeys', (data) => {
+    popupStorage.get('hotkeys').then(data => {
       if (data.hotkeys) {
         // 合并已保存的配置和默认值（确保新增的快捷键有默认值）
         currentHotkeys = { ...DEFAULT_HOTKEYS, ...data.hotkeys };
@@ -2540,7 +2418,7 @@ async function initUI() {
       updateHotkeyBtnDisplay('toggleMinimize');
       updateHotkeyBtnDisplay('triggerGenerate');
       updateHotkeyBtnDisplay('focusBase');
-    });
+    }).catch(error => console.error('[Popup] 读取快捷键配置失败:', error));
 
     /**
      * 停止录制状态
@@ -2558,7 +2436,7 @@ async function initUI() {
      * 保存当前快捷键到 chrome.storage
      */
     function saveHotkeys() {
-      chrome.storage.local.set({ hotkeys: currentHotkeys });
+      popupStorage.set({ hotkeys: currentHotkeys }).catch(() => {});
     }
 
     // 为每个快捷键按钮和清除按钮绑定事件
@@ -2599,7 +2477,7 @@ async function initUI() {
     });
 
     // 全局 keydown 监听器 — 处理录制和快捷键触发
-    document.addEventListener('keydown', (e) => {
+    popupScope.on(document, 'keydown', (e) => {
       // ── 录制模式：捕获按键组合 ──
       if (recordingBtn) {
         e.preventDefault();
@@ -2678,7 +2556,7 @@ async function initUI() {
     }, true); // 使用 capture 阶段以高优先级捕获
 
     // 监听 storage 变化以保持多页面同步
-    chrome.storage.onChanged.addListener((changes, area) => {
+    popupScope.chromeEvent(chrome.storage.onChanged, (changes, area) => {
       if (area === 'local' && changes.hotkeys) {
         currentHotkeys = { ...DEFAULT_HOTKEYS, ...(changes.hotkeys.newValue || {}) };
         updateHotkeyBtnDisplay('toggleMinimize');
@@ -2688,7 +2566,7 @@ async function initUI() {
     });
 
     // 监听来自 bridge.js 的通知（例如宿主页面监听到 focusBase，转发进来执行界面逻辑）
-    window.addEventListener('message', (e) => {
+    popupScope.on(window, 'message', (e) => {
       if (e.data?.type === '__HOTKEY_ACTION__' && e.data.action === 'focusBase') {
         executeFocusBase();
       }
@@ -3076,7 +2954,7 @@ function mergeTagsPreservingDisabled(oldTags, newTags) {
 function initCommunication() {
   promptSyncController?.init();
 
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  popupScope.chromeEvent(chrome.runtime.onMessage, (msg, sender) => {
     if (shouldIgnoreRuntimeMessage(msg)) return;
     if (msg.type === 'RUNTIME_STATE_UPDATED') {
       const senderTabId = sender?.tab?.id;
@@ -3176,7 +3054,14 @@ async function appendHistorySnippet(snapshot, target) {
   await historyController?.appendHistorySnippet(snapshot, target);
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
+popupScope.chromeEvent(chrome.runtime.onMessage, (msg) => {
+  const isSessionBoundHistoryAction = msg?.type === 'RESTORE_HISTORY_SNAPSHOT'
+    || msg?.type === 'APPEND_HISTORY_SNIPPET';
+  if (isEmbeddedPopup && isSessionBoundHistoryAction && msg?.hostSessionId !== popupHostSessionId) {
+    // 内嵌面板只接受当前宿主标签页转发的收藏动作；缺失会话标识也必须拒绝，
+    // 避免独立扩展页或其他 NovelAI 标签页把恢复动作广播到所有已打开面板。
+    return;
+  }
   if (shouldIgnoreRuntimeMessage(msg)) return;
   if (groupTagsController?.handleRuntimeMessage(msg)) return;
   if (msg.type === 'RESTORE_HISTORY_SNAPSHOT' && msg.snapshot) {
@@ -3212,7 +3097,7 @@ function applyTagEditorDensity(value) {
 }
 
 // 监听跨 iframe 传来的 Density Slider 信号
-window.addEventListener('message', (e) => {
+popupScope.on(window, 'message', (e) => {
     if (e.data?.type === '__UPDATE_TE_DENSITY__') {
         applyTagEditorDensity(e.data.value);
     }

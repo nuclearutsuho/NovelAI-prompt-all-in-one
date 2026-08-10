@@ -1,8 +1,15 @@
 // injector.js
 (() => {
+  const runtime = globalThis.NaiAioRuntime;
+  if (!runtime) {
+    console.error('[NAI-Prompt-All-In-One] 运行时生命周期内核未加载，停止初始化页面注入逻辑。');
+    return;
+  }
+  const injectorScope = runtime.acquire('page:injector');
   const novelAICompat = globalThis.__NAI_AIO_NOVELAI_COMPAT__;
   if (!novelAICompat) {
     console.error('[NAI-Prompt-All-In-One] NovelAI 兼容层未加载，停止初始化页面注入逻辑。');
+    injectorScope.dispose('missing-novelai-compat');
     return;
   }
   const domPromptAdapter = novelAICompat.createDomPromptAdapter({
@@ -39,6 +46,25 @@
   let alternativeDanbooruAutocomplete = true;
   let triggerTab = false;
   let triggerSpace = true;
+  let multiResConfig = null;
+  let multiResIndex = 0;
+  const hadAutocompleteDictGlobal = Object.prototype.hasOwnProperty.call(window, '__autocompleteDict__');
+  const hadAutocompleteMapGlobal = Object.prototype.hasOwnProperty.call(window, '__autocompleteMap__');
+  const previousAutocompleteDictGlobal = window.__autocompleteDict__;
+  const previousAutocompleteMapGlobal = window.__autocompleteMap__;
+  let ownedAutocompleteDictGlobal;
+  let ownedAutocompleteMapGlobal;
+
+  injectorScope.add(() => {
+    if (window.__autocompleteDict__ === ownedAutocompleteDictGlobal) {
+      if (hadAutocompleteDictGlobal) window.__autocompleteDict__ = previousAutocompleteDictGlobal;
+      else delete window.__autocompleteDict__;
+    }
+    if (window.__autocompleteMap__ === ownedAutocompleteMapGlobal) {
+      if (hadAutocompleteMapGlobal) window.__autocompleteMap__ = previousAutocompleteMapGlobal;
+      else delete window.__autocompleteMap__;
+    }
+  });
 
   function normalizeSequentialStepValue(value) {
     const parsed = Number.parseInt(value, 10);
@@ -268,7 +294,7 @@
           resolve(document.querySelector(selector));
         }
       });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
+      injectorScope.observe(observer, document.documentElement, { childList: true, subtree: true });
     });
   }
 
@@ -794,7 +820,7 @@
         if (applyRandomLockSuccessProgress(update)) lockChanged = true;
       });
       if (tx.needsUIResync) {
-        setTimeout(cleanNumericPrefixesFromUI, 100);
+        injectorScope.timeout(cleanNumericPrefixesFromUI, 100);
       }
       unclaimedSequentialImageEvents--;
     }
@@ -944,8 +970,9 @@
   }
 
   /* 2‑A. fetch 패치 (fetch 补丁) */
-  const $fetch = window.fetch.bind(window);
-  window.fetch = async (input, init = {}) => {
+  const originalFetch = window.fetch;
+  const $fetch = originalFetch.bind(window);
+  const patchedFetch = async (input, init = {}) => {
     let sequentialTransactionId = null;
     let isGenerateRequest = false;
     try {
@@ -976,15 +1003,14 @@
           if (preservePrompt) await applyImg2ImgMetadata(json);            // <<< NEW
 
           /* ③ Multi-Resolution 动态替换 (多选分辨率注入) */
-          if (window.__multiResConfig && window.__multiResConfig.active && window.__multiResConfig.active.length > 1) {
-            const multiResActive = window.__multiResConfig.active;
-            const multiResMode = window.__multiResConfig.mode || 'seq';
-            window.__multiResIndex = window.__multiResIndex || 0;
+          if (multiResConfig?.active?.length > 1) {
+            const multiResActive = multiResConfig.active;
+            const multiResMode = multiResConfig.mode || 'seq';
             
             let res;
             if (multiResMode === 'seq') {
-              res = multiResActive[window.__multiResIndex % multiResActive.length];
-              window.__multiResIndex++;
+              res = multiResActive[multiResIndex % multiResActive.length];
+              multiResIndex++;
             } else {
               res = multiResActive[Math.floor(rng() * multiResActive.length)];
             }
@@ -1054,17 +1080,18 @@
         throw error;
       });
   };
+  injectorScope.patch(window, 'fetch', patchedFetch);
 
   /* 2‑B. XHR 패치 (XHR 补丁) */
   const $open = XMLHttpRequest.prototype.open;
   const $send = XMLHttpRequest.prototype.send;
 
-  XMLHttpRequest.prototype.open = function (m, url, ...rest) {
+  const patchedXhrOpen = function (m, url, ...rest) {
     this.__wild_m = m; this.__wild_u = url;
     return $open.call(this, m, url, ...rest);
   };
 
-  XMLHttpRequest.prototype.send = function (body) {
+  const patchedXhrSend = function (body) {
     let sequentialTransactionId = null;
     const isGenerateRequest = this.__wild_m?.toUpperCase() === 'POST' &&
       novelAICompat.isGenerateImageRequestUrl(this.__wild_u);
@@ -1101,15 +1128,14 @@
         );
 
         /* ② Multi-Resolution 动态替换 (多选分辨率注入) */
-        if (window.__multiResConfig && window.__multiResConfig.active && window.__multiResConfig.active.length > 1) {
-          const multiResActive = window.__multiResConfig.active;
-          const multiResMode = window.__multiResConfig.mode || 'seq';
-          window.__multiResIndex = window.__multiResIndex || 0;
+        if (multiResConfig?.active?.length > 1) {
+          const multiResActive = multiResConfig.active;
+          const multiResMode = multiResConfig.mode || 'seq';
           
           let res;
           if (multiResMode === 'seq') {
-            res = multiResActive[window.__multiResIndex % multiResActive.length];
-            window.__multiResIndex++;
+            res = multiResActive[multiResIndex % multiResActive.length];
+            multiResIndex++;
           } else {
             res = multiResActive[Math.floor(rng() * multiResActive.length)];
           }
@@ -1139,6 +1165,8 @@
     }
     return $send.call(this, body);
   };
+  injectorScope.patch(XMLHttpRequest.prototype, 'open', patchedXhrOpen);
+  injectorScope.patch(XMLHttpRequest.prototype, 'send', patchedXhrSend);
 
   let autocompleteDict = [];
   let autocompleteMap = null;
@@ -1275,7 +1303,7 @@
     return result;
   }
 
-  window.addEventListener('message', e => {
+  injectorScope.on(window, 'message', e => {
     if (e.source !== window) return;
     const { type, map, folders, usageStats, v3: newV3, preservePrompt: newPreserve, alternativeDanbooruAutocomplete: newAlt, triggerTab: newTab, triggerSpace: newSpace, data } = e.data || {};
 
@@ -1375,7 +1403,8 @@
       reconcileRandomWildcardLocks();
 
       if (e.data.multiResConfig !== undefined) {
-        window.__multiResConfig = e.data.multiResConfig;
+        multiResConfig = e.data.multiResConfig;
+        multiResIndex = 0;
       }
 
       // alternativeDanbooruAutocomplete 토글 즉시 반영 (立即反映 alternativeDanbooruAutocomplete 切换)
@@ -1417,8 +1446,10 @@
           }
         });
         // 同步给 window 供其他组件使用
-        window.__autocompleteDict__ = data;
-        window.__autocompleteMap__ = autocompleteMap;
+        ownedAutocompleteDictGlobal = data;
+        ownedAutocompleteMapGlobal = autocompleteMap;
+        window.__autocompleteDict__ = ownedAutocompleteDictGlobal;
+        window.__autocompleteMap__ = ownedAutocompleteMapGlobal;
       }
     }
   });
@@ -1426,7 +1457,7 @@
 
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    injectorScope.on(document, 'DOMContentLoaded', init);
   } else {
     init();
   }
@@ -1515,13 +1546,21 @@
 
     // 事件驱动触发机制
     // 1. 监听图片的加载完成（处理新生成的图片或首次加载）
-    document.addEventListener('load', (e) => {
+    injectorScope.on(document, 'load', (e) => {
       if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('image-grid-image')) {
         scanAll();
       }
     }, true); // 捕获阶段
 
     // 2. 监听 DOM 变化（捕获新图片节点被插入到页面）
+    let aspectRatioFixerTimer = null;
+    const scheduleAspectRatioScan = (delay) => {
+      if (aspectRatioFixerTimer !== null) injectorScope.cancelTimeout(aspectRatioFixerTimer);
+      aspectRatioFixerTimer = injectorScope.timeout(() => {
+        aspectRatioFixerTimer = null;
+        scanAll();
+      }, delay);
+    };
     const domObserver = new MutationObserver(mutations => {
       let shouldScan = false;
       for (const m of mutations) {
@@ -1532,8 +1571,7 @@
       }
       if (shouldScan) {
         // 使用 setTimeout debounce，避免 React 批量插入引发频繁计算
-        clearTimeout(window.__arFixerTimer);
-        window.__arFixerTimer = setTimeout(scanAll, 100);
+        scheduleAspectRatioScan(100);
       }
     });
 
@@ -1542,24 +1580,23 @@
       const displayGrid = document.querySelector('.display-grid-images');
       if (displayGrid) {
         // 监听子节点变动（新图插入）
-        domObserver.observe(displayGrid, { childList: true, subtree: true });
+        injectorScope.observe(domObserver, displayGrid, { childList: true, subtree: true });
 
         // 3. 监听容器尺寸调整（处理浏览器窗口变化、侧边栏展开折叠等）
         const resizeObserver = new ResizeObserver(() => {
-          clearTimeout(window.__arFixerTimer);
-          window.__arFixerTimer = setTimeout(scanAll, 50);
+          scheduleAspectRatioScan(50);
         });
-        resizeObserver.observe(displayGrid);
+        injectorScope.observe(resizeObserver, displayGrid);
 
         console.log('[NAI-Prompt-All-In-One] History aspect-ratio fixer v5 started (Event-driven).');
       } else {
         // 容器还没渲染出来，稍候重试
-        setTimeout(attachObservers, 1000);
+        injectorScope.timeout(attachObservers, 1000);
       }
     }
 
     // 初始启动
-    setTimeout(() => {
+    injectorScope.timeout(() => {
       scanAll();
       attachObservers();
     }, 800);
@@ -1612,7 +1649,7 @@
 
     const seen = new WeakSet();
     const mo = new MutationObserver(scan);
-    mo.observe(document, { childList: true, subtree: true });
+    injectorScope.observe(mo, document, { childList: true, subtree: true });
     
     let lastCharCount = -1;
 
@@ -1666,7 +1703,7 @@
       // Real-time sync: Page -> Popup
       // Use MutationObserver for robust detection of ALL changes (selection delete, undo/redo, etc.)
       const observer = new MutationObserver(() => notifyPromptUpdate());
-      observer.observe(editor, { childList: true, characterData: true, subtree: true });
+      injectorScope.observe(observer, editor, { childList: true, characterData: true, subtree: true });
 
       // Keep input for immediate feedback
       editor.addEventListener('input', notifyPromptUpdate);
@@ -1674,7 +1711,6 @@
 
 
       editor.addEventListener('keydown', nav);
-      editor.addEventListener('blur', hide, true);
       editor.addEventListener('blur', hide, true);
 
       function textBeforeCaret() {
@@ -1849,7 +1885,7 @@
 
         wildcardPreviewState = null;
         document.execCommand('insertText', false, replacement);
-        setTimeout(update, 0);
+        injectorScope.timeout(update, 0);
         return true;
       }
 
@@ -2247,7 +2283,7 @@
         hide();
 
         if (type === 'token' || type === 'folder') {
-          setTimeout(update, 0);
+          injectorScope.timeout(update, 0);
         }
       }
 
@@ -2274,296 +2310,42 @@
 
 
   /* -------------------------------------------------
-   * 4. Bridge Communication for Popup Editor
+   * 4. 提示词同步控制器
+   * 页面存储、可选 Jotai 能力和 DOM 同步已经迁移到独立模块。
    * ------------------------------------------------- */
-
-  /* -------------------------------------------------
-   * 4a. Jotai Store 适配层
-   * Jotai 只是可选快速路径；DOM 适配层才是当前官网的兼容基线。
-   * ------------------------------------------------- */
-
-  const getJotaiStore = () => globalThis.__JOTAI_DEFAULT_STORE__;
-  const _atomCache = {};
-  const _reportedMissingAtoms = new Set();
-
-  function readPromptStorage(storageKey) {
-    const rawValue = localStorage.getItem(storageKey);
-    if (rawValue === null) return undefined;
-    try {
-      return JSON.parse(rawValue);
-    } catch (error) {
-      return rawValue;
-    }
+  const promptSyncApi = globalThis.NaiAioPromptSync;
+  if (!promptSyncApi?.createController) {
+    console.error('[Prompt Sync] 独立同步控制器未加载，停止初始化 injector。');
+    injectorScope.dispose('missing-prompt-sync-controller');
+    return;
   }
 
-  function valuesEqual(left, right) {
-    if (left === right) return true;
-    if (typeof left !== typeof right) return false;
-    if (!left || typeof left !== 'object') return false;
-    try {
-      return JSON.stringify(left) === JSON.stringify(right);
-    } catch (error) {
-      return false;
-    }
-  }
-
-  // 只做无副作用识别；候选不唯一时宁可走 DOM，也不再用 set-probe 修改未知 atom。
-  function findAtomByKey(storageKey) {
-    if (_atomCache[storageKey]) {
-      try {
-        const cachedStore = getJotaiStore();
-        if (cachedStore) {
-          cachedStore.get(_atomCache[storageKey]);
-          return _atomCache[storageKey];
-        }
-      } catch (error) {
-        delete _atomCache[storageKey];
-      }
-    }
-
-    const store = getJotaiStore();
-    if (!store || !store.dev4_get_mounted_atoms) return null;
-
-    const mounted = Array.from(store.dev4_get_mounted_atoms());
-    let atom = mounted.find(function(candidate) {
-      try {
-        if (String(candidate).includes(storageKey)) return true;
-        if (candidate.debugLabel?.includes(storageKey)) return true;
-        if (candidate.key === storageKey) return true;
-        return Object.keys(candidate).some(key => candidate[key] === storageKey);
-      } catch (error) {
-        return false;
-      }
-    });
-
-    if (!atom) {
-      const targetValue = readPromptStorage(storageKey);
-      const candidates = mounted.filter(function(candidate) {
-        if (!candidate.write) return false;
-        try {
-          return valuesEqual(store.get(candidate), targetValue);
-        } catch (error) {
-          return false;
-        }
-      });
-      if (candidates.length === 1) atom = candidates[0];
-    }
-
-    if (atom) {
-      _atomCache[storageKey] = atom;
-      _reportedMissingAtoms.delete(storageKey);
-    } else if (!_reportedMissingAtoms.has(storageKey)) {
-      console.warn('[Jotai] ✗ No atom found for "' + storageKey + '"');
-      _reportedMissingAtoms.add(storageKey);
-    }
-    return atom;
-  }
-
-  function trySetPromptThroughJotai(storageKey, value) {
-    const store = getJotaiStore();
-    const atom = findAtomByKey(storageKey);
-    if (store && atom) {
-      try {
-        store.set(atom, value);
-        return true;
-      } catch (error) {
-        console.warn('[Jotai] store.set failed for "' + storageKey + '":', error);
-      }
-    }
-    return false;
-  }
-
-  function persistPromptStorage(storageKey, value) {
-    try {
-      const serialized = JSON.stringify(value);
-      localStorage.setItem(storageKey, serialized);
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: storageKey,
-        newValue: serialized,
-        storageArea: localStorage
-      }));
-      return true;
-    } catch (error) {
-      console.error('[Prompt Sync] Failed to persist "' + storageKey + '":', error);
-      return false;
-    }
-  }
-
-  /**
-   * 读取当前页面上的所有提示词数据
-   * 优先从 Jotai Store 读取（不受 tab 可见性限制），fallback 到 DOM
-   */
-
-  function getCurrentPrompts() {
-    // 主提示词优先读取官网持久化状态，缺失时再读取当前可见编辑器。
-    let positive = readPromptStorage('imagegen-prompt');
-    let negative = readPromptStorage('imagegen-negativeprompt');
-
-    if (positive === undefined) {
-      positive = domPromptAdapter.readBasePrompt('positive');
-    }
-    if (negative === undefined) {
-      negative = domPromptAdapter.readBasePrompt('negative');
-    }
-
-    const result = { positive, negative };
-
-    // 角色结构优先从存储读取，可同时获得正负两侧与位置数据。
-    const charAtomData = readPromptStorage('imagegen-character-prompts');
-    if (Array.isArray(charAtomData) && charAtomData.length > 0) {
-      result.characters = charAtomData.map(function(c) {
-        return {
-          positive: c.prompt || '',
-          negative: c.uc || '',
-          gender: 'other',
-          activeTab: 'positive'
-        };
-      });
-    } else {
-      result.characters = domPromptAdapter.readVisibleCharacterPrompts();
-    }
-
-    return attachPromptMetaToResult(result);
-  }
-
-  let promptSyncQueue = Promise.resolve();
-
-  // 串行执行基础与角色同步，避免两个消息同时争抢焦点和 ProseMirror Selection。
-  function enqueuePromptSync(task) {
-    const run = promptSyncQueue.then(task, task);
-    const handledRun = run.catch(error => {
-      console.error('[Prompt Sync] 同步任务失败:', error);
-    });
-    promptSyncQueue = handledRun;
-    return handledRun;
-  }
-
-  window.addEventListener('message', async e => {
-    if (e.source !== window) return;
-    const { type, data } = e.data || {};
-
-    if (type === '__GET_PROMPT__') {
-      const promptState = getCurrentPrompts();
-      const { positive, negative, positiveTags, negativeTags, characters } = promptState;
-      window.postMessage({
-        type: '__RETURN_PROMPT__',
-        data: {
-          positive,
-          negative,
-          ...(Array.isArray(positiveTags) ? { positiveTags } : {}),
-          ...(Array.isArray(negativeTags) ? { negativeTags } : {})
-        }
-      }, '*');
-      window.postMessage({
-        type: '__RETURN_CHARACTER_PROMPTS__',
-        data: characters
-      }, '*');
-    }
-
-    if (type === '__SET_PROMPT__') {
-      await enqueuePromptSync(async () => {
-        isSyncingFromPopup = true;
-        try {
-          const { positive, negative } = data || {};
-          const domPayload = {};
-
-          for (const [mode, storageKey] of [
-            ['positive', 'imagegen-prompt'],
-            ['negative', 'imagegen-negativeprompt']
-          ]) {
-            const value = mode === 'positive' ? positive : negative;
-            if (value === undefined) continue;
-            const updatedThroughJotai = trySetPromptThroughJotai(storageKey, value);
-            if (!updatedThroughJotai) {
-              persistPromptStorage(storageKey, value);
-              domPayload[mode] = value;
-            }
-          }
-
-          const domResult = await domPromptAdapter.syncBasePromptsDOM(domPayload);
-          if (!domResult.ok) {
-            console.error('[Prompt Sync] 基础提示词同步不完整:', domResult.failures);
-          }
-
-          // 保存结构化标签元数据，供 popup 回读时恢复 AI 胶囊。
-          updateBasePromptMetaCache(data || {});
-        } finally {
-          setTimeout(() => { isSyncingFromPopup = false; }, 100);
-        }
-      });
-    }
-
-    if (type === '__SET_CHARACTER_PROMPTS__') {
-      await enqueuePromptSync(async () => {
-        isSyncingFromPopup = true;
-        try {
-          const charDataList = Array.isArray(data) ? data : [];
-          const existingCharacters = readPromptStorage('imagegen-character-prompts');
-          const nextCharacters = novelAICompat.normalizeCharacterStorage(
-            existingCharacters,
-            charDataList
-          );
-          const updatedThroughJotai = trySetPromptThroughJotai(
-            'imagegen-character-prompts',
-            nextCharacters
-          );
-
-          if (!updatedThroughJotai) {
-            persistPromptStorage('imagegen-character-prompts', nextCharacters);
-            const domResult = await domPromptAdapter.syncCharacterPromptsDOM(charDataList);
-            if (!domResult.ok) {
-              console.error('[Prompt Sync] 角色提示词同步不完整:', domResult.failures);
-            }
-          }
-
-          updateCharacterPromptMetaCache(charDataList);
-        } finally {
-          setTimeout(() => { isSyncingFromPopup = false; }, 100);
-        }
-      });
-    }
-
-    if (type === '__SWITCH_TAB__') {
-      const { tab, index } = data;
-      await enqueuePromptSync(async () => {
-        const switched = index !== undefined && index >= 0
-          ? await domPromptAdapter.switchCharacterTabAt(index, tab)
-          : await domPromptAdapter.switchBaseTab(tab);
-        if (!switched) {
-          console.warn('[Prompt Sync] 无法切换提示词页签:', { tab, index });
-        }
-      });
+  const promptSyncController = promptSyncApi.createController({
+    runtime,
+    parentScope: injectorScope,
+    compat: novelAICompat,
+    domAdapter: domPromptAdapter,
+    windowRef: window,
+    logger: console,
+    attachPromptMeta: attachPromptMetaToResult,
+    updateBasePromptMeta: updateBasePromptMetaCache,
+    updateCharacterPromptMeta: updateCharacterPromptMetaCache,
+    onSyncStateChange(value) {
+      isSyncingFromPopup = value;
     }
   });
 
-  // Poll for active tab changes of Base and Character Prompts to sync back to popup
-  let lastActiveTabs = { base: null, chars: [] };
-  setInterval(() => {
-    const currentBaseTab = domPromptAdapter.getBaseTab();
-
-    if (currentBaseTab && currentBaseTab !== lastActiveTabs.base) {
-      lastActiveTabs.base = currentBaseTab;
-      window.postMessage({ type: '__SYNC_TAB__', data: { tab: currentBaseTab, index: -1 } }, '*');
-    }
-
-    // 仅处理当前响应式布局中可见的角色容器，避免桌面/移动端副本重复计数。
-    const currentCharTabs = domPromptAdapter.getCharacterTabStates();
-
-    for (let i = 0; i < currentCharTabs.length; i++) {
-      const currentTab = currentCharTabs[i];
-      if (currentTab && currentTab !== lastActiveTabs.chars[i]) {
-          lastActiveTabs.chars[i] = currentTab;
-          window.postMessage({ type: '__SYNC_TAB__', data: { tab: currentTab, index: i } }, '*');
-      }
-    }
-
-    if (lastActiveTabs.chars.length > currentCharTabs.length) {
-      lastActiveTabs.chars.length = currentCharTabs.length;
-    }
-  }, 500);
+  function getCurrentPrompts() {
+    return promptSyncController.getCurrentPrompts();
+  }
 
   // Export for internal use in hook()
   window.__getCurrentPrompts_PM = getCurrentPrompts;
+  injectorScope.add(() => {
+    if (window.__getCurrentPrompts_PM === getCurrentPrompts) {
+      delete window.__getCurrentPrompts_PM;
+    }
+  });
 
   console.log('[Wildcard] injector ready');
   console.log('[Wildcard] History Modal module loaded');
