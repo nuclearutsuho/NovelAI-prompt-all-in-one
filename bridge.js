@@ -3,11 +3,17 @@
   const SESSION_COUNTERS_KEY = '__nai_aio_sequentialCounters__';
   const SESSION_STEP_PROGRESS_KEY = '__nai_aio_sequentialStepProgress__';
   const HOST_SESSION_KEY = '__nai_aio_host_session__';
+  const messageProtocol = globalThis.NaiAioMessageProtocol;
 
   const promptStorageShimReady = new Promise((resolve) => {
     const shimScript = document.createElement('script');
     shimScript.src = chrome.runtime.getURL('lib/injected/prompt-storage-shim.js');
-    shimScript.onload = () => { shimScript.remove(); resolve(); };
+    shimScript.onload = () => { shimScript.remove(); resolve(true); };
+    shimScript.onerror = () => {
+      shimScript.remove();
+      console.error('[NAI-Prompt-All-In-One] 提示词存储隔离脚本加载失败，扩展将继续初始化。');
+      resolve(false);
+    };
     (document.head || document.documentElement).appendChild(shimScript);
   });
 
@@ -177,62 +183,51 @@
   let sequentialStepProgress = loadScopedSequentialStepProgress();
   let randomWildcardLocks = loadScopedRandomWildcardLocks();
 
-  // 1.5) inject Sortable.js dependency first, then history/favorites panel
-  const sortableScript = document.createElement('script');
-  sortableScript.src = chrome.runtime.getURL('lib/Sortable.umd.js');
-  const sortableReady = new Promise(resolve => {
-    sortableScript.onload = () => { sortableScript.remove(); resolve(); };
-  });
-  (document.head || document.documentElement).appendChild(sortableScript);
+  // 2) 按依赖顺序注入页面脚本，并显式报告加载失败。
+  function injectPageScript(path) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL(path);
+      script.onload = () => {
+        script.remove();
+        resolve();
+      };
+      script.onerror = () => {
+        script.remove();
+        reject(new Error(`Failed to inject ${path}`));
+      };
+      (document.head || document.documentElement).appendChild(script);
+    });
+  }
 
-  sortableReady.then(() => {
-    const groupTagsDataScript = document.createElement('script');
-    groupTagsDataScript.src = chrome.runtime.getURL('lib/group-tags-data.js');
-    groupTagsDataScript.onload = () => {
-      groupTagsDataScript.remove();
-      const hp = document.createElement('script');
-      hp.src = chrome.runtime.getURL('modules/history-favorites-panel.js');
-      hp.onload = () => hp.remove();
-      (document.head || document.documentElement).appendChild(hp);
-    };
-    (document.head || document.documentElement).appendChild(groupTagsDataScript);
-  });
+  const p1 = injectPageScript('lib/injected/novelai-compat.js')
+    .then(() => injectPageScript('injector.js'));
+  const p2 = injectPageScript('modules/auto-clicker.js');
 
-  // 2) inject scripts to page
-  const p1 = new Promise((resolve) => {
-    const s = document.createElement('script');
-    s.src = chrome.runtime.getURL('injector.js');
-    s.onload = () => { s.remove(); resolve(); };
-    (document.head || document.documentElement).appendChild(s);
-  });
-
-  const p2 = new Promise((resolve) => {
-    const ac = document.createElement('script');
-    ac.src = chrome.runtime.getURL('modules/auto-clicker.js');
-    ac.onload = () => { ac.remove(); resolve(); };
-    (document.head || document.documentElement).appendChild(ac);
-  });
-
-  Promise.all([p1, p2]).then(() => {
-    window.postMessage({
-      type: '__WILDCARD_INIT__',
-      map: wildcards,
-      folders: wildcardFolders,
-      usageStats: wildcardUsageStats,
-      v3: v3mode,
-      preservePrompt,
-      alternativeDanbooruAutocomplete,
-      triggerTab,
-      triggerSpace,
-      sequentialCounters,
-      sequentialStepSettings,
-      sequentialStepProgress,
-      randomWildcardLocks,
-      multiResConfig,
-      hideAutoClicker,
-      autoClickerI18n
-    }, '*');
-  });
+  Promise.all([p1, p2])
+    .then(() => {
+      window.postMessage({
+        type: '__WILDCARD_INIT__',
+        map: wildcards,
+        folders: wildcardFolders,
+        usageStats: wildcardUsageStats,
+        v3: v3mode,
+        preservePrompt,
+        alternativeDanbooruAutocomplete,
+        triggerTab,
+        triggerSpace,
+        sequentialCounters,
+        sequentialStepSettings,
+        sequentialStepProgress,
+        randomWildcardLocks,
+        multiResConfig,
+        hideAutoClicker,
+        autoClickerI18n
+      }, '*');
+    })
+    .catch(error => {
+      console.error('[NAI-Prompt-All-In-One] 页面脚本注入失败:', error);
+    });
 
   // 3) inject manager panel (runs in Content Script context)
   // 创建一个全局 Promise，让 GroupTags 能等待主面板位置恢复完毕后再执行吸附
@@ -549,7 +544,10 @@
 
     // 监听来自 iframe 的快捷键动作请求
     window.addEventListener('message', (e) => {
-      if (e.data?.type === '__HOTKEY_ACTION__') {
+      if (!messageProtocol?.isFromIframe(e, iframe, chrome.runtime)
+        || !messageProtocol.isValidManagerPanelMessage(e.data)) return;
+
+      if (e.data.type === '__HOTKEY_ACTION__') {
         if (e.data.action === 'toggleMinimize') {
           toggleMinimize();
         } else if (e.data.action === 'triggerGenerate') {
@@ -1125,11 +1123,6 @@
     const resizeObserver = new ResizeObserver(() => { if (!isInitializing) saveState(); });
     resizeObserver.observe(container);
 
-    // 监听 iframe 内部消息
-    window.addEventListener('message', e => {
-      if (e.data?.type === '__CLOSE_GROUP_TAGS_PANEL__') window.hideGroupTagsPanel();
-    });
-
     console.log('[Wildcard] Group Tags panel injected');
   }
 
@@ -1235,6 +1228,9 @@
   // Handle sequential counter updates from injector
   window.addEventListener('message', e => {
     if (e.source !== window) return;
+    const isRuntimeStateMessage = messageProtocol?.RUNTIME_STATE_MESSAGE_TYPES?.has(e.data?.type);
+    if (!isRuntimeStateMessage || !messageProtocol.isValidRuntimeStateMessage(e.data)) return;
+
     if (e.data?.type === '__UPDATE_SEQUENTIAL_COUNTER__') {
       const { name, value } = e.data;
       sequentialCounters[name] = value;
@@ -1264,13 +1260,16 @@
     }
   });
 
-  const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
-  const res = await fetch(csvUrl);
-  const text = await res.text();
+  let autocompleteDict = [];
+  try {
+    const csvUrl = chrome.runtime.getURL('data/dictionary.csv');
+    const res = await fetch(csvUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
 
-  const autocompleteDict = text.split(/\r?\n/)
-    .filter(Boolean)
-    .map(line => {
+    autocompleteDict = text.split(/\r?\n/)
+      .filter(Boolean)
+      .map(line => {
       // Manual CSV parsing to handle empty fields and quotes correctly
       const row = []; // row 변수 추가 (Add row variable)
       let currentField = '';
@@ -1311,14 +1310,18 @@
         aliases = [];
       }
 
-      return {
-        word,
-        colorCode: colorCode ? colorCode.trim() : '0',
-        popCount: popCount ? parseInt(popCount) : 0,
-        aliases,
-        zhCN: zhCN ? zhCN.trim() : ''
-      };
-    });
+        return {
+          word,
+          colorCode: colorCode ? colorCode.trim() : '0',
+          popCount: popCount ? parseInt(popCount) : 0,
+          aliases,
+          zhCN: zhCN ? zhCN.trim() : ''
+        };
+      });
+  } catch (error) {
+    // 字典不可用时只禁用自动补全，不能让整个 bridge 初始化链中断。
+    console.error('[NAI-Prompt-All-In-One] 自动补全字典加载失败，已继续初始化其他功能:', error);
+  }
 
   if (alternativeDanbooruAutocomplete) {
     window.postMessage({
@@ -1329,6 +1332,14 @@
 
   window.addEventListener('message', e => {
     // ── 来自 GroupTags iframe 的指令（e.source 是 iframe window，不等于当前 window）──
+    const groupTagsIframe = document.getElementById('group-tags-iframe');
+    const isGroupPanelMessage = messageProtocol?.GROUP_PANEL_MESSAGE_TYPES?.has(e.data?.type);
+    if (isGroupPanelMessage
+      && (!messageProtocol.isFromIframe(e, groupTagsIframe, chrome.runtime)
+        || !messageProtocol.isValidGroupPanelMessage(e.data))) {
+      return;
+    }
+
     if (e.data?.type === '__APPEND_TAG_FROM_PANEL__') {
       console.log('[Bridge] Received __APPEND_TAG_FROM_PANEL__:', e.data.tag);
       chrome.runtime.sendMessage({ type: 'APPEND_TAG_FROM_PANEL', tag: e.data.tag, zh: e.data.zh, hostSessionId });
@@ -1349,6 +1360,10 @@
       chrome.runtime.sendMessage({ type: 'SYNC_GROUP_TRANSLATIONS', translationMap: e.data.translationMap });
       return;
     }
+    if (e.data?.type === '__CLOSE_GROUP_TAGS_PANEL__') {
+      if (window.hideGroupTagsPanel) window.hideGroupTagsPanel();
+      return;
+    }
 
     // 只处理来自当前页面自身的消息（injector / popup 等同源通信）
     if (e.source !== window) return;
@@ -1359,34 +1374,6 @@
         data: autocompleteDict
       }, '*');
     }
-
-    // ── 历史数据代理（injector 在页面上下文无法访问 chrome.storage，通过此处中转） ──
-    if (e.data?.type === '__REQUEST_HISTORY_DATA__') {
-      const reqId = e.data.reqId;
-      chrome.storage.local.get(['promptHistory', 'historyLimit', 'groupColorMap', 'groupTranslationMap', 'enableGrouping'], (data) => {
-        window.postMessage({
-          type: '__HISTORY_DATA__',
-          reqId,
-          data: {
-            history: data.promptHistory || [],
-            limit: data.historyLimit || 100,
-            groupColorMap: data.groupColorMap || {},
-            groupTranslationMap: data.groupTranslationMap || {},
-            enableGrouping: data.enableGrouping !== undefined ? data.enableGrouping : true
-          }
-        }, '*');
-      });
-    }
-
-    if (e.data?.type === '__SAVE_HISTORY_DATA__') {
-      chrome.storage.local.set({ promptHistory: e.data.history });
-    }
-
-    if (e.data?.type === '__SAVE_HISTORY_LIMIT__') {
-      chrome.storage.local.set({ historyLimit: e.data.limit });
-    }
-
-// 移除 __CLEAR_HISTORY__，统一使用 __SAVE_HISTORY_DATA__
 
     if (e.data?.type === '__RETURN_PROMPT__') {
       console.log('[Bridge] Received __RETURN_PROMPT__ from injector, relaying to popup');

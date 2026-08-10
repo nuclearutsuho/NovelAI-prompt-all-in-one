@@ -525,34 +525,36 @@ async function renderSnapshotList() {
                 showTags.forEach(item => {
                     // Extract just filename for display if path is long
                     const dispName = item.name.split('/').pop();
-                    diffHtml += `<span class="diff-file-tag ${item.type}" title="${item.name}">${item.icon} ${dispName}</span>`;
+                    diffHtml += `<span class="diff-file-tag ${item.type}" title="${escapeHtml(item.name)}">${item.icon} ${escapeHtml(dispName)}</span>`;
                 });
                 if (remaining > 0) {
-                    diffHtml += `<span class="diff-more-tag" title="${tf('snapshot_more_files_title', { count: remaining })}">${tf('snapshot_more_files', { count: remaining })}</span>`;
+                    diffHtml += `<span class="diff-more-tag" title="${escapeHtml(tf('snapshot_more_files_title', { count: remaining }))}">${escapeHtml(tf('snapshot_more_files', { count: remaining }))}</span>`;
                 }
                 diffHtml += '</div>';
             } else {
-                diffHtml = `<div class="snapshot-diff-container"><span class="diff-more-tag">${t('snapshot_no_changes')}</span></div>`;
+                diffHtml = `<div class="snapshot-diff-container"><span class="diff-more-tag">${escapeHtml(t('snapshot_no_changes'))}</span></div>`;
             }
         }
 
+        const snapshotId = escapeHtml(String(snap.id || ''));
+
         li.innerHTML = `
             <div class="snapshot-select">
-                <input type="checkbox" class="snap-checkbox" data-id="${snap.id}" ${selectedSnapshots.has(snap.id) ? 'checked' : ''}>
+                <input type="checkbox" class="snap-checkbox" data-id="${snapshotId}" ${selectedSnapshots.has(snap.id) ? 'checked' : ''}>
             </div>
             <div class="snapshot-content">
                 <div class="snapshot-header">
-                    <span class="snapshot-time">${time}</span>
-                    <span class="snapshot-tag-type ${tagClass}">${t(`snapshot_type_${snap.type}`, snap.type)}</span>
-                    <span class="snapshot-label">${snap.label}</span>
+                    <span class="snapshot-time">${escapeHtml(time)}</span>
+                    <span class="snapshot-tag-type ${tagClass}">${escapeHtml(t(`snapshot_type_${snap.type}`, snap.type))}</span>
+                    <span class="snapshot-label">${escapeHtml(snap.label || '')}</span>
                 </div>
                 ${diffHtml}
             </div>
             <div class="snapshot-actions">
-                <button class="btn-sm" data-action="diff" data-id="${snap.id}" title="${t('snapshot_action_compare_title')}">🔍</button>
-                <button class="btn-sm btn-success" data-action="restore" data-id="${snap.id}" title="${t('snapshot_action_restore_title')}">↩</button>
-                <button class="btn-sm" data-action="export" data-id="${snap.id}" title="${t('snapshot_action_export_json_title')}">💾</button>
-                <button class="btn-sm btn-danger" data-action="delete" data-id="${snap.id}" title="${t('snapshot_action_delete_title')}">✕</button>
+                <button class="btn-sm" data-action="diff" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_compare_title'))}">🔍</button>
+                <button class="btn-sm btn-success" data-action="restore" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_restore_title'))}">↩</button>
+                <button class="btn-sm" data-action="export" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_export_json_title'))}">💾</button>
+                <button class="btn-sm btn-danger" data-action="delete" data-id="${snapshotId}" title="${escapeHtml(t('snapshot_action_delete_title'))}">✕</button>
             </div>
         `;
         snapshotList.appendChild(li);
@@ -906,9 +908,9 @@ function renderTreeNode(node, path = '', depth = 0) {
         item.draggable = true;
         item.innerHTML = `
             <span class="icon">${isExpanded ? '📂' : '📁'}</span>
-            <span class="name">${folderName}</span>
+            <span class="name">${escapeHtml(folderName)}</span>
             <div class="actions">
-                <button data-folder-delete="${folderPath}" title="${t('action_delete')}">✕</button>
+                <button data-folder-delete="${escapeHtml(folderPath)}" title="${escapeHtml(t('action_delete'))}">✕</button>
             </div>
         `;
 
@@ -945,9 +947,9 @@ function renderTreeNode(node, path = '', depth = 0) {
         item.draggable = true;
         item.innerHTML = `
             <span class="icon">📄</span>
-            <span class="name">${file.name}</span>
+            <span class="name">${escapeHtml(file.name)}</span>
             <div class="actions">
-                <button data-file-delete="${file.key}" title="${t('action_delete')}">✕</button>
+                <button data-file-delete="${escapeHtml(file.key)}" title="${escapeHtml(t('action_delete'))}">✕</button>
             </div>
         `;
 

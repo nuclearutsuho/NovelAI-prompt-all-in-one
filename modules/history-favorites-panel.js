@@ -1,13 +1,11 @@
 // history-favorites-panel.js
-const MODAL_ID = 'nai-history-modal';
-  console.log('[Wildcard] injector ready');
-  console.log('[Wildcard] History Modal module loaded');
+console.log('[Wildcard] History Modal module loaded');
 
   // ═══════════════════════════════════════════════════════════════
   //  历史与收藏面板 (Injected History & Favorites Modal)
   // ═══════════════════════════════════════════════════════════════
 
-  (function initHistoryModal() {
+(function initHistoryModal() {
     const MODAL_ID = 'nai-history-modal';
     
     function getGroupTagsDataUtils() {
@@ -630,6 +628,16 @@ const MODAL_ID = 'nai-history-modal';
       return `${date} ${time}`;
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[character]);
+    }
+
     function tagsPreview(str) {
       if (!str) return '(空)';
       const tags = str.split(',').map(t => t.trim()).filter(Boolean);
@@ -757,7 +765,7 @@ const MODAL_ID = 'nai-history-modal';
     function generateDiffHTML(currSnapshot, prevSnapshot) {
       if (!prevSnapshot) {
          const previewTags = currSnapshot.positiveTags ? currSnapshot.positiveTags.map(t => t.value).join(', ') : currSnapshot.positive;
-         return `<div class="nhm-item-preview">${tagsPreview(previewTags)}</div>`;
+         return `<div class="nhm-item-preview">${escapeHtml(tagsPreview(previewTags))}</div>`;
       }
 
       const allDiffsHTML = [];
@@ -767,12 +775,12 @@ const MODAL_ID = 'nai-history-modal';
       const renderDiffs = (currTargetJSON, prevTargetJSON, badgeHTML) => {
         const diff = computePromptDiff(currTargetJSON, prevTargetJSON);
         const tagsHTML = [
-          ...diff.added.map(item => `<span class="nhm-diff-tag diff-add"><span class="diff-op">+</span> ${item.cleanText}</span>`),
-          ...diff.removed.map(item => `<span class="nhm-diff-tag diff-remove"><span class="diff-op">-</span> ${item.cleanText}</span>`),
-          ...diff.changed.map(item => `<span class="nhm-diff-tag diff-change" ${item.disabled ? 'style="opacity:0.6"' : ''}><span class="diff-op">~</span> ${item.cleanText}: ${item.oldWeight.toFixed(2)} → ${item.newWeight.toFixed(2)}</span>`),
-          ...diff.enabled.map(item => `<span class="nhm-diff-tag diff-enable"><span class="diff-op">👁️</span> ${item.cleanText}</span>`),
-          ...diff.disabled.map(item => `<span class="nhm-diff-tag diff-disable"><span class="diff-op">🚫</span> ${item.cleanText}</span>`),
-          ...diff.ghost_deleted.map(item => `<span class="nhm-diff-tag diff-ghost"><span class="diff-op">×</span> ${item.cleanText}</span>`)
+          ...diff.added.map(item => `<span class="nhm-diff-tag diff-add"><span class="diff-op">+</span> ${escapeHtml(item.cleanText)}</span>`),
+          ...diff.removed.map(item => `<span class="nhm-diff-tag diff-remove"><span class="diff-op">-</span> ${escapeHtml(item.cleanText)}</span>`),
+          ...diff.changed.map(item => `<span class="nhm-diff-tag diff-change" ${item.disabled ? 'style="opacity:0.6"' : ''}><span class="diff-op">~</span> ${escapeHtml(item.cleanText)}: ${item.oldWeight.toFixed(2)} → ${item.newWeight.toFixed(2)}</span>`),
+          ...diff.enabled.map(item => `<span class="nhm-diff-tag diff-enable"><span class="diff-op">👁️</span> ${escapeHtml(item.cleanText)}</span>`),
+          ...diff.disabled.map(item => `<span class="nhm-diff-tag diff-disable"><span class="diff-op">🚫</span> ${escapeHtml(item.cleanText)}</span>`),
+          ...diff.ghost_deleted.map(item => `<span class="nhm-diff-tag diff-ghost"><span class="diff-op">×</span> ${escapeHtml(item.cleanText)}</span>`)
         ];
 
         if (tagsHTML.length > 0) {
@@ -1026,16 +1034,16 @@ const MODAL_ID = 'nai-history-modal';
           }
         }
 
-        let pickBadge = '';
+        let pickBadgeText = '';
         if (isDynHeader) {
           let config = text.slice(2);
           if (config.endsWith('$$')) config = config.slice(0, -2);
-          if (config) pickBadge = `<span class="nhm-tag-dyn-badge">x${config.replace('-', '~')}</span>`;
+          if (config) pickBadgeText = `x${config.replace('-', '~')}`;
         }
-        let dynWeightBadge = '';
+        let dynWeightBadgeText = '';
         if (isDynMember && tag.dynWeight && tag.dynWeight !== 1) {
           const f = (tag.dynWeight % 1 === 0) ? tag.dynWeight : tag.dynWeight.toFixed(1);
-          dynWeightBadge = `<span class="nhm-tag-dyn-weight">${f}</span>`;
+          dynWeightBadgeText = String(f);
         }
 
         let displayTagName = isNewline ? '↵' : cleanText;
@@ -1081,14 +1089,18 @@ const MODAL_ID = 'nai-history-modal';
           capsule.style.borderWidth = '1.5px';
           capsule.style.background = `linear-gradient(135deg, #3b3b4f 0%, ${info.color}15 100%)`;
         }
-        if (currentGroupColorMap && currentGroupColorMap[lookupTagKey]) {
-          capsule.style.background = currentGroupColorMap[lookupTagKey];
+        const groupColor = currentGroupColorMap && currentGroupColorMap[lookupTagKey];
+        if (/^#[0-9a-fA-F]{6}$/.test(groupColor || '')) {
+          capsule.style.background = groupColor;
         }
 
         const primary = document.createElement('div');
         primary.className = 'nhm-tag-primary';
         if (isDynHeader) {
-          primary.innerHTML = pickBadge;
+          const pickBadge = document.createElement('span');
+          pickBadge.className = 'nhm-tag-dyn-badge';
+          pickBadge.textContent = pickBadgeText;
+          primary.appendChild(pickBadge);
         } else if ((Math.abs(weightVal - 1.0) > 0.001 || isCompHeader || isCompFooter) && !isNewline) {
           const badge = document.createElement('span');
           badge.className = `nhm-tag-weight-badge ${weightVal > 1.0 ? 'w-pos' : (weightVal < 1.0 ? 'w-neg' : '')}`;
@@ -1099,7 +1111,12 @@ const MODAL_ID = 'nai-history-modal';
         textSpan.className = 'nhm-tag-text';
         textSpan.textContent = displayTagName;
         primary.appendChild(textSpan);
-        if (dynWeightBadge) primary.innerHTML += dynWeightBadge;
+        if (dynWeightBadgeText) {
+          const dynWeightBadge = document.createElement('span');
+          dynWeightBadge.className = 'nhm-tag-dyn-weight';
+          dynWeightBadge.textContent = dynWeightBadgeText;
+          primary.appendChild(dynWeightBadge);
+        }
 
         capsule.appendChild(primary);
 
@@ -1219,39 +1236,34 @@ const MODAL_ID = 'nai-history-modal';
 
 
     // ───── 从 chrome.storage 读写 ────────────────────────────────
-    // injector 运行在页面脚本上下文，不能直接访问 chrome.storage
-    // 需要通过 postMessage → bridge 中转来读写数据
-    // 因此我们在此使用一个简单的消息协议
-    let pendingStorageReads = {};
+    // 本模块运行在扩展隔离环境，历史数据不再通过官网页面的 postMessage 暴露。
+    async function getHistoryData() {
+      const data = await chrome.storage.local.get([
+        'promptHistory',
+        'historyLimit',
+        'groupColorMap',
+        'groupTranslationMap',
+        'enableGrouping'
+      ]);
 
-    window.addEventListener('message', e => {
-      if (e.source !== window) return;
-      if (e.data?.type === '__HISTORY_DATA__') {
-        const { reqId, data } = e.data;
-        if (data.enableGrouping !== undefined) {
-          globalEnableGrouping = data.enableGrouping;
-        }
-        if (pendingStorageReads[reqId]) {
-          pendingStorageReads[reqId](data);
-          delete pendingStorageReads[reqId];
-        }
-      }
-    });
-
-    function getHistoryData() {
-      return new Promise(resolve => {
-        const reqId = Date.now() + Math.random();
-        pendingStorageReads[reqId] = resolve;
-        window.postMessage({ type: '__REQUEST_HISTORY_DATA__', reqId }, '*');
-      });
+      globalEnableGrouping = data.enableGrouping !== undefined ? data.enableGrouping : true;
+      return {
+        history: Array.isArray(data.promptHistory) ? data.promptHistory : [],
+        limit: Number.isFinite(Number(data.historyLimit)) ? Number(data.historyLimit) : 100,
+        groupColorMap: data.groupColorMap && typeof data.groupColorMap === 'object' ? data.groupColorMap : {},
+        groupTranslationMap: data.groupTranslationMap && typeof data.groupTranslationMap === 'object' ? data.groupTranslationMap : {},
+        enableGrouping: globalEnableGrouping
+      };
     }
 
     function saveHistoryData(history) {
-      window.postMessage({ type: '__SAVE_HISTORY_DATA__', history }, '*');
+      if (!Array.isArray(history)) return;
+      chrome.storage.local.set({ promptHistory: history });
     }
 
     function saveLimitData(limit) {
-      window.postMessage({ type: '__SAVE_HISTORY_LIMIT__', limit }, '*');
+      const normalizedLimit = Math.max(10, Math.min(1000, Number.parseInt(limit, 10) || 100));
+      chrome.storage.local.set({ historyLimit: normalizedLimit });
     }
 
     // ───── Modal 主体 ──────────────────────────────────────────
@@ -1813,7 +1825,7 @@ const MODAL_ID = 'nai-history-modal';
               </svg>
             </div>
             <span class="nhm-folder-arrow ${isOpen ? 'open' : ''}">▶</span>
-            <span class="nhm-folder-name" title="双击重命名">${folder.name || '未命名文件夹'}</span>
+            <span class="nhm-folder-name" title="双击重命名">${escapeHtml(folder.name || '未命名文件夹')}</span>
             <span class="nhm-folder-count">${children.length} 项</span>
             <button class="nhm-folder-delete" title="删除文件夹">🗑</button>
           `;
@@ -2162,7 +2174,7 @@ const MODAL_ID = 'nai-history-modal';
         leftIcon = iconSvg;
       }
 
-      const displayName = snapshot.name || formatTime(snapshot.timestamp);
+      const displayName = escapeHtml(snapshot.name || formatTime(snapshot.timestamp));
       
       item.innerHTML = `
         <div class="nhm-item-main" style="display: flex; align-items: center; justify-content: space-between; flex-direction: row; width: 100%;">
@@ -2504,4 +2516,4 @@ const MODAL_ID = 'nai-history-modal';
     });
 
     console.log('[Wildcard] History Modal module initialized');
-  })();
+})();

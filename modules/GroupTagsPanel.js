@@ -4,7 +4,47 @@ let defaultGroupsData = { categories: [] };
 let activeCategoryIndex = 0;
 let activeGroupIndex = 0;
 let hasInitializedGroupTagsPanel = false;
-const groupTagsDataUtils = window.GroupTagsDataUtils || {};
+const groupTagsDataUtils = window.GroupTagsDataUtils;
+if (!groupTagsDataUtils) {
+  throw new Error('[GroupTagsPanel] 共享数据模块 lib/group-tags-data.js 未加载');
+}
+const requiredGroupTagsDataMethods = [
+  'cloneData',
+  'sanitizeText',
+  'sanitizeColor',
+  'normalizeGroupItemType',
+  'isSentenceGroupItem',
+  'isTagGroupItem',
+  'buildSentenceItemKey',
+  'getGroupItemPromptText',
+  'getGroupItemTranslationText',
+  'normalizeTagKey',
+  'toCanonicalTagKey',
+  'canonicalToDisplayTag',
+  'buildLegacyId',
+  'createEmptyGroupTagsData',
+  'createMergeSummary',
+  'countSummarySkipped',
+  'normalizeGroupTagsData',
+  'mergeGroupTagsData',
+  'buildColorMap',
+  'buildTranslationMap',
+  'resolveEffectiveGroupTagsData',
+  'loadEffectiveDictionaryData',
+  'upsertDictionaryEntry',
+  'markDefaultCategoryDeleted',
+  'markDefaultGroupDeleted',
+  'migrateStoredGroupTagsData',
+  'saveGroupTagsStorage',
+  'syncStoredGroupTagsTranslationsFromDictionary',
+  'syncTranslationsToDictionary'
+];
+const missingGroupTagsDataMethods = requiredGroupTagsDataMethods.filter(
+  methodName => typeof groupTagsDataUtils[methodName] !== 'function'
+);
+if (missingGroupTagsDataMethods.length > 0) {
+  throw new Error(`[GroupTagsPanel] 共享数据模块不完整: ${missingGroupTagsDataMethods.join(', ')}`);
+}
 const groupTagsFavoritesUtils = window.GroupTagsFavoritesUtils || {};
 const SPECIAL_FAVORITES_CATEGORY_ID = groupTagsFavoritesUtils.SPECIAL_CATEGORY_ID || '__group_tags_favorites__';
 const SPECIAL_FAVORITES_CATEGORY_NAME = groupTagsFavoritesUtils.SPECIAL_CATEGORY_NAME || '收藏片段';
@@ -24,54 +64,27 @@ let sentenceCardEditState = null;
 let specialFavoritesDirty = false;
 
 function normalizeGroupItemType(value) {
-  if (groupTagsDataUtils.normalizeGroupItemType) {
-    return groupTagsDataUtils.normalizeGroupItemType(value);
-  }
-  return value === GROUP_ITEM_TYPE_SENTENCE ? GROUP_ITEM_TYPE_SENTENCE : GROUP_ITEM_TYPE_TAG;
+  return groupTagsDataUtils.normalizeGroupItemType(value);
 }
 
 function isSentenceGroupItem(value) {
-  if (groupTagsDataUtils.isSentenceGroupItem) {
-    return groupTagsDataUtils.isSentenceGroupItem(value);
-  }
-  return normalizeGroupItemType(value?.type) === GROUP_ITEM_TYPE_SENTENCE;
+  return groupTagsDataUtils.isSentenceGroupItem(value);
 }
 
 function isTagGroupItem(value) {
-  if (groupTagsDataUtils.isTagGroupItem) {
-    return groupTagsDataUtils.isTagGroupItem(value);
-  }
-  return !isSentenceGroupItem(value);
+  return groupTagsDataUtils.isTagGroupItem(value);
 }
 
 function buildSentenceItemKey(value) {
-  if (groupTagsDataUtils.buildSentenceItemKey) {
-    return groupTagsDataUtils.buildSentenceItemKey(value);
-  }
-  const en = typeof value?.en === 'string' ? value.en.trim() : '';
-  const zh = typeof value?.zh === 'string' ? value.zh.trim() : '';
-  if (!en || !zh) return '';
-  return `${en}\u0000${zh}`;
+  return groupTagsDataUtils.buildSentenceItemKey(value);
 }
 
 function getGroupItemPromptText(value) {
-  if (groupTagsDataUtils.getGroupItemPromptText) {
-    return groupTagsDataUtils.getGroupItemPromptText(value);
-  }
-  if (isSentenceGroupItem(value)) {
-    return typeof value?.en === 'string' ? value.en.trim() : '';
-  }
-  return typeof value?.en === 'string' ? value.en.trim() : '';
+  return groupTagsDataUtils.getGroupItemPromptText(value);
 }
 
 function getGroupItemTranslationText(value) {
-  if (groupTagsDataUtils.getGroupItemTranslationText) {
-    return groupTagsDataUtils.getGroupItemTranslationText(value);
-  }
-  if (isSentenceGroupItem(value)) {
-    return typeof value?.zh === 'string' ? value.zh.trim() : '';
-  }
-  return typeof value?.zh === 'string' ? value.zh.trim() : '';
+  return groupTagsDataUtils.getGroupItemTranslationText(value);
 }
 
 // ========== 密度控制逻辑 ==========
@@ -152,23 +165,7 @@ densitySlider.addEventListener('input', (e) => {
 
 // 构建全局 tag→color 的扁平映射表
 function buildColorMap() {
-  // 优先复用共享工具，确保 popup 和 Group Tags 面板生成完全一致的颜色映射
-  if (groupTagsDataUtils.buildColorMap) {
-    return groupTagsDataUtils.buildColorMap(customGroupsData);
-  }
-
-  const map = {};
-  if (!customGroupsData || !customGroupsData.categories) return map;
-  customGroupsData.categories.forEach(cat => {
-    (cat.groups || []).forEach(group => {
-      const color = group.color || '#4a4a6a';
-      (group.tags || []).forEach(t => {
-        const key = normalizeTagKey(getGroupItemPromptText(t));
-        if (key) map[key] = color;
-      });
-    });
-  });
-  return map;
+  return groupTagsDataUtils.buildColorMap(customGroupsData);
 }
 
 // 将颜色映射发送给父窗口
@@ -179,23 +176,7 @@ function syncColorsToParent() {
 
 // 构建全局 tag→zh 的翻译映射表
 function buildTranslationMap() {
-  // 优先复用共享工具，避免 popup / Group Tags 面板对翻译映射的规则产生漂移
-  if (groupTagsDataUtils.buildTranslationMap) {
-    return groupTagsDataUtils.buildTranslationMap(customGroupsData);
-  }
-
-  const map = {};
-  if (!customGroupsData || !customGroupsData.categories) return map;
-  customGroupsData.categories.forEach(cat => {
-    (cat.groups || []).forEach(group => {
-      (group.tags || []).forEach(t => {
-        const key = normalizeTagKey(getGroupItemPromptText(t));
-        const translationText = getGroupItemTranslationText(t);
-        if (key && translationText) map[key] = translationText;
-      });
-    });
-  });
-  return map;
+  return groupTagsDataUtils.buildTranslationMap(customGroupsData);
 }
 
 // 将翻译映射直接写入 chrome.storage.local（无需经过 bridge 中继）
@@ -285,12 +266,12 @@ function isDefaultGroup(categoryId, groupId) {
 }
 
 function markDeletedDefaultCategory(categoryId) {
-  if (!isDefaultCategory(categoryId) || !groupTagsDataUtils.markDefaultCategoryDeleted) return;
+  if (!isDefaultCategory(categoryId)) return;
   customGroupsData = groupTagsDataUtils.markDefaultCategoryDeleted(customGroupsData, categoryId);
 }
 
 function markDeletedDefaultGroup(categoryId, groupId) {
-  if (!isDefaultGroup(categoryId, groupId) || !groupTagsDataUtils.markDefaultGroupDeleted) return;
+  if (!isDefaultGroup(categoryId, groupId)) return;
   customGroupsData = groupTagsDataUtils.markDefaultGroupDeleted(customGroupsData, categoryId, groupId);
 }
 
@@ -708,23 +689,13 @@ async function finalizeEditMode(save) {
   if (save) {
     const persistableData = getPersistableGroupTagsData(customGroupsData);
 
-    if (groupTagsDataUtils.saveGroupTagsStorage) {
-      await groupTagsDataUtils.saveGroupTagsStorage(persistableData);
-    } else {
-      await new Promise(resolve => {
-        chrome.storage.local.set({ groupTagsUserData: persistableData }, resolve);
-      });
-    }
+    await groupTagsDataUtils.saveGroupTagsStorage(persistableData);
 
     await saveSpecialCategoryPosition();
 
     await flushPendingDictionaryUpserts();
-    if (groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary) {
-      const synced = await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
-      customGroupsData = await rebuildWithSpecialFavorites(synced.data || persistableData, { apply: false });
-    } else {
-      customGroupsData = await rebuildWithSpecialFavorites(persistableData, { apply: false });
-    }
+    const synced = await groupTagsDataUtils.syncStoredGroupTagsTranslationsFromDictionary();
+    customGroupsData = await rebuildWithSpecialFavorites(synced.data || persistableData, { apply: false });
 
     syncColorsToParent();
     syncTranslationsToParent();
@@ -754,86 +725,43 @@ function generateId(prefix) {
 
 // ========== 导入导出与数据归一化 ==========
 function cloneData(data) {
-  if (groupTagsDataUtils.cloneData) {
-    return groupTagsDataUtils.cloneData(data);
-  }
-  return JSON.parse(JSON.stringify(data));
+  return groupTagsDataUtils.cloneData(data);
 }
 
 function sanitizeText(value) {
-  if (groupTagsDataUtils.sanitizeText) {
-    return groupTagsDataUtils.sanitizeText(value);
-  }
-  return typeof value === 'string' ? value.trim() : '';
+  return groupTagsDataUtils.sanitizeText(value);
 }
 
 function sanitizeColor(value) {
-  if (groupTagsDataUtils.sanitizeColor) {
-    return groupTagsDataUtils.sanitizeColor(value);
-  }
-  return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : '#4a4a6a';
+  return groupTagsDataUtils.sanitizeColor(value);
 }
 
 function normalizeTagKey(value) {
-  if (groupTagsDataUtils.normalizeTagKey) {
-    return groupTagsDataUtils.normalizeTagKey(value);
-  }
-  return sanitizeText(value).toLowerCase();
+  return groupTagsDataUtils.normalizeTagKey(value);
 }
 
 function toCanonicalTagKey(value) {
-  if (groupTagsDataUtils.toCanonicalTagKey) {
-    return groupTagsDataUtils.toCanonicalTagKey(value);
-  }
-  return normalizeTagKey(value);
+  return groupTagsDataUtils.toCanonicalTagKey(value);
 }
 
 function toDisplayTagText(value) {
-  if (groupTagsDataUtils.canonicalToDisplayTag) {
-    return groupTagsDataUtils.canonicalToDisplayTag(value);
-  }
-  return sanitizeText(value).replace(/_/g, ' ');
+  return groupTagsDataUtils.canonicalToDisplayTag(value);
 }
 
 function buildLegacyId(prefix, parts) {
-  if (groupTagsDataUtils.buildLegacyId) {
-    return groupTagsDataUtils.buildLegacyId(prefix, parts);
-  }
-  const slug = parts
-    .map(part => sanitizeText(String(part || '')).toLowerCase().replace(/[^a-z0-9]+/g, '_'))
-    .map(part => part.replace(/^_+|_+$/g, ''))
-    .filter(Boolean)
-    .join('_');
-  return `${prefix}_${slug || 'item'}`;
+  return groupTagsDataUtils.buildLegacyId(prefix, parts);
 }
 
 function createEmptyGroupTagsData() {
-  if (groupTagsDataUtils.createEmptyGroupTagsData) {
-    return groupTagsDataUtils.createEmptyGroupTagsData();
-  }
-  return { categories: [] };
+  return groupTagsDataUtils.createEmptyGroupTagsData();
 }
 
 function createMergeSummary() {
-  if (groupTagsDataUtils.createMergeSummary) {
-    return groupTagsDataUtils.createMergeSummary();
-  }
-  return {
-    addedCategories: 0,
-    addedGroups: 0,
-    addedTags: 0,
-    skippedCategories: 0,
-    skippedGroups: 0,
-    skippedTags: 0,
-    skippedInvalid: 0
-  };
+  return groupTagsDataUtils.createMergeSummary();
 }
 
 function countSummarySkipped(summary) {
-  if (groupTagsDataUtils.countSummarySkipped) {
-    return groupTagsDataUtils.countSummarySkipped(summary);
-  }
-  return summary.skippedCategories + summary.skippedGroups + summary.skippedTags + summary.skippedInvalid;
+  return groupTagsDataUtils.countSummarySkipped(summary);
 }
 
 function escapeHtml(text) {
@@ -846,189 +774,11 @@ function escapeHtml(text) {
 }
 
 function normalizeGroupTagsData(rawData) {
-  if (groupTagsDataUtils.normalizeGroupTagsData) {
-    return groupTagsDataUtils.normalizeGroupTagsData(rawData);
-  }
-
-  const result = createEmptyGroupTagsData();
-  const summary = createMergeSummary();
-  const categories = Array.isArray(rawData?.categories) ? rawData.categories : [];
-  const seenCategoryIds = new Set();
-
-  categories.forEach((rawCategory, categoryIndex) => {
-    if (!rawCategory || typeof rawCategory !== 'object') {
-      summary.skippedInvalid += 1;
-      return;
-    }
-
-    const categoryName = sanitizeText(rawCategory.name) || `Category ${categoryIndex + 1}`;
-    let categoryId = sanitizeText(rawCategory.id) || buildLegacyId('cat', [categoryIndex + 1, categoryName]);
-    if (seenCategoryIds.has(categoryId)) {
-      summary.skippedCategories += 1;
-      categoryId = `${categoryId}_${categoryIndex + 1}`;
-    }
-    seenCategoryIds.add(categoryId);
-
-    const normalizedCategory = {
-      id: categoryId,
-      name: categoryName,
-      groups: []
-    };
-
-    const groups = Array.isArray(rawCategory.groups) ? rawCategory.groups : [];
-    const seenGroupIds = new Set();
-    groups.forEach((rawGroup, groupIndex) => {
-      if (!rawGroup || typeof rawGroup !== 'object') {
-        summary.skippedInvalid += 1;
-        return;
-      }
-
-      const groupName = sanitizeText(rawGroup.name) || `Group ${groupIndex + 1}`;
-      let groupId = sanitizeText(rawGroup.id) || buildLegacyId('grp', [categoryId, groupIndex + 1, groupName]);
-      if (seenGroupIds.has(groupId)) {
-        summary.skippedGroups += 1;
-        groupId = `${groupId}_${groupIndex + 1}`;
-      }
-      seenGroupIds.add(groupId);
-
-      const normalizedGroup = {
-        id: groupId,
-        name: groupName,
-        color: sanitizeColor(rawGroup.color),
-        tags: []
-      };
-
-      const tags = Array.isArray(rawGroup.tags) ? rawGroup.tags : [];
-      const seenItemKeys = new Set();
-      tags.forEach(rawTag => {
-        if (typeof rawTag === 'string') {
-          const tagKey = normalizeTagKey(rawTag);
-          if (!tagKey || seenItemKeys.has(`tag:${tagKey}`)) {
-            summary.skippedInvalid += tagKey ? 0 : 1;
-            summary.skippedTags += tagKey ? 1 : 0;
-            return;
-          }
-          seenItemKeys.add(`tag:${tagKey}`);
-          normalizedGroup.tags.push({ type: GROUP_ITEM_TYPE_TAG, en: tagKey, zh: '' });
-          return;
-        }
-
-        if (!rawTag || typeof rawTag !== 'object') {
-          summary.skippedInvalid += 1;
-          return;
-        }
-
-        if (isSentenceGroupItem(rawTag) || rawTag.sourceText || rawTag.resultText) {
-          const en = sanitizeText(rawTag.en) || sanitizeText(rawTag.sourceText);
-          const zh = sanitizeText(rawTag.zh) || sanitizeText(rawTag.resultText);
-          const sentenceKey = buildSentenceItemKey({ en, zh });
-          if (!sentenceKey) {
-            summary.skippedInvalid += 1;
-            return;
-          }
-          if (seenItemKeys.has(`sentence:${sentenceKey}`)) {
-            summary.skippedTags += 1;
-            return;
-          }
-          seenItemKeys.add(`sentence:${sentenceKey}`);
-          normalizedGroup.tags.push({
-            type: GROUP_ITEM_TYPE_SENTENCE,
-            en,
-            zh
-          });
-          return;
-        }
-
-        const en = sanitizeText(rawTag.en);
-        const zh = sanitizeText(rawTag.zh);
-        const tagKey = normalizeTagKey(en);
-        if (!tagKey) {
-          summary.skippedInvalid += 1;
-          return;
-        }
-
-        if (seenItemKeys.has(`tag:${tagKey}`)) {
-          summary.skippedTags += 1;
-          return;
-        }
-
-        seenItemKeys.add(`tag:${tagKey}`);
-        normalizedGroup.tags.push({ type: GROUP_ITEM_TYPE_TAG, en: tagKey, zh });
-      });
-
-      normalizedCategory.groups.push(normalizedGroup);
-    });
-
-    result.categories.push(normalizedCategory);
-  });
-
-  return { data: result, summary };
+  return groupTagsDataUtils.normalizeGroupTagsData(rawData);
 }
 
 function mergeGroupTagsData(baseData, sourceData) {
-  if (groupTagsDataUtils.mergeGroupTagsData) {
-    return groupTagsDataUtils.mergeGroupTagsData(baseData, sourceData);
-  }
-
-  const target = cloneData(baseData);
-  const summary = createMergeSummary();
-
-  sourceData.categories.forEach(sourceCategory => {
-    const targetCategory = target.categories.find(category => category.id === sourceCategory.id);
-    if (!targetCategory) {
-      target.categories.push(cloneData(sourceCategory));
-      summary.addedCategories += 1;
-      summary.addedGroups += sourceCategory.groups.length;
-      summary.addedTags += sourceCategory.groups.reduce((count, group) => count + group.tags.length, 0);
-      return;
-    }
-
-    summary.skippedCategories += 1;
-
-    sourceCategory.groups.forEach(sourceGroup => {
-      const targetGroup = targetCategory.groups.find(group => group.id === sourceGroup.id);
-      if (!targetGroup) {
-        targetCategory.groups.push(cloneData(sourceGroup));
-        summary.addedGroups += 1;
-        summary.addedTags += sourceGroup.tags.length;
-        return;
-      }
-
-      summary.skippedGroups += 1;
-      const existingItemKeys = new Set(targetGroup.tags.map((tag) => {
-        if (isSentenceGroupItem(tag)) {
-          const sentenceKey = buildSentenceItemKey(tag);
-          return sentenceKey ? `sentence:${sentenceKey}` : '';
-        }
-        const tagKey = normalizeTagKey(tag.en);
-        return tagKey ? `tag:${tagKey}` : '';
-      }).filter(Boolean));
-      sourceGroup.tags.forEach(sourceTag => {
-        const itemKey = isSentenceGroupItem(sourceTag)
-          ? (() => {
-              const sentenceKey = buildSentenceItemKey(sourceTag);
-              return sentenceKey ? `sentence:${sentenceKey}` : '';
-            })()
-          : (() => {
-              const tagKey = normalizeTagKey(sourceTag.en);
-              return tagKey ? `tag:${tagKey}` : '';
-            })();
-        if (!itemKey) {
-          summary.skippedInvalid += 1;
-          return;
-        }
-        if (existingItemKeys.has(itemKey)) {
-          summary.skippedTags += 1;
-          return;
-        }
-        existingItemKeys.add(itemKey);
-        targetGroup.tags.push(cloneData(sourceTag));
-        summary.addedTags += 1;
-      });
-    });
-  });
-
-  return { data: target, summary };
+  return groupTagsDataUtils.mergeGroupTagsData(baseData, sourceData);
 }
 
 function extractImportData(payload) {
@@ -1096,16 +846,7 @@ function restoreActiveSelectionByIds(selection) {
 }
 
 function resolveEffectiveGroupTagsData(storedData) {
-  // Group Tags 面板与 popup 共用同一套“用户数据优先，默认库补新增”的合并规则
-  if (groupTagsDataUtils.resolveEffectiveGroupTagsData) {
-    return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultGroupsData, storedData);
-  }
-
-  if (storedData && storedData.categories) {
-    const normalizedStored = normalizeGroupTagsData(storedData).data;
-    return mergeGroupTagsData(normalizedStored, defaultGroupsData).data;
-  }
-  return cloneData(defaultGroupsData);
+  return groupTagsDataUtils.resolveEffectiveGroupTagsData(defaultGroupsData, storedData);
 }
 
 function findGlobalTagLocation(tagText, options = {}) {
@@ -1151,20 +892,11 @@ function formatTagLocation(location) {
 }
 
 async function loadEffectiveDictionaryData() {
-  if (groupTagsDataUtils.loadEffectiveDictionaryData) {
-    return groupTagsDataUtils.loadEffectiveDictionaryData();
-  }
-  return { entries: [], entryMap: new Map() };
+  return groupTagsDataUtils.loadEffectiveDictionaryData();
 }
 
 async function upsertDictionaryEntry(tagKey, patch = {}) {
-  if (groupTagsDataUtils.upsertDictionaryEntry) {
-    return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
-  }
-  return {
-    tagKey: toCanonicalTagKey(tagKey),
-    entry: null
-  };
+  return groupTagsDataUtils.upsertDictionaryEntry(tagKey, patch);
 }
 
 async function ensureDictionaryTagMeta(tagText, zhText) {
@@ -1237,12 +969,7 @@ function applyGroupTagsData(nextData) {
 
 function saveGroupTagsData(nextData) {
   const persistableData = getPersistableGroupTagsData(nextData);
-  if (groupTagsDataUtils.saveGroupTagsStorage) {
-    return groupTagsDataUtils.saveGroupTagsStorage(persistableData);
-  }
-  return new Promise(resolve => {
-    chrome.storage.local.set({ groupTagsUserData: persistableData }, () => resolve(persistableData));
-  });
+  return groupTagsDataUtils.saveGroupTagsStorage(persistableData);
 }
 
 function showInfoModal(title, message) {
@@ -1364,9 +1091,7 @@ async function importGroupTagsData(file) {
     nextData = mergedWithDefault.data;
 
     nextData = await saveGroupTagsData(nextData);
-    if (groupTagsDataUtils.syncTranslationsToDictionary) {
-      await groupTagsDataUtils.syncTranslationsToDictionary(nextData);
-    }
+    await groupTagsDataUtils.syncTranslationsToDictionary(nextData);
     nextData = await rebuildWithSpecialFavorites(nextData, { apply: false });
     applyGroupTagsData(nextData);
 
@@ -1606,21 +1331,54 @@ function setupInlineAddPanel() {
       return n + "";
     };
 
+    const appendHighlightedText = (container, text, searchText) => {
+      const sourceText = String(text || '');
+      const normalizedSearchText = String(searchText || '').toLowerCase();
+      if (!normalizedSearchText) {
+        container.textContent = sourceText;
+        return;
+      }
+
+      const normalizedSourceText = sourceText.toLowerCase();
+      let cursor = 0;
+      let matchIndex = normalizedSourceText.indexOf(normalizedSearchText, cursor);
+
+      while (matchIndex >= 0) {
+        container.appendChild(document.createTextNode(sourceText.slice(cursor, matchIndex)));
+        const strong = document.createElement('strong');
+        strong.textContent = sourceText.slice(matchIndex, matchIndex + normalizedSearchText.length);
+        container.appendChild(strong);
+        cursor = matchIndex + normalizedSearchText.length;
+        matchIndex = normalizedSourceText.indexOf(normalizedSearchText, cursor);
+      }
+
+      container.appendChild(document.createTextNode(sourceText.slice(cursor)));
+    };
+
     matches.forEach((m, idx) => {
       const item = document.createElement('div');
       item.className = 'autocomplete-item';
       if (idx === selectedIndex) item.classList.add('selected');
       const displayWord = m.displayWord || toDisplayTagText(m.word);
-      
-      const highlight = (text) => {
-        if (!query) return text;
-        return text.replace(new RegExp(query, 'gi'), match => `<strong>${match}</strong>`);
-      };
-      
-      item.innerHTML = `
-        <span class="ac-en" style="color: ${m.color}">${highlight(displayWord)}</span>
-        <span class="ac-zh"><span class="autocomplete-trans">${m.zhCN ? highlight(m.zhCN) : ''}</span> <span class="autocomplete-count">(${formatCount(m.pop)})</span></span>
-      `;
+
+      const enPart = document.createElement('span');
+      enPart.className = 'ac-en';
+      enPart.style.color = m.color;
+      appendHighlightedText(enPart, displayWord, query);
+
+      const zhPart = document.createElement('span');
+      zhPart.className = 'ac-zh';
+      const translation = document.createElement('span');
+      translation.className = 'autocomplete-trans';
+      appendHighlightedText(translation, m.zhCN || '', query);
+      const count = document.createElement('span');
+      count.className = 'autocomplete-count';
+      count.textContent = ` (${formatCount(m.pop)})`;
+      zhPart.appendChild(translation);
+      zhPart.appendChild(count);
+
+      item.appendChild(enPart);
+      item.appendChild(zhPart);
       
       item.onclick = () => {
         // 用户期望：只填充输入框，并将词汇中的下划线去掉换成空格，随后聚焦中文框
@@ -2882,7 +2640,7 @@ async function init() {
     let stored = await new Promise(resolve => {
       chrome.storage.local.get('groupTagsUserData', (data) => resolve(data.groupTagsUserData));
     });
-    if (stored?.categories && groupTagsDataUtils.migrateStoredGroupTagsData) {
+    if (stored?.categories) {
       // 初始化时自动迁移旧格式 tag，并把翻译回填到主库规范
       const migrated = await groupTagsDataUtils.migrateStoredGroupTagsData();
       stored = migrated.data || stored;

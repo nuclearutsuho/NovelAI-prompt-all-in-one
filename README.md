@@ -1,7 +1,26 @@
-# NovelAI-prompt-all-in-one 4.0
+# NovelAI-prompt-all-in-one 4.1
 
 > **An all-in-one prompt management, wildcard, and Danbooru autocomplete toolkit tailored for NovelAI Diffusion.**
 > **专为 NovelAI 打造的全能提示词管理、通配符支持与 Danbooru 自动补全工具包。**
+
+## 4.1 兼容性升级
+
+- 新增独立的 NovelAI 官网兼容层，集中维护接口、编辑器和角色页签选择器。
+- 支持当前官网的普通与流式生图接口，并避免误拦截标签建议等子接口。
+- Jotai 降级为可选快速路径；当前官网无法访问内部 Store 时自动使用 ProseMirror DOM 同步。
+- 角色提示词支持正面/负面双页签写入、角色数量协调和活动页签恢复。
+- 桌面端与移动端重复 DOM 只处理当前可见实例，避免角色索引错位。
+- 新增零依赖自动化测试，覆盖端点识别、角色结构合并、版本和注入顺序。
+
+## 开发与验证
+
+项目不需要安装第三方依赖，使用 Node.js 运行检查：
+
+```bash
+npm run check
+```
+
+修改扩展文件后，需要在 `chrome://extensions` 中重新加载已解压扩展，并刷新 NovelAI 页面。
 
 
 ##  Features (核心特性)

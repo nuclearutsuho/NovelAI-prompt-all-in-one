@@ -354,8 +354,8 @@ const ToolbarConfigManager = {
       li.innerHTML = `
         ${def.svg}
         ${isHidden ? '<div class="hidden-indicator">✕</div>' : ''}
-        <div class="sticky-star">★<div class="star-label">${dict.btn_pin_to_edge || 'Prioritize position (Next to mouse)'}</div></div>
-        <div class="btn-label">${fullTitle}</div>
+        <div class="sticky-star">★<div class="star-label">${escapeHtml(dict.btn_pin_to_edge || 'Prioritize position (Next to mouse)')}</div></div>
+        <div class="btn-label">${escapeHtml(fullTitle)}</div>
       `;
 
       // Main click toggles hidden

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NovelAI-prompt-all-in-one",
   "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
-  "version": "3.0.5",
+  "version": "4.2.0",
   "permissions": [
     "storage",
     "unlimitedStorage"
@@ -24,6 +24,10 @@
         "https://novelai.net/image/*"
       ],
       "js": [
+        "lib/message-protocol.js",
+        "lib/Sortable.umd.js",
+        "lib/group-tags-data.js",
+        "modules/history-favorites-panel.js",
         "bridge.js"
       ],
       "run_at": "document_start"
@@ -32,28 +36,18 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "lib/Sortable.umd.js",
-        "lib/group-tags-data.js",
-        "lib/group-tags-favorites.js",
+        "lib/injected/novelai-compat.js",
         "lib/injected/prompt-storage-shim.js",
-        "modules/history-favorites-panel.js",
         "injector.js",
         "modules/auto-clicker.js",
         "data/dictionary.csv",
-        "data/default_group_tags.json",
         "pages/popup.html",
-        "pages/popup.js",
         "pages/group-tags.html",
-        "modules/GroupTagsPanel.js",
-        "pages/sync.html",
-        "pages/sync.js",
-        "lib/codemirror-bundle.js",
-        "styles/manager-panel.css",
-        "worker.js",
-        "default_wildcards/*"
+        "styles/manager-panel.css"
       ],
       "matches": [
-        "<all_urls>"
+        "https://novelai.net/*",
+        "https://*.novelai.net/*"
       ]
     }
   ],
