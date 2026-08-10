@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NovelAI-prompt-all-in-one",
   "description": "All-in-one prompt management, wildcards, and Danbooru autocomplete for NovelAI",
-  "version": "4.2.0",
+  "version": "1.0.0",
   "permissions": [
     "storage",
     "unlimitedStorage"
