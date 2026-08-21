@@ -442,35 +442,90 @@
 
   /**
    * 查找 Seed 随机化按钮。
-   * 优先用稳健的相对查找，绝对路径兜底。
+   * V5 的 Seed 邻接按钮含义变成“使用当前图片的 Seed”，不能再把它当作重置按钮。
    */
+  function isDisplayedImageSeedButton(button) {
+    if (!button) return false;
+    const label = [
+      button.getAttribute?.('aria-label'),
+      button.getAttribute?.('title'),
+      button.innerText,
+      button.textContent
+    ].filter(Boolean).join(' ').toLowerCase();
+    return /use\s+the\s+seed\s+of\s+the\s+displayed\s+image/.test(label) ||
+      /use.*displayed.*seed/.test(label) ||
+      /使用.*(?:当前|显示).*种子/.test(label) ||
+      /表示.*シード.*使用/.test(label);
+  }
+
+  function isSafeSeedResetButton(button, { allowUnlabelled = false } = {}) {
+    if (!button ||
+      button.closest?.('#nai-auto-clicker, #nai-anlas-dialog') ||
+      !isVisible(button) ||
+      button.disabled ||
+      isDisplayedImageSeedButton(button)) {
+      return false;
+    }
+    const label = [
+      button.getAttribute?.('aria-label'),
+      button.getAttribute?.('title'),
+      button.innerText,
+      button.textContent
+    ].filter(Boolean).join(' ').trim().toLowerCase();
+    return allowUnlabelled || /random|reset|clear|随机|重置|清除|ランダム|リセット/.test(label);
+  }
+
   function findSeedButton() {
-    // 方法1: 最可靠 —— Seed span 的直接兄弟 button
-    // 浏览器检查确认: <span>Seed</span><button>N/A</button> 同在一个容器内
+    // 优先采用明确表达“随机/重置”的按钮，避免误触 V5 的复用 Seed 控件。
+    const attrCandidates = Array.from(document.querySelectorAll(
+      'button[aria-label*="random" i], button[title*="random" i], ' +
+      'button[aria-label*="reset" i], button[title*="reset" i], ' +
+      'button[aria-label*="clear" i], button[title*="clear" i], ' +
+      'button[aria-label*="seed" i], button[title*="seed" i]'
+    ));
+    const attrButton = attrCandidates.find(button => isSafeSeedResetButton(button));
+    if (attrButton) return attrButton;
+
+    // 旧版按钮没有可读标签，继续允许 Seed 标签后的可见按钮作为兼容兜底。
     const bySpan = xpathNode("//span[normalize-space(text())='Seed']/following-sibling::button");
-    if (bySpan) return bySpan;
+    if (isSafeSeedResetButton(bySpan, { allowUnlabelled: true })) return bySpan;
 
-    // 方法2: div 标签（兼容旧页面）
     const byDiv = xpathNode("//div[normalize-space(text())='Seed' or normalize-space(text())='种子']/following-sibling::button");
-    if (byDiv) return byDiv;
+    if (isSafeSeedResetButton(byDiv, { allowUnlabelled: true })) return byDiv;
 
-    // 方法3: aria-label / title 属性匹配
-    const attrBtn =
-      document.querySelector('button[aria-label*="andom"], button[title*="andom"]') ||
-      document.querySelector('button[aria-label*="seed" i], button[title*="seed" i]');
-    if (attrBtn) return attrBtn;
-
-    // 方法4: 绝对路径屏底，原路径局向 span，取其父 button
+    // 绝对路径仅作为旧版兜底，也必须通过语义安全检查。
     const fallback = xpathNode(XPATH_SEED_FALLBACK);
-    return fallback instanceof HTMLButtonElement ? fallback : fallback?.closest('button') || null;
+    const fallbackButton = fallback instanceof HTMLButtonElement ? fallback : fallback?.closest('button');
+    return isSafeSeedResetButton(fallbackButton, { allowUnlabelled: true }) ? fallbackButton : null;
   }
 
 
   /** 触发元素点击 */
   function triggerClick(el) {
     if (!el) return false;
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    return true;
+    const propsKey = Object.keys(el).find(key => key.startsWith('__reactProps$'));
+    const reactClick = propsKey ? el[propsKey]?.onClick : null;
+    if (typeof reactClick === 'function') {
+      try {
+        // V5 的部分按钮不再响应普通合成 MouseEvent，直接调用节点上的 React 处理器。
+        reactClick({
+          currentTarget: el,
+          target: el,
+          nativeEvent: null,
+          preventDefault() {},
+          stopPropagation() {}
+        });
+        return true;
+      } catch (error) {
+        console.debug('[AutoClicker] React 点击处理器调用失败，回退标准点击:', error);
+      }
+    }
+
+    if (typeof el.click === 'function') {
+      el.click();
+      return true;
+    }
+    return el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   }
 
   /** 重置 Seed */
@@ -481,7 +536,8 @@
       triggerClick(btn);
       console.log('[AutoClicker] Seed 已重置');
     } else {
-      console.warn('[AutoClicker] 未找到 Seed 随机化按钮，已尝试全部查找方式');
+      // V5 默认使用随机 Seed；页面只提供“复用当前图片 Seed”时应保持不操作。
+      console.debug('[AutoClicker] 当前页面没有可安全触发的 Seed 重置按钮，跳过。');
     }
   }
 
